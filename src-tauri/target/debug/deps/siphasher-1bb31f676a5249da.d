@@ -1,0 +1,11 @@
+/home/canned/Projects/Oniri/animacion-app/src-tauri/target/debug/deps/siphasher-1bb31f676a5249da.d: /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/lib.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/common.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip128.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/../README.md
+
+/home/canned/Projects/Oniri/animacion-app/src-tauri/target/debug/deps/libsiphasher-1bb31f676a5249da.rlib: /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/lib.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/common.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip128.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/../README.md
+
+/home/canned/Projects/Oniri/animacion-app/src-tauri/target/debug/deps/libsiphasher-1bb31f676a5249da.rmeta: /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/lib.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/common.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip128.rs /home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/../README.md
+
+/home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/lib.rs:
+/home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/common.rs:
+/home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip.rs:
+/home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/sip128.rs:
+/home/canned/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/siphasher-1.0.4/src/../README.md:

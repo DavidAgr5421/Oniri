@@ -1,0 +1,321 @@
+/* ==========================================================================
+   Clip Studio Paint Docked Layers Panel
+   ========================================================================== */
+#layers-container {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 250px !important;
+  pointer-events: auto !important;
+  z-index: 100 !important;
+  display: block !important;
+}
+
+.layers-panel {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 250px !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  background: #1e1e1e !important;
+  border-left: 1px solid #333333 !important;
+  border-radius: 0 !important;
+  box-shadow: -2px 0 14px rgba(0, 0, 0, 0.45) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  pointer-events: auto !important;
+  user-select: none !important;
+  overflow: hidden !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: #e0e0e0;
+}
+
+.layers-tab-header {
+  display: flex;
+  background: #181818;
+  border-bottom: 1px solid #333333;
+}
+
+.layers-tab-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #1e1e1e;
+  border-top: 2px solid #007acc;
+  border-right: 1px solid #333333;
+  font-size: 11px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.layer-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #232323;
+  border-bottom: 1px solid #333333;
+}
+
+.layer-blend-select {
+  flex: 1;
+  background: #1a1a1a;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  color: #e0e0e0;
+  font-size: 11px;
+  padding: 4px 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+.layer-blend-select:focus {
+  border-color: #007acc;
+}
+
+.layer-opacity-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 104px;
+}
+
+.layer-opacity-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 64px;
+  height: 4px;
+  background: #383838;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.layer-opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #007acc;
+  border: 1px solid #ffffff;
+  cursor: pointer;
+}
+
+.layer-opacity-label {
+  font-size: 10px;
+  font-family: monospace;
+  color: #aaaaaa;
+  min-width: 28px;
+  text-align: right;
+}
+
+/* Parent Folder Assignment Row */
+.layer-folder-assign-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: #1d1d1d;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.assign-label {
+  font-size: 10px;
+  color: #888888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.layer-folder-select {
+  flex: 1;
+  background: #161616;
+  border: 1px solid #383838;
+  border-radius: 3px;
+  color: #cccccc;
+  font-size: 10px;
+  padding: 3px 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+.layer-folder-select:focus {
+  border-color: #007acc;
+}
+
+.layers-actions-bar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  background: #1b1b1b;
+  border-bottom: 1px solid #333333;
+}
+
+.layer-action-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #8c8c8c;
+  padding: 4px 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.1s ease;
+}
+
+.layer-action-btn:hover {
+  background: #2d2d2d;
+  color: #ffffff;
+}
+
+.layer-action-btn.active {
+  background: #007acc;
+  color: #ffffff;
+  border-color: #0098ff;
+}
+
+.layers-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex: 1;
+  background: #181818;
+}
+
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #242424;
+  background: #1e1e1e;
+  transition: background 0.1s ease;
+  position: relative;
+}
+
+.layer-item.is-folder {
+  background: #222222;
+  font-weight: 600;
+}
+
+.layer-item:hover {
+  background: #282828;
+}
+
+.layer-item.active {
+  background: #007acc !important;
+  color: #ffffff !important;
+}
+
+.layer-folder-chevron {
+  background: transparent;
+  border: none;
+  color: #888888;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+}
+
+.layer-folder-chevron svg {
+  transition: transform 0.15s ease;
+}
+
+.layer-folder-chevron svg.collapsed {
+  transform: rotate(-90deg);
+}
+
+.layer-chevron-spacer {
+  width: 12px;
+  display: inline-block;
+}
+
+.layer-folder-icon {
+  color: #e5a93c;
+  display: flex;
+  align-items: center;
+}
+
+.layer-eye-btn {
+  background: transparent;
+  border: none;
+  color: #888888;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+
+.layer-eye-btn:hover,
+.layer-item.active .layer-eye-btn,
+.layer-item.active .layer-folder-chevron,
+.layer-item.active .layer-folder-icon {
+  color: #ffffff;
+}
+
+/* CSP Style Pink Clipping Indicator Bar */
+.layer-clip-indicator {
+  width: 4px;
+  height: 22px;
+  background: #f06292;
+  border-radius: 1px;
+  margin-right: -2px;
+}
+
+.layer-thumb {
+  width: 36px;
+  height: 22px;
+  border: 1px solid #383838;
+  border-radius: 2px;
+  background: #222222;
+  display: block;
+}
+
+.layer-item.active .layer-thumb {
+  border-color: #ffffff;
+}
+
+.layer-name-text {
+  font-size: 11px;
+  font-weight: 500;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.layer-name-input {
+  font-size: 11px;
+  font-weight: 500;
+  flex: 1;
+  background: #111111;
+  border: 1px solid #007acc;
+  color: #ffffff;
+  padding: 2px 4px;
+  border-radius: 2px;
+  outline: none;
+  font-family: inherit;
+}
+
+.layer-badge {
+  color: #777777;
+  display: flex;
+  align-items: center;
+}
+
+.layer-item.active .layer-badge {
+  color: #ffffff;
+}

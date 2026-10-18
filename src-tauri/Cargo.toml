@@ -1,0 +1,10 @@
+[package]
+name = "animacion-app"
+version = "0.1.0"
+description = "Aplicación de animación estilo Clip Studio Paint, open source, multiplataforma"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
