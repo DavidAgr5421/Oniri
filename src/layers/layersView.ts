@@ -172,6 +172,24 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
   `;
   addFolderBtn.addEventListener('click', () => layerManager.createFolder());
 
+  // New Animation Folder (Animation Track)
+  const addAnimFolderBtn = document.createElement('button');
+  addAnimFolderBtn.className = 'layer-action-btn';
+  addAnimFolderBtn.title = 'New Animation Folder (CSP Style)';
+  addAnimFolderBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2">
+      <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+      <line x1="7" y1="2" x2="7" y2="22"/>
+      <line x1="17" y1="2" x2="17" y2="22"/>
+      <line x1="2" y1="12" x2="22" y2="12"/>
+      <line x1="2" y1="7" x2="7" y2="7"/>
+      <line x1="2" y1="17" x2="7" y2="17"/>
+      <line x1="17" y1="17" x2="22" y2="17"/>
+      <line x1="17" y1="7" x2="22" y2="7"/>
+    </svg>
+  `;
+  addAnimFolderBtn.addEventListener('click', () => layerManager.createAnimationFolder());
+
   // Clip at Layer Below (Clipping Mask Toggle)
   const clipLayerBtn = document.createElement('button');
   clipLayerBtn.className = 'layer-action-btn clip-btn';
@@ -213,10 +231,7 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
     </svg>
   `;
   moveUpBtn.addEventListener('click', () => {
-    const idx = layerManager.layers.findIndex((l) => l.id === layerManager.activeLayerId);
-    if (idx < layerManager.layers.length - 1) {
-      layerManager.moveLayer(idx, idx + 1);
-    }
+    layerManager.moveLayerBranch(layerManager.activeLayerId, 'up');
   });
 
   // Move Down
@@ -229,13 +244,10 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
     </svg>
   `;
   moveDownBtn.addEventListener('click', () => {
-    const idx = layerManager.layers.findIndex((l) => l.id === layerManager.activeLayerId);
-    if (idx > 0) {
-      layerManager.moveLayer(idx, idx - 1);
-    }
+    layerManager.moveLayerBranch(layerManager.activeLayerId, 'down');
   });
 
-  actionsBar.append(addLayerBtn, addFolderBtn, clipLayerBtn, deleteLayerBtn, moveUpBtn, moveDownBtn);
+  actionsBar.append(addLayerBtn, addFolderBtn, addAnimFolderBtn, clipLayerBtn, deleteLayerBtn, moveUpBtn, moveDownBtn);
   panel.appendChild(actionsBar);
 
   // --- 5. Scrollable Layer List ---
@@ -337,11 +349,23 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
       if (node.type === 'folder') {
         const folderIcon = document.createElement('div');
         folderIcon.className = 'layer-folder-icon';
-        folderIcon.innerHTML = `
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-          </svg>
-        `;
+        if (node.isAnimationFolder) {
+          folderIcon.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2">
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+              <line x1="7" y1="2" x2="7" y2="22"/>
+              <line x1="17" y1="2" x2="17" y2="22"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+            </svg>
+          `;
+          folderIcon.title = 'Animation Folder (Track)';
+        } else {
+          folderIcon.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          `;
+        }
         item.appendChild(folderIcon);
       } else {
         const thumbCanvas = document.createElement('canvas');

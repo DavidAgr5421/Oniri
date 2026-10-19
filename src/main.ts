@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { createTimelineManager } from './animation/timelineManager';
+import { mountTimelineView } from './animation/timelineView';
 import { createBrushEngine, DOC_H, DOC_W } from './brush/brushEngine';
 import { attachStrokeInput } from './brush/strokeInput';
 import { mountLayersView } from './layers/layersView';
@@ -18,7 +20,7 @@ const scene = new THREE.Scene();
 
 // Orthographic camera for 2D canvas drawing
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-camera.position.set(0, 0, 10);
+camera.position.set(0, 0.6, 10);
 
 function updateCameraBounds(): void {
   const width = window.innerWidth;
@@ -28,8 +30,8 @@ function updateCameraBounds(): void {
   renderer.setSize(width, height);
 
   // Maintain comfortable margin around the 16x9 canvas
-  const targetDocH = 10.5;
-  const targetDocW = 18;
+  const targetDocH = 11.5;
+  const targetDocW = 19;
   const currentW = targetDocH * aspect;
   const scale = currentW < targetDocW ? targetDocW / currentW : 1;
   const viewH = targetDocH * scale;
@@ -53,6 +55,16 @@ scene.add(borderMesh);
 
 // Brush Engine & Canvas Texture
 const engine = createBrushEngine();
+
+// Timeline & Animation Manager
+const timeline = createTimelineManager(engine.layerManager);
+engine.setTimelineManager(timeline);
+
+// Initialize with a default animation folder & Cel 1 if none exists
+if (timeline.tracks.length === 0) {
+  timeline.createTrack('Animation 1');
+}
+
 const canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
 canvasTexture.minFilter = THREE.LinearFilter;
 canvasTexture.magFilter = THREE.LinearFilter;
@@ -91,6 +103,12 @@ if (layersContainer) {
   mountLayersView(layersContainer, engine.layerManager);
 }
 
+// Mount Timeline Palette (CSP Style)
+const timelineContainer = document.getElementById('timeline-container');
+if (timelineContainer) {
+  mountTimelineView(timelineContainer, timeline, engine.layerManager);
+}
+
 // Render Loop
 function animate(): void {
   requestAnimationFrame(animate);
@@ -104,4 +122,4 @@ function animate(): void {
 }
 animate();
 
-console.log('AnimacionApp: Lateral Toolbar, Property Popup, Layers Panel and Brush Engine mounted.');
+console.log('AnimacionApp: Lateral Toolbar, Layers Panel, Timeline and Brush Engine mounted.');

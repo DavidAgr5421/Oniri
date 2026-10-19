@@ -10,6 +10,7 @@ export interface LayerNode {
   opacity: number; // 0 to 1
   blendMode: GlobalCompositeOperation;
   isPaper?: boolean;
+  isAnimationFolder?: boolean;
   parentId: string | null;
   collapsed: boolean;
   clipped: boolean; // Clip at layer below
@@ -19,7 +20,8 @@ export interface LayerManager {
   readonly layers: LayerNode[];
   activeLayerId: string;
   createLayer(name?: string, parentId?: string | null, isPaper?: boolean, fillColor?: string): LayerNode;
-  createFolder(name?: string, parentId?: string | null): LayerNode;
+  createFolder(name?: string, parentId?: string | null, isAnimationFolder?: boolean): LayerNode;
+  createAnimationFolder(name?: string): LayerNode;
   deleteLayer(id: string): boolean;
   renameLayer(id: string, newName: string): void;
   toggleFolderCollapse(id: string): void;
@@ -32,7 +34,29 @@ export interface LayerManager {
   setLayerOpacity(id: string, opacity: number): void;
   setLayerBlendMode(id: string, mode: GlobalCompositeOperation): void;
   moveLayer(fromIndex: number, toIndex: number): void;
+  moveLayerBranch(layerId: string, direction: 'up' | 'down'): boolean;
   subscribe(listener: () => void): () => void;
+}
+
+export function getRenderOrder(layers: LayerNode[]): LayerNode[] {
+  const result: LayerNode[] = [];
+  const getSiblings = (parentId: string | null): LayerNode[] => {
+    return layers.filter((l) => l.parentId === parentId);
+  };
+
+  function traverse(parentId: string | null): void {
+    const siblings = getSiblings(parentId);
+    for (const node of siblings) {
+      if (node.type === 'folder') {
+        traverse(node.id);
+      } else {
+        result.push(node);
+      }
+    }
+  }
+
+  traverse(null);
+  return result;
 }
 
 function makeCanvas(width: number, height: number): HTMLCanvasElement {
@@ -155,15 +179,16 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       notify();
       return layer;
     },
-    createFolder(name, parentId = null) {
+    createFolder(name, parentId = null, isAnimationFolder = false) {
       counter++;
       const folder: LayerNode = {
         id: `folder-${Date.now()}-${counter}`,
         type: 'folder',
-        name: name || `Folder ${counter}`,
+        name: name || (isAnimationFolder ? `Animation Folder ${counter}` : `Folder ${counter}`),
         visible: true,
         opacity: 1,
         blendMode: 'source-over',
+        isAnimationFolder,
         parentId,
         collapsed: false,
         clipped: false,
@@ -179,6 +204,9 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       activeId = folder.id;
       notify();
       return folder;
+    },
+    createAnimationFolder(name) {
+      return manager.createFolder(name, null, true);
     },
     deleteLayer(id: string): boolean {
       if (layers.length <= 1) return false;
@@ -304,6 +332,77 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const [removed] = layers.splice(fromIndex, 1);
       layers.splice(toIndex, 0, removed);
       notify();
+    },
+    moveLayerBranch(layerId: string, direction: 'up' | 'down'): boolean {
+      const node = layers.find((l) => l.id === layerId);
+      if (!node || node.isPaper) return false;
+
+      // Get siblings with same parentId
+      const siblings = layers.filter((l) => l.parentId === node.parentId);
+      const sibIdx = siblings.findIndex((s) => s.id === node.id);
+      if (sibIdx === -1) return false;
+
+      let targetSib: LayerNode | undefined;
+      if (direction === 'up') {
+        if (sibIdx >= siblings.length - 1) return false;
+        targetSib = siblings[sibIdx + 1];
+      } else {
+        if (sibIdx <= 0) return false;
+        targetSib = siblings[sibIdx - 1];
+        if (targetSib.isPaper) return false;
+      }
+
+      // Collect all descendant ids of node
+      const nodeBlockIds = new Set<string>([node.id]);
+      let added = true;
+      while (added) {
+        added = false;
+        for (const l of layers) {
+          if (l.parentId && nodeBlockIds.has(l.parentId) && !nodeBlockIds.has(l.id)) {
+            nodeBlockIds.add(l.id);
+            added = true;
+          }
+        }
+      }
+
+      const nodeBlock = layers.filter((l) => nodeBlockIds.has(l.id));
+
+      // Remove node block from layers
+      for (let i = layers.length - 1; i >= 0; i--) {
+        if (nodeBlockIds.has(layers[i].id)) {
+          layers.splice(i, 1);
+        }
+      }
+
+      // Collect target sibling's block
+      const targetBlockIds = new Set<string>([targetSib.id]);
+      added = true;
+      while (added) {
+        added = false;
+        for (const l of layers) {
+          if (l.parentId && targetBlockIds.has(l.parentId) && !targetBlockIds.has(l.id)) {
+            targetBlockIds.add(l.id);
+            added = true;
+          }
+        }
+      }
+
+      if (direction === 'up') {
+        let lastTargetIdx = -1;
+        for (let i = layers.length - 1; i >= 0; i--) {
+          if (targetBlockIds.has(layers[i].id)) {
+            lastTargetIdx = i;
+            break;
+          }
+        }
+        layers.splice(lastTargetIdx + 1, 0, ...nodeBlock);
+      } else {
+        const targetIdx = layers.findIndex((l) => l.id === targetSib!.id);
+        layers.splice(targetIdx, 0, ...nodeBlock);
+      }
+
+      notify();
+      return true;
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);

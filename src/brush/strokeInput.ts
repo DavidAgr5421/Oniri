@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import type { BrushEngine } from './brushEngine';
-import { activeTool, getToolState, setTool, subscribeTools } from '../tools/toolState';
+import {
+  activeTool,
+  getToolState,
+  setTool,
+  subscribeTools,
+  swapColors,
+  toggleTransparentColor,
+} from '../tools/toolState';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
@@ -20,6 +27,40 @@ interface PointerLike {
   clientX: number;
   clientY: number;
   pressure: number;
+  pointerType?: string;
+}
+
+interface SmoothPoint {
+  x: number;
+  y: number;
+  p: number;
+}
+
+const MIN_SAMPLE_DISTANCE = 0.25;
+const CURVE_SUBDIVISIONS = 6;
+
+function coalescedSamples(event: PointerEvent): PointerEvent[] {
+  const fn = (event as PointerEvent & { getCoalescedEvents?: () => PointerEvent[] }).getCoalescedEvents;
+  if (typeof fn !== 'function') return [event];
+  try {
+    const list = fn.call(event);
+    return list && list.length > 0 ? list : [event];
+  } catch {
+    return [event];
+  }
+}
+
+/**
+ * W3C Pointer Events: a pressed mouse always reports pressure 0.5. Forcing
+ * that onto every mouse stroke made stamps semi-transparent (visible circles
+ * on every tick), so the mouse gets full pressure and the starting/ending
+ * tapers handle the finesse instead.
+ */
+function pressureOf(event: PointerLike): number {
+  if (event.pointerType === 'pen') {
+    return event.pressure > 0 ? event.pressure : 0.5;
+  }
+  return 1.0;
 }
 
 export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandle {
@@ -29,6 +70,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
   let activeStroke: 'brush' | 'eraser' | 'shape' | null = null;
   let activePointerId: number | null = null;
+  let lastPointerType = 'mouse';
 
   // Pan / Navigation state
   let isSpacePressed = false;
@@ -41,6 +83,13 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   let smoothedY = 0;
   let rawLastX = 0;
   let rawLastY = 0;
+
+  // Stroke shaping state (quadratic Bezier smoothing + ending tail)
+  let smoothHist: SmoothPoint[] = [];
+  let curveEmitted: SmoothPoint | null = null;
+  let velX = 0;
+  let velY = 0;
+  let lastSamplePressure = 1;
 
   function updateCursor(): void {
     if (activePan) {
@@ -67,16 +116,99 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     return { x: hits[0].uv.x * docW, y: (1 - hits[0].uv.y) * docH };
   };
 
-  const pressureOf = (event: PointerLike): number => (event.pressure > 0 ? event.pressure : 1);
+  const emitTo = (x: number, y: number, pressure: number): void => {
+    if (activeStroke === 'eraser') {
+      engine.continueErase(x, y, pressure);
+    } else if (activeStroke === 'brush') {
+      engine.continueStroke(x, y, pressure);
+    }
+  };
+
+  /**
+   * Keeps the last 3 smoothed points and emits a quadratic Bezier piece from
+   * the midpoint of (p0,p1) to the midpoint of (p1,p2), with p1 as control.
+   * Each new point continues exactly where the previous one ended, so there
+   * are no polygonal corners when the pointer moves fast.
+   */
+  const pushSmoothed = (x: number, y: number, p: number): void => {
+    const pt: SmoothPoint = { x, y, p };
+    if (smoothHist.length === 0) {
+      smoothHist.push(pt);
+      curveEmitted = pt;
+      return;
+    }
+
+    const p1 = smoothHist[smoothHist.length - 1];
+    const p0 = smoothHist.length >= 2 ? smoothHist[smoothHist.length - 2] : smoothHist[0];
+    const m1x = (p0.x + p1.x) / 2;
+    const m1y = (p0.y + p1.y) / 2;
+    const m1p = (p0.p + p1.p) / 2;
+    const m2x = (p1.x + pt.x) / 2;
+    const m2y = (p1.y + pt.y) / 2;
+    const m2p = (p1.p + pt.p) / 2;
+
+    for (let i = 1; i <= CURVE_SUBDIVISIONS; i++) {
+      const t = i / CURVE_SUBDIVISIONS;
+      const mt = 1 - t;
+      const qx = mt * mt * m1x + 2 * mt * t * p1.x + t * t * m2x;
+      const qy = mt * mt * m1y + 2 * mt * t * p1.y + t * t * m2y;
+      const qp = m1p + (m2p - m1p) * t;
+      emitTo(qx, qy, qp);
+    }
+
+    curveEmitted = { x: m2x, y: m2y, p: m2p };
+    smoothHist.push(pt);
+    if (smoothHist.length > 3) smoothHist.shift();
+  };
+
+  const handleStrokePoint = (doc: { x: number; y: number }, pressure: number): void => {
+    const dxr = doc.x - rawLastX;
+    const dyr = doc.y - rawLastY;
+    // Ignore sub-pixel jitter: otherwise a resting mouse keeps stacking
+    // stamps in the same spot (the "repeated seal" artifact).
+    if (Math.hypot(dxr, dyr) < MIN_SAMPLE_DISTANCE) return;
+
+    velX = velX * 0.55 + dxr * 0.45;
+    velY = velY * 0.55 + dyr * 0.45;
+    rawLastX = doc.x;
+    rawLastY = doc.y;
+    lastSamplePressure = pressure;
+
+    const stab = getToolState().brush.stabilization;
+    if (stab <= 0) {
+      smoothedX = doc.x;
+      smoothedY = doc.y;
+    } else {
+      // Exponential moving average filter for smooth stroke interpolation
+      const alpha = 1 / (1 + stab * 0.35);
+      smoothedX += (doc.x - smoothedX) * alpha;
+      smoothedY += (doc.y - smoothedY) * alpha;
+    }
+
+    pushSmoothed(smoothedX, smoothedY, pressure);
+  };
 
   const finish = (pointerId?: number): void => {
     if (activeStroke === 'brush' || activeStroke === 'eraser') {
-      // Flush final segment to raw release position
-      const pressure = 0.5;
-      if (activeStroke === 'eraser') {
-        engine.continueErase(rawLastX, rawLastY, pressure);
+      // Stabilizer catch-up: pull the smoothed curve toward the raw release
+      // point so the stroke doesn't stop short of the cursor, then close it
+      // at the real release pressure (never at a hardcoded 0.5).
+      const stab = getToolState().brush.stabilization;
+      if (stab > 0) {
+        const alpha = 1 / (1 + stab * 0.35);
+        for (let i = 0; i < 3; i++) {
+          smoothedX += (rawLastX - smoothedX) * alpha;
+          smoothedY += (rawLastY - smoothedY) * alpha;
+        }
       } else {
-        engine.continueStroke(rawLastX, rawLastY, pressure);
+        smoothedX = rawLastX;
+        smoothedY = rawLastY;
+      }
+
+      pushSmoothed(smoothedX, smoothedY, lastSamplePressure);
+      if (curveEmitted) {
+        emitTo(smoothedX, smoothedY, lastSamplePressure);
+        curveEmitted = { x: smoothedX, y: smoothedY, p: lastSamplePressure };
       }
     }
 
@@ -89,7 +221,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       }
     }
     activePointerId = null;
-    engine.endStroke();
+    engine.endStroke({ vx: velX, vy: velY, isMouse: lastPointerType !== 'pen' });
   };
 
   const onPointerDown = (event: PointerEvent): void => {
@@ -133,6 +265,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     activePointerId = event.pointerId;
+    lastPointerType = event.pointerType || 'mouse';
     try {
       canvas.setPointerCapture(event.pointerId);
     } catch {
@@ -145,13 +278,19 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
+    const pressure = pressureOf(event);
     smoothedX = doc.x;
     smoothedY = doc.y;
     rawLastX = doc.x;
     rawLastY = doc.y;
+    lastSamplePressure = pressure;
+    velX = 0;
+    velY = 0;
+    smoothHist = [{ x: doc.x, y: doc.y, p: pressure }];
+    curveEmitted = smoothHist[0];
 
-    const pressure = pressureOf(event);
-    if (tool === 'eraser') {
+    const isErase = tool === 'eraser' || getToolState().isTransparentColor;
+    if (isErase) {
       activeStroke = 'eraser';
       engine.beginErase(doc.x, doc.y, pressure);
     } else {
@@ -177,33 +316,19 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     if (!activeStroke) return;
-    const doc = pointerToDoc(event);
-    if (!doc) return;
 
     if (activeStroke === 'shape') {
-      engine.updateShape(doc.x, doc.y);
+      const doc = pointerToDoc(event);
+      if (doc) engine.updateShape(doc.x, doc.y);
       return;
     }
 
-    rawLastX = doc.x;
-    rawLastY = doc.y;
-
-    const stab = getToolState().brush.stabilization;
-    if (stab <= 0) {
-      smoothedX = doc.x;
-      smoothedY = doc.y;
-    } else {
-      // Exponential moving average filter for smooth stroke interpolation
-      const alpha = 1 / (1 + stab * 0.35);
-      smoothedX += (doc.x - smoothedX) * alpha;
-      smoothedY += (doc.y - smoothedY) * alpha;
-    }
-
-    const pressure = pressureOf(event);
-    if (activeStroke === 'eraser') {
-      engine.continueErase(smoothedX, smoothedY, pressure);
-    } else {
-      engine.continueStroke(smoothedX, smoothedY, pressure);
+    // High-frequency samples (coalesced) are fed one by one so no input
+    // resolution is lost between two pointermove events.
+    for (const sample of coalescedSamples(event)) {
+      const doc = pointerToDoc(sample);
+      if (!doc) continue;
+      handleStrokePoint(doc, pressureOf(sample));
     }
   };
 
@@ -272,12 +397,15 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     if (!isCtrl && !event.altKey) {
-      if (key === 'b') setTool('brush');
+      if (key === 'p') setTool('pen');
+      else if (key === 'b') setTool('brush');
       else if (key === 'e') setTool('eraser');
       else if (key === 'i') setTool('eyedropper');
       else if (key === 'g') setTool('bucket');
       else if (key === 'u') setTool('shape');
       else if (key === 'h') setTool('hand');
+      else if (key === 'x') swapColors();
+      else if (key === 'c') toggleTransparentColor();
     }
   };
 
