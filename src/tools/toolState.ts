@@ -110,24 +110,24 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'manga-line',
-    name: 'Entintado Manga',
+    name: 'manga line art',
     tool: 'pen',
-    description: 'Estabilización alta para curvas suaves sin temblor de pulso.',
+    description: 'Inspirado en el legendario pincel todo-en-uno de CSP (怠けものブラシ): línea principal con presión fuerte, acuarela y pintura suave con presión ligera.',
     settings: {
       size: 8,
-      minSizeRatio: 0.0,
+      minSizeRatio: 0.1,
       pressureSize: true,
-      pressureCurve: 1.5,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'weak',
+      pressureCurve: 1.45,
+      flow: 0.98,
+      pressureFlow: true,
+      inkMode: 'accumulate',
+      hardness: 0.9,
+      antiAliasing: 'medium',
       spacing: 0.05,
       tipShape: 'circle',
-      taperStart: 12,
-      taperEnd: 24,
-      stabilization: 8,
+      taperStart: 8,
+      taperEnd: 18,
+      stabilization: 7,
     },
   },
   {
@@ -200,6 +200,28 @@ export const SUBTOOLS: SubTool[] = [
   },
 
   // Brush / Painting tools (B)
+  {
+    id: 'manga-line-art-brush',
+    name: 'manga line art',
+    tool: 'brush',
+    description: 'Inspirado en el legendario pincel todo-en-uno de CSP (怠けものブラシ): trazo firme con presión fuerte, veladura y mezcla acuarela con presión ligera.',
+    settings: {
+      size: 14,
+      minSizeRatio: 0.1,
+      pressureSize: true,
+      pressureCurve: 1.45,
+      flow: 0.95,
+      pressureFlow: true,
+      inkMode: 'accumulate',
+      hardness: 0.88,
+      antiAliasing: 'medium',
+      spacing: 0.05,
+      tipShape: 'circle',
+      taperStart: 8,
+      taperEnd: 18,
+      stabilization: 7,
+    },
+  },
   {
     id: 'watercolor',
     name: 'Acuarela Suave',
@@ -552,11 +574,11 @@ export const DEFAULT_BRUSH: BrushSettings = {
   tolerance: 20,
   shapeType: 'rectangle',
   shapeFill: 'stroke',
-  color: '#111111',
+  color: '#000000',
 };
 
 const DEFAULT_HISTORY = [
-  '#111111',
+  '#000000',
   '#ffffff',
   '#e74c3c',
   '#e67e22',
@@ -658,6 +680,12 @@ function loadSubTools(): SubTool[] {
           : [];
         const present = new Set(items.map((s) => s.id));
         for (const base of SUBTOOLS) {
+          const existing = items.find((i) => i.id === base.id);
+          if (existing && !existing.custom && (base.id === 'manga-line' || base.id === 'manga-line-art-brush')) {
+            existing.name = base.name;
+            existing.description = base.description;
+            existing.settings = { ...base.settings, ...existing.settings, pressureFlow: true, inkMode: 'accumulate' };
+          }
           if (!present.has(base.id) && !deletedBaseIds.includes(base.id)) {
             items.push({ ...base, settings: { ...base.settings } });
           }
@@ -754,7 +782,7 @@ const initialSets = loadColorSets();
 let state: ToolState = {
   tool: 'pen',
   activeSubToolId: initialSub ? initialSub.id : 'g-pen',
-  brush: initialSub ? mergeBrush(initialSub, DEFAULT_BRUSH.color) : { ...DEFAULT_BRUSH },
+  brush: initialSub ? mergeBrush(initialSub, '#000000') : { ...DEFAULT_BRUSH },
   propertiesOpen: true,
   visibleProperties: loadVisibleProps(),
   previewBgMode: 'paper',
@@ -762,7 +790,7 @@ let state: ToolState = {
   showBonesOverlay: true,
   autoKeyBones: true,
   colorTab: 'picker',
-  primaryColor: '#111111',
+  primaryColor: '#000000',
   secondaryColor: '#ffffff',
   activeColorSlot: 'primary',
   isTransparentColor: false,

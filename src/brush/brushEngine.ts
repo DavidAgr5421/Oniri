@@ -76,13 +76,24 @@ export function brushDiameterAt(s: BrushSettings, pressure: number, distance: nu
  * saturating or leaving visible steps.
  */
 export function brushStampAlpha(s: BrushSettings, pressure: number): number {
-  const raw = clamp01(s.pressureFlow ? s.flow * Math.pow(clamp01(pressure), 1.2) : s.flow);
-  if (s.inkMode === 'uniform' && !s.pressureFlow) {
-    return Math.max(0.02, raw);
+  const p = clamp01(pressure);
+  const flow = s.pressureFlow ? s.flow * Math.pow(p, 1.2) : s.flow;
+  const raw = clamp01(flow);
+
+  if (s.inkMode === 'uniform') {
+    return Math.max(0.04, raw);
   }
+
+  // En modo accumulate / watercolor:
+  // Con presión alta o flujo alto (trazo decidido), satura al 100% para dar negro sólido y opaco
+  if (raw >= 0.88) {
+    return 1.0;
+  }
+
+  // Con presión baja (veladura y acuarela suave):
   const exponent = Math.max(0.2, s.spacing * 2.5);
   const alpha = 1 - Math.pow(1 - raw, exponent);
-  return Math.min(1, Math.max(0.02, alpha));
+  return Math.min(1, Math.max(0.04, alpha));
 }
 
 function tipAngleRad(s: BrushSettings, dx: number, dy: number): number {
@@ -142,6 +153,9 @@ export function createBrushEngine(): BrushEngine {
   let lastX = 0;
   let lastY = 0;
   let lastPressure = 1;
+  let rawLastX = 0;
+  let rawLastY = 0;
+  let rawLastPressure = 1;
   let lastAngleRad = 0;
   let distanceSinceStamp = 0;
   let strokeDistance = 0;
@@ -286,6 +300,15 @@ export function createBrushEngine(): BrushEngine {
   function finishStroke(): void {
     if (!mode) return;
     const active = layerManager.getActiveDrawableLayer();
+
+    if (mode === 'paint') {
+      if (Math.hypot(rawLastX - lastX, rawLastY - lastY) > 0.5) {
+        stampAlong(strokeContext, false, lastX, lastY, lastPressure, rawLastX, rawLastY, rawLastPressure);
+        lastX = rawLastX;
+        lastY = rawLastY;
+        lastPressure = rawLastPressure;
+      }
+    }
 
     if (mode === 'paint' || mode === 'shape') {
       if (active.context) {
@@ -641,6 +664,9 @@ export function createBrushEngine(): BrushEngine {
     lastX = x;
     lastY = y;
     lastPressure = pressure;
+    rawLastX = x;
+    rawLastY = y;
+    rawLastPressure = pressure;
     lastAngleRad = tipAngleRad(strokeSettings, 0, 0);
     distanceSinceStamp = 0;
     strokeDistance = 0;
@@ -687,10 +713,25 @@ export function createBrushEngine(): BrushEngine {
     },
     continueStroke(x, y, pressure) {
       if (mode !== 'paint') return;
-      stampAlong(strokeContext, false, lastX, lastY, lastPressure, x, y, pressure);
-      lastX = x;
-      lastY = y;
-      lastPressure = pressure;
+      rawLastX = x;
+      rawLastY = y;
+      rawLastPressure = pressure;
+
+      const stab = Math.min(20, Math.max(0, strokeSettings.stabilization));
+      let targetX = x;
+      let targetY = y;
+      let targetP = pressure;
+      if (stab > 0) {
+        const weight = 1 / (1 + stab * 0.4);
+        targetX = lastX + (x - lastX) * weight;
+        targetY = lastY + (y - lastY) * weight;
+        targetP = lastPressure + (pressure - lastPressure) * weight;
+      }
+
+      stampAlong(strokeContext, false, lastX, lastY, lastPressure, targetX, targetY, targetP);
+      lastX = targetX;
+      lastY = targetY;
+      lastPressure = targetP;
       engine.compositeDirty = true;
     },
     beginErase(x, y, pressure) {
@@ -701,10 +742,25 @@ export function createBrushEngine(): BrushEngine {
       if (mode !== 'erase') return;
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context) return;
-      stampAlong(active.context, true, lastX, lastY, lastPressure, x, y, pressure);
-      lastX = x;
-      lastY = y;
-      lastPressure = pressure;
+      rawLastX = x;
+      rawLastY = y;
+      rawLastPressure = pressure;
+
+      const stab = Math.min(20, Math.max(0, strokeSettings.stabilization));
+      let targetX = x;
+      let targetY = y;
+      let targetP = pressure;
+      if (stab > 0) {
+        const weight = 1 / (1 + stab * 0.4);
+        targetX = lastX + (x - lastX) * weight;
+        targetY = lastY + (y - lastY) * weight;
+        targetP = lastPressure + (pressure - lastPressure) * weight;
+      }
+
+      stampAlong(active.context, true, lastX, lastY, lastPressure, targetX, targetY, targetP);
+      lastX = targetX;
+      lastY = targetY;
+      lastPressure = targetP;
       engine.compositeDirty = true;
     },
     beginShape(x, y) {

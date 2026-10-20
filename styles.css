@@ -256,11 +256,23 @@ body {
   box-shadow: 3px 0 12px rgba(0, 0, 0, 0.45);
   display: none;
   flex-direction: column;
-  overflow: hidden !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
   pointer-events: auto;
   z-index: 15;
+}
 
+.csp-sidebar-dock::-webkit-scrollbar {
+  width: 5px;
+}
 
+.csp-sidebar-dock::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 3px;
+}
+
+.csp-sidebar-dock::-webkit-scrollbar-thumb:hover {
+  background: #555555;
 }
 
 .csp-sidebar-dock.open {
@@ -269,21 +281,24 @@ body {
 
 /* Sections */
 .dock-section {
-  overflow: hidden;
   position: relative;
 }
 
 .dock-section.subtool-section {
   flex-shrink: 0;
+  min-height: 80px;
 }
 
 .dock-section.prop-section {
-  flex: 1 1 0%;
-  min-height: 80px;
+  flex: 1 0 auto;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
 }
 
 .dock-section.color-section {
   flex-shrink: 0;
+  min-height: 140px;
   display: flex;
   flex-direction: column;
 }
