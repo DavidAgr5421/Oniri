@@ -68,9 +68,23 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   const raycaster = new THREE.Raycaster();
   const pointerVec = new THREE.Vector2();
 
-  let activeStroke: 'brush' | 'eraser' | 'shape' | null = null;
+  let activeStroke: 'brush' | 'eraser' | 'shape' | 'bone' | null = null;
   let activePointerId: number | null = null;
   let lastPointerType = 'mouse';
+
+  // Bone drag state
+  let boneDragState: {
+    kind: 'rig_tail' | 'rig_head' | 'pose_fk_rotate' | 'pose_fk_move' | 'pose_ik';
+    boneId: string;
+    startDocX: number;
+    startDocY: number;
+    headX: number;
+    headY: number;
+    startAngleDeg: number;
+    startDRotation: number;
+    startDX: number;
+    startDY: number;
+  } | null = null;
 
   // Pan / Navigation state
   let isSpacePressed = false;
@@ -98,6 +112,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       canvas.style.cursor = 'grab';
     } else if (activeTool() === 'eyedropper') {
       canvas.style.cursor = 'cell';
+    } else if (activeTool() === 'bone') {
+      canvas.style.cursor = 'pointer';
     } else {
       canvas.style.cursor = 'crosshair';
     }
@@ -189,6 +205,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const finish = (pointerId?: number): void => {
+    const wasBone = activeStroke === 'bone';
     if (activeStroke === 'brush' || activeStroke === 'eraser') {
       // Stabilizer catch-up: pull the smoothed curve toward the raw release
       // point so the stroke doesn't stop short of the cursor, then close it
@@ -213,6 +230,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     activeStroke = null;
+    boneDragState = null;
     if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
       try {
         canvas.releasePointerCapture(pointerId);
@@ -221,7 +239,9 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       }
     }
     activePointerId = null;
-    engine.endStroke({ vx: velX, vy: velY, isMouse: lastPointerType !== 'pen' });
+    if (!wasBone) {
+      engine.endStroke({ vx: velX, vy: velY, isMouse: lastPointerType !== 'pen' });
+    }
   };
 
   const onPointerDown = (event: PointerEvent): void => {
@@ -261,6 +281,145 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     if (tool === 'bucket') {
       const { color, tolerance } = getToolState().brush;
       engine.fill(Math.floor(doc.x), Math.floor(doc.y), color, tolerance);
+      return;
+    }
+
+    if (tool === 'bone') {
+      const tm = engine.getTimelineManager();
+      if (!tm) return;
+      const boneMode = getToolState().boneMode;
+      const hit = tm.hitTestBoneAtWorld(doc.x, doc.y, tm.settings.currentFrame);
+
+      activePointerId = event.pointerId;
+      lastPointerType = event.pointerType || 'mouse';
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignored
+      }
+      activeStroke = 'bone';
+
+      if (boneMode === 'rig') {
+        if (hit && !event.shiftKey) {
+          tm.selectBone(hit.bone.id);
+          if (hit.part === 'tail') {
+            boneDragState = {
+              kind: 'rig_tail',
+              boneId: hit.bone.id,
+              startDocX: doc.x,
+              startDocY: doc.y,
+              headX: hit.evalBone.headX,
+              headY: hit.evalBone.headY,
+              startAngleDeg: 0,
+              startDRotation: 0,
+              startDX: 0,
+              startDY: 0,
+            };
+          } else {
+            boneDragState = {
+              kind: 'rig_head',
+              boneId: hit.bone.id,
+              startDocX: doc.x,
+              startDocY: doc.y,
+              headX: hit.evalBone.headX,
+              headY: hit.evalBone.headY,
+              startAngleDeg: 0,
+              startDRotation: 0,
+              startDX: hit.evalBone.headX - doc.x,
+              startDY: hit.evalBone.headY - doc.y,
+            };
+          }
+        } else {
+          // Create new bone (if Shift+click on a bone tail, chain from its tail; if Alt, root bone; else parent to selectedBoneId)
+          const parentId = hit
+            ? hit.bone.id
+            : event.altKey
+              ? null
+              : tm.selectedBoneId;
+          const startX = hit && hit.part === 'tail' ? hit.evalBone.tailX : doc.x;
+          const startY = hit && hit.part === 'tail' ? hit.evalBone.tailY : doc.y;
+          const created = tm.createBoneFromWorld(startX, startY, doc.x + 24, doc.y, parentId);
+          boneDragState = {
+            kind: 'rig_tail',
+            boneId: created.id,
+            startDocX: startX,
+            startDocY: startY,
+            headX: startX,
+            headY: startY,
+            startAngleDeg: 0,
+            startDRotation: 0,
+            startDX: 0,
+            startDY: 0,
+          };
+        }
+        return;
+      }
+
+      if (boneMode === 'pose_fk') {
+        if (!hit) {
+          tm.selectBone(null);
+          return;
+        }
+        tm.selectBone(hit.bone.id);
+        const poses = tm.getInterpolatedBonePoses(tm.settings.currentFrame);
+        const curDelta = poses.get(hit.bone.id) ?? {
+          dX: 0,
+          dY: 0,
+          dRotation: 0,
+          dScaleX: 1,
+          dScaleY: 1,
+        };
+        if ((hit.part === 'head' && !hit.bone.parentId) || event.shiftKey) {
+          boneDragState = {
+            kind: 'pose_fk_move',
+            boneId: hit.bone.id,
+            startDocX: doc.x,
+            startDocY: doc.y,
+            headX: hit.evalBone.headX,
+            headY: hit.evalBone.headY,
+            startAngleDeg: 0,
+            startDRotation: curDelta.dRotation,
+            startDX: curDelta.dX,
+            startDY: curDelta.dY,
+          };
+        } else {
+          const startAngleDeg =
+            (Math.atan2(doc.y - hit.evalBone.headY, doc.x - hit.evalBone.headX) * 180) / Math.PI;
+          boneDragState = {
+            kind: 'pose_fk_rotate',
+            boneId: hit.bone.id,
+            startDocX: doc.x,
+            startDocY: doc.y,
+            headX: hit.evalBone.headX,
+            headY: hit.evalBone.headY,
+            startAngleDeg,
+            startDRotation: curDelta.dRotation,
+            startDX: curDelta.dX,
+            startDY: curDelta.dY,
+          };
+        }
+        return;
+      }
+
+      if (boneMode === 'pose_ik') {
+        const targetBoneId = hit ? hit.bone.id : tm.selectedBoneId;
+        if (!targetBoneId) return;
+        tm.selectBone(targetBoneId);
+        boneDragState = {
+          kind: 'pose_ik',
+          boneId: targetBoneId,
+          startDocX: doc.x,
+          startDocY: doc.y,
+          headX: doc.x,
+          headY: doc.y,
+          startAngleDeg: 0,
+          startDRotation: 0,
+          startDX: 0,
+          startDY: 0,
+        };
+        tm.applyTwoBoneIKAtFrame(tm.settings.currentFrame, targetBoneId, doc.x, doc.y);
+        return;
+      }
       return;
     }
 
@@ -317,6 +476,39 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
     if (!activeStroke) return;
 
+    if (activeStroke === 'bone') {
+      const tm = engine.getTimelineManager();
+      const doc = pointerToDoc(event);
+      if (!tm || !doc || !boneDragState) return;
+
+      if (boneDragState.kind === 'rig_tail') {
+        tm.updateBoneEndpointWorld(boneDragState.boneId, doc.x, doc.y);
+      } else if (boneDragState.kind === 'rig_head') {
+        tm.moveBoneHeadWorld(
+          boneDragState.boneId,
+          doc.x + boneDragState.startDX,
+          doc.y + boneDragState.startDY,
+        );
+      } else if (boneDragState.kind === 'pose_fk_move') {
+        tm.setBonePoseAtFrame(tm.settings.currentFrame, boneDragState.boneId, {
+          dX: boneDragState.startDX + (doc.x - boneDragState.startDocX),
+          dY: boneDragState.startDY + (doc.y - boneDragState.startDocY),
+        });
+      } else if (boneDragState.kind === 'pose_fk_rotate') {
+        const curAngleDeg =
+          (Math.atan2(doc.y - boneDragState.headY, doc.x - boneDragState.headX) * 180) / Math.PI;
+        let deltaDeg = curAngleDeg - boneDragState.startAngleDeg;
+        while (deltaDeg > 180) deltaDeg -= 360;
+        while (deltaDeg < -180) deltaDeg += 360;
+        tm.setBonePoseAtFrame(tm.settings.currentFrame, boneDragState.boneId, {
+          dRotation: Math.round((boneDragState.startDRotation + deltaDeg) * 10) / 10,
+        });
+      } else if (boneDragState.kind === 'pose_ik') {
+        tm.applyTwoBoneIKAtFrame(tm.settings.currentFrame, boneDragState.boneId, doc.x, doc.y);
+      }
+      return;
+    }
+
     if (activeStroke === 'shape') {
       const doc = pointerToDoc(event);
       if (doc) engine.updateShape(doc.x, doc.y);
@@ -359,7 +551,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     camera.updateProjectionMatrix();
   };
 
-  // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Space, B, E, I, G, U, H, Ctrl+0)
+  // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Space, B, E, I, G, U, H, J, Ctrl+0)
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
       return;
@@ -403,6 +595,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       else if (key === 'i') setTool('eyedropper');
       else if (key === 'g') setTool('bucket');
       else if (key === 'u') setTool('shape');
+      else if (key === 'j') setTool('bone');
       else if (key === 'h') setTool('hand');
       else if (key === 'x') swapColors();
       else if (key === 'c') toggleTransparentColor();

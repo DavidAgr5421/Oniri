@@ -6,7 +6,7 @@
   top: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
-  width: 250px !important;
+  width: var(--right-dock-width, 250px) !important;
   pointer-events: auto !important;
   z-index: 100 !important;
   display: block !important;
@@ -17,7 +17,7 @@
   top: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
-  width: 250px !important;
+  width: 100% !important;
   height: 100% !important;
   max-height: 100% !important;
   background: #1e1e1e !important;

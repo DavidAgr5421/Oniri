@@ -10,6 +10,11 @@
   --accent: #007acc;
   --border-radius: 6px;
   --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --left-dock-inner-width: 240px;
+  --left-dock-width: 288px;
+  --right-dock-width: 250px;
+  --timeline-height: 190px;
+  --timeline-tracks-width: 180px;
 }
 
 * {
@@ -245,17 +250,17 @@ body {
   top: 0;
   left: 48px;
   bottom: 0;
-  width: 230px;
+  width: var(--left-dock-inner-width, 240px);
   background: rgba(22, 22, 22, 0.98);
   border-right: 1px solid var(--bg-panel-border);
   box-shadow: 3px 0 12px rgba(0, 0, 0, 0.45);
   display: none;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden !important;
   pointer-events: auto;
   z-index: 15;
-  scrollbar-width: thin;
-  scrollbar-color: #444 #222;
+
+
 }
 
 .csp-sidebar-dock.open {
@@ -264,7 +269,21 @@ body {
 
 /* Sections */
 .dock-section {
-  border-bottom: 1px solid #2d2d2d;
+  overflow: hidden;
+  position: relative;
+}
+
+.dock-section.subtool-section {
+  flex-shrink: 0;
+}
+
+.dock-section.prop-section {
+  flex: 1 1 0%;
+  min-height: 80px;
+}
+
+.dock-section.color-section {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
 }
@@ -812,19 +831,745 @@ body {
   color: #888888;
 }
 
-.csp-subtool-item.custom .csp-subtool-dot {
-  background: transparent;
-  border: 1px dashed #aaaaaa;
+/* Subtool Bounded Container & Custom Draggable Scrollbar */
+.csp-subtool-scroll-wrap,
+.csp-prop-scroll-wrap,
+.csp-color-scroll-wrap,
+.csp-scroll-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: #141517;
+  overflow: hidden;
 }
 
-/* Live stroke preview */
+.csp-subtool-list,
+.csp-prop-scroll-list,
+.csp-color-scroll-list,
+.csp-scroll-list {
+  flex: 1;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  background: transparent;
+  max-height: none;
+}
+
+.csp-subtool-list::-webkit-scrollbar,
+.csp-prop-scroll-list::-webkit-scrollbar,
+.csp-color-scroll-list::-webkit-scrollbar,
+.csp-scroll-list::-webkit-scrollbar {
+  display: none;
+}
+
+.csp-custom-scrollbar {
+  width: 12px;
+  height: 100%;
+  background: linear-gradient(90deg, #121315 0%, #1a1c20 100%);
+  border-left: 1px solid #262930;
+  position: relative;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.csp-custom-scrollbar.hidden {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.csp-custom-scroll-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 2px;
+  min-height: 26px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #384152 0%, #2b3240 100%);
+  border: 1px solid #526077;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.csp-custom-scroll-thumb::before,
+.csp-custom-scroll-thumb::after {
+  content: '';
+  width: 4px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 1px;
+}
+
+.csp-custom-scroll-thumb:hover,
+.csp-custom-scroll-thumb.dragging {
+  background: linear-gradient(180deg, #0ea5e9 0%, #0284c7 100%);
+  border-color: #7dd3fc;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.55);
+}
+
+.csp-custom-scroll-thumb.dragging {
+  cursor: grabbing;
+}
+
+/* ==========================================================================
+   Dock Splitters & UI Resizers (Clip Studio Paint Dynamic Resizing)
+   ========================================================================== */
+.csp-dock-splitter {
+  height: 6px;
+  background: #18191c;
+  border-top: 1px solid #282b31;
+  border-bottom: 1px solid #282b31;
+  cursor: row-resize;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 5;
+  transition: background 0.12s ease;
+  user-select: none;
+}
+
+.csp-dock-splitter::after {
+  content: '';
+  width: 28px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 1px;
+  transition: all 0.12s ease;
+}
+
+.csp-dock-splitter:hover,
+.csp-dock-splitter.dragging {
+  background: #007acc;
+}
+
+.csp-dock-splitter:hover::after,
+.csp-dock-splitter.dragging::after {
+  background: #ffffff;
+  width: 48px;
+}
+
+/* Width resizer handle on the right edge of left dock */
+.csp-dock-width-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 30;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.csp-dock-width-resizer:hover,
+.csp-dock-width-resizer.dragging {
+  background: #007acc;
+  box-shadow: 0 0 6px rgba(0, 122, 204, 0.6);
+}
+
+/* Layers panel width resizer on left edge */
+.csp-layers-width-resizer {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 105;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.csp-layers-width-resizer:hover,
+.csp-layers-width-resizer.dragging {
+  background: #007acc;
+  box-shadow: 0 0 6px rgba(0, 122, 204, 0.6);
+}
+
+/* Timeline height resizer on top edge */
+.csp-timeline-height-resizer {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 95;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.csp-timeline-height-resizer:hover,
+.csp-timeline-height-resizer.dragging {
+  background: #007acc;
+  box-shadow: 0 0 6px rgba(0, 122, 204, 0.6);
+}
+
+/* Timeline tracks header column vertical splitter */
+.csp-timeline-track-splitter {
+  width: 5px;
+  background: #1e1e1e;
+  border-left: 1px solid #333333;
+  border-right: 1px solid #222222;
+  cursor: col-resize;
+  flex-shrink: 0;
+  z-index: 10;
+  transition: background 0.12s ease;
+}
+
+.csp-timeline-track-splitter:hover,
+.csp-timeline-track-splitter.dragging {
+  background: #007acc;
+}
+
+.csp-subtool-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: #cccccc;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.015);
+  transition: all 0.1s ease;
+}
+
+.csp-subtool-item:hover {
+  background: #252830;
+  border-color: #363b46;
+  color: #ffffff;
+}
+
+.csp-subtool-item.active {
+  background: linear-gradient(90deg, #007acc 0%, #0062a3 100%);
+  border-color: #38bdf8;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(0, 122, 204, 0.3);
+}
+
+.csp-subtool-size-badge {
+  min-width: 24px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 9.5px;
+  font-family: monospace;
+  color: #b8c2cc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.csp-subtool-item.active .csp-subtool-size-badge {
+  background: rgba(0, 0, 0, 0.28);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+}
+
+.csp-subtool-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.csp-subtool-gear-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+}
+
+.csp-subtool-item:hover .csp-subtool-gear-btn,
+.csp-subtool-item.active .csp-subtool-gear-btn {
+  opacity: 1;
+}
+
+.csp-subtool-gear-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+}
+
+.csp-subtool-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: #1a1b1e;
+  border-bottom: 1px solid #2b2d31;
+}
+
+.csp-subtool-footer-info {
+  font-size: 10px;
+  color: #7c8594;
+}
+
+/* Live stroke preview with distinct paper / checker / dark background */
+.csp-preview-wrap {
+  position: relative;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid #3a3f4b;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
 .csp-preview-canvas {
   display: block;
   width: 100%;
-  height: 64px;
-  background: #181818;
-  border: 1px solid #2e2e2e;
+  height: 62px;
+  border: none;
+  border-radius: 0;
+}
+
+.csp-preview-canvas.bg-paper {
+  background-color: #eceef2;
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+
+.csp-preview-canvas.bg-checker {
+  background: repeating-conic-gradient(#d8dce2 0% 25%, #f4f6f8 0% 50%) 50% / 12px 12px;
+}
+
+.csp-preview-canvas.bg-dark {
+  background-color: #1e2229;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+
+.csp-preview-overlay-bar {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 3px;
+}
+
+.csp-preview-mini-btn {
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  background: rgba(24, 26, 30, 0.72);
+  color: #e2e8f0;
+  font-size: 9.5px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: all 0.12s ease;
+}
+
+.csp-preview-mini-btn:hover {
+  background: #007acc;
+  color: #ffffff;
+  border-color: #38bdf8;
+}
+
+/* Tool Property Footer with Sub Tool Detail Wrench Button (CSP Style) */
+.csp-prop-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+  margin-top: 2px;
+  border-top: 1px solid #2b2d33;
+}
+
+.csp-prop-visible-count {
+  font-size: 10px;
+  color: #7c8594;
+}
+
+.csp-wrench-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #252830;
+  border: 1px solid #3c4250;
   border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.csp-wrench-btn:hover {
+  background: #007acc;
+  border-color: #38bdf8;
+  color: #ffffff;
+  box-shadow: 0 0 8px rgba(0, 122, 204, 0.4);
+}
+
+/* ==========================================================================
+   Sub Tool Detail Modal (Detalle de subherramienta - CSP Wrench Window)
+   ========================================================================== */
+.csp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.csp-subtool-detail-window {
+  width: 560px;
+  max-width: 94vw;
+  height: 460px;
+  max-height: 88vh;
+  background: #1e2024;
+  border: 1px solid #3e4452;
+  border-radius: 7px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #e2e8f0;
+}
+
+.csp-subtool-detail-header {
+  height: 36px;
+  background: #16181b;
+  border-bottom: 1px solid #2d3139;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.csp-subtool-detail-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.csp-subtool-detail-cats {
+  width: 165px;
+  background: #17191c;
+  border-right: 1px solid #2b2f38;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.csp-detail-cat-btn {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #9aa2b1;
+  font-size: 11px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.csp-detail-cat-btn:hover {
+  background: #24272d;
+  color: #ffffff;
+}
+
+.csp-detail-cat-btn.active {
+  background: #007acc;
+  border-color: #38bdf8;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.csp-subtool-detail-content {
+  flex: 1;
+  padding: 12px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.csp-detail-prop-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #17191d;
+  border: 1px solid #2a2e37;
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+
+.csp-eye-pin-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid #343944;
+  background: #1e2126;
+  color: #5e6675;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: all 0.12s ease;
+}
+
+.csp-eye-pin-btn.pinned {
+  background: rgba(14, 165, 233, 0.18);
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.csp-eye-pin-btn:hover {
+  border-color: #7dd3fc;
+  color: #ffffff;
+}
+
+.csp-detail-prop-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.csp-subtool-detail-footer {
+  height: 40px;
+  background: #16181b;
+  border-top: 1px solid #2d3139;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: #8b94a5;
+}
+
+/* ==========================================================================
+   Color & Swatches 4-Mode Tabs (Picker, RGB/HSV, Color Set, Harmonies)
+   ========================================================================== */
+.csp-color-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  background: #141518;
+  padding: 2px;
+  border-radius: 4px;
+  border: 1px solid #2b2e36;
+}
+
+.csp-color-tab-btn {
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: #8b93a1;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.1s ease;
+}
+
+.csp-color-tab-btn:hover {
+  color: #ffffff;
+  background: #23262d;
+}
+
+.csp-color-tab-btn.active {
+  background: #007acc;
+  color: #ffffff;
+}
+
+.csp-color-wheel-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: #15171a;
+  border: 1px solid #292d35;
+  border-radius: 5px;
+  padding: 8px;
+}
+
+.csp-color-wheel-canvas {
+  display: block;
+  width: 176px;
+  height: 176px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.csp-rgb-sliders-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.csp-channel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.csp-channel-tag {
+  width: 14px;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: monospace;
+  color: #9aa2b1;
+}
+
+.csp-channel-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  border-radius: 4px;
+  border: 1px solid #343942;
+  outline: none;
+  cursor: pointer;
+}
+
+.csp-channel-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 13px;
+  border-radius: 2px;
+  background: #ffffff;
+  border: 1px solid #111111;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+
+.csp-channel-num {
+  width: 38px;
+  background: #141619;
+  border: 1px solid #2e333d;
+  border-radius: 3px;
+  color: #e2e8f0;
+  font-size: 10px;
+  font-family: monospace;
+  padding: 2px 3px;
+  text-align: right;
+}
+
+.csp-colorset-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.csp-colorset-select {
+  flex: 1;
+  background: #16181c;
+  border: 1px solid #2e333d;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 10.5px;
+  padding: 3px 5px;
+  outline: none;
+}
+
+.csp-harmony-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.csp-harmony-group {
+  background: #15171b;
+  border: 1px solid #282c34;
+  border-radius: 4px;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.csp-harmony-title {
+  font-size: 9.5px;
+  color: #8c95a4;
+  font-weight: 600;
+}
+
+.csp-harmony-swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.csp-harmony-swatch-btn {
+  flex: 1;
+  height: 24px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 1px;
+  transition: transform 0.1s ease, border-color 0.1s ease;
+}
+
+.csp-harmony-swatch-btn:hover {
+  transform: translateY(-1px);
+  border-color: #ffffff;
+}
+
+.csp-harmony-swatch-tag {
+  font-size: 8px;
+  font-family: monospace;
+  background: rgba(0, 0, 0, 0.58);
+  color: #ffffff;
+  padding: 0 3px;
+  border-radius: 2px;
+  line-height: 1.2;
 }
 
 /* Checkbox toggle rows */

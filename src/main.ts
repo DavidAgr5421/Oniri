@@ -94,13 +94,14 @@ if (toolsContainer) {
   mountToolsView(toolsContainer, {
     onUndo: () => engine.undo(),
     onRedo: () => engine.redo(),
+    timeline,
   });
 }
 
 // Mount Layers Panel (CSP Style)
 const layersContainer = document.getElementById('layers-container');
 if (layersContainer) {
-  mountLayersView(layersContainer, engine.layerManager);
+  mountLayersView(layersContainer, engine.layerManager, timeline);
 }
 
 // Mount Timeline Palette (CSP Style)

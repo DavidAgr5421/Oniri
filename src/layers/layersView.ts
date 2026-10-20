@@ -1,3 +1,4 @@
+import type { TimelineManager } from '../animation/timelineManager';
 import type { LayerManager, LayerNode } from '../brush/layers';
 import './layers.css';
 
@@ -52,19 +53,74 @@ function getVisualHierarchyOrder(layers: LayerNode[]): LayerNode[] {
   return result;
 }
 
-export function mountLayersView(container: HTMLElement, layerManager: LayerManager): void {
+export function mountLayersView(
+  container: HTMLElement,
+  layerManager: LayerManager,
+  timeline?: TimelineManager,
+): void {
   container.innerHTML = '';
   container.style.position = 'absolute';
   container.style.top = '0';
   container.style.right = '0';
   container.style.bottom = '0';
-  container.style.width = '250px';
+  container.style.width = 'var(--right-dock-width, 250px)';
   container.style.pointerEvents = 'auto';
   container.style.zIndex = '100';
   container.style.display = 'block';
 
   const panel = document.createElement('aside');
   panel.className = 'layers-panel';
+
+  // Left-edge width resizer
+  const resizer = document.createElement('div');
+  resizer.className = 'csp-layers-width-resizer';
+  resizer.title = 'Arrastrar para cambiar el ancho del panel de capas';
+
+  const savedWidth = localStorage.getItem('oniri.layers.width');
+  if (savedWidth) {
+    const w = Math.max(180, Math.min(480, Number(savedWidth)));
+    document.documentElement.style.setProperty('--right-dock-width', `${w}px`);
+  }
+
+  let isDragging = false;
+  let startX = 0;
+  let startWidth = 250;
+
+  resizer.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isDragging = true;
+    startX = e.clientX;
+    const currentW =
+      parseInt(getComputedStyle(document.documentElement).getPropertyValue('--right-dock-width')) ||
+      250;
+    startWidth = currentW;
+    resizer.classList.add('dragging');
+    resizer.setPointerCapture(e.pointerId);
+  });
+
+  resizer.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const newWidth = Math.max(180, Math.min(480, startWidth - dx));
+    document.documentElement.style.setProperty('--right-dock-width', `${newWidth}px`);
+    localStorage.setItem('oniri.layers.width', String(newWidth));
+  });
+
+  const stopDrag = (e: PointerEvent) => {
+    if (!isDragging) return;
+    isDragging = false;
+    resizer.classList.remove('dragging');
+    try {
+      resizer.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+  resizer.addEventListener('pointerup', stopDrag);
+  resizer.addEventListener('pointercancel', stopDrag);
+
+  panel.appendChild(resizer);
 
   // --- 1. Tab Header ---
   const tabHeader = document.createElement('div');
@@ -140,6 +196,44 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
   });
   folderRow.appendChild(folderSelect);
   panel.appendChild(folderRow);
+
+  // --- 3b. 2D Bone Binding & Mesh Skinning Strip ---
+  const boneRow = document.createElement('div');
+  boneRow.className = 'layer-folder-assign-row';
+  boneRow.style.gap = '4px';
+  boneRow.innerHTML = `<span class="assign-label" title="Vincular esta capa a un Hueso 2D">🦴 Hueso:</span>`;
+
+  const boneSelect = document.createElement('select');
+  boneSelect.className = 'layer-folder-select';
+  boneSelect.style.flex = '1';
+  boneSelect.title = 'Vincular capa rígidamente a un hueso del esqueleto';
+  boneSelect.addEventListener('change', () => {
+    const active = layerManager.getActiveLayer();
+    if (!active || active.isPaper) return;
+    const boneId = boneSelect.value === '' ? null : boneSelect.value;
+    layerManager.setLayerBoneBinding(active.id, boneId, !!active.meshSkinningEnabled);
+  });
+
+  const meshSkinBtn = document.createElement('button');
+  meshSkinBtn.className = 'layer-action-btn';
+  meshSkinBtn.style.width = 'auto';
+  meshSkinBtn.style.padding = '2px 6px';
+  meshSkinBtn.style.fontSize = '10px';
+  meshSkinBtn.textContent = '🕸️ Malla';
+  meshSkinBtn.title =
+    'Malla Deformable (Linear Blend Skinning): deforma suavemente el dibujo de esta capa con todos los huesos cercanos';
+  meshSkinBtn.addEventListener('click', () => {
+    const active = layerManager.getActiveLayer();
+    if (!active || active.isPaper || active.type !== 'raster') return;
+    layerManager.setLayerBoneBinding(
+      active.id,
+      active.boundBoneId ?? null,
+      !active.meshSkinningEnabled,
+    );
+  });
+
+  boneRow.append(boneSelect, meshSkinBtn);
+  panel.appendChild(boneRow);
 
   // --- 4. Palette Actions Toolbar ---
   const actionsBar = document.createElement('div');
@@ -282,7 +376,23 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
     folderSelect.value = active?.parentId ?? 'root';
     folderSelect.disabled = !active || !!active.isPaper;
 
+    // Populate Bone Binding Select & Mesh Skinning button
+    const bones = timeline?.bones ?? [];
+    boneSelect.innerHTML = `<option value="">(Sin hueso)</option>`;
+    for (const b of bones) {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = `🦴 ${b.name}`;
+      boneSelect.appendChild(opt);
+    }
+    boneSelect.value = active?.boundBoneId ?? '';
+    boneSelect.disabled = !active || !!active.isPaper || active.type !== 'raster';
+    meshSkinBtn.classList.toggle('active', !!active?.meshSkinningEnabled);
+    meshSkinBtn.style.color = active?.meshSkinningEnabled ? '#fbbf24' : '';
+    meshSkinBtn.disabled = !active || !!active.isPaper || active.type !== 'raster';
+
     const layerMap = new Map(layerManager.layers.map((l) => [l.id, l]));
+    const boneMap = new Map(bones.map((b) => [b.id, b]));
 
     // Hierarchical list traversal ensures child layers appear nested directly under their parent folder
     const orderedNodes = getVisualHierarchyOrder(layerManager.layers);
@@ -418,6 +528,26 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
       });
       item.appendChild(nameText);
 
+      // 5b. Bone Binding / Mesh Skinning Badge
+      if (node.meshSkinningEnabled) {
+        const meshBadge = document.createElement('span');
+        meshBadge.className = 'layer-badge';
+        meshBadge.style.color = '#fbbf24';
+        meshBadge.style.fontSize = '10px';
+        meshBadge.title = 'Malla 2D Deformable (Linear Blend Skinning)';
+        meshBadge.textContent = '🕸️';
+        item.appendChild(meshBadge);
+      } else if (node.boundBoneId) {
+        const b = boneMap.get(node.boundBoneId);
+        const boneBadge = document.createElement('span');
+        boneBadge.className = 'layer-badge';
+        boneBadge.style.color = b?.color ?? '#38bdf8';
+        boneBadge.style.fontSize = '10px';
+        boneBadge.title = `Vinculado a hueso: ${b?.name ?? node.boundBoneId}`;
+        boneBadge.textContent = '🦴';
+        item.appendChild(boneBadge);
+      }
+
       // 6. Paper Lock Badge
       if (node.isPaper) {
         const lockBadge = document.createElement('span');
@@ -435,5 +565,6 @@ export function mountLayersView(container: HTMLElement, layerManager: LayerManag
   }
 
   layerManager.subscribe(render);
+  timeline?.subscribe(render);
   render();
 }

@@ -1,6 +1,12 @@
+import {
+  type EvaluatedBoneWorld,
+  type LayerMeshSkin,
+  buildLayerMeshSkin,
+  renderSkinnedLayerMesh,
+} from '../animation/boneModel';
 import type { TimelineManager } from '../animation/timelineManager';
 import type { BrushSettings } from '../tools/toolState';
-import { getToolState } from '../tools/toolState';
+import { getToolState, subscribeTools } from '../tools/toolState';
 import { floodFill } from './floodFill';
 import { createHistoryManager, HistoryManager } from './history';
 import { createLayerManager, getRenderOrder, LayerManager, LayerNode } from './layers';
@@ -292,10 +298,106 @@ export function createBrushEngine(): BrushEngine {
 
     if (preStrokeSnapshot) {
       history.push(preStrokeLayerId, preStrokeSnapshot);
+      meshCache.delete(preStrokeLayerId);
       preStrokeSnapshot = null;
     }
     engine.compositeDirty = true;
     mode = null;
+  }
+
+  const meshCache = new Map<string, { boneCount: number; mesh: LayerMeshSkin }>();
+
+  function drawBonesOverlay(
+    ctx: CanvasRenderingContext2D,
+    evaluatedBones: Map<string, EvaluatedBoneWorld>,
+    selectedBoneId: string | null
+  ): void {
+    const toolState = getToolState();
+    const isBoneTool = toolState.tool === 'bone';
+    if (!toolState.showBonesOverlay && !isBoneTool) return;
+    if (evaluatedBones.size === 0) return;
+
+    ctx.save();
+
+    // 1. Dashed parent-child hierarchy connectors (when child head is detached from parent tail)
+    for (const b of evaluatedBones.values()) {
+      if (!b.parentId) continue;
+      const parent = evaluatedBones.get(b.parentId);
+      if (!parent) continue;
+      const gap = Math.hypot(b.headX - parent.tailX, b.headY - parent.tailY);
+      if (gap > 2) {
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(parent.tailX, parent.tailY);
+        ctx.lineTo(b.headX, b.headY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // 2. Draw each bone kite/diamond and joints
+    for (const b of evaluatedBones.values()) {
+      const isSelected = b.id === selectedBoneId;
+      const dx = b.tailX - b.headX;
+      const dy = b.tailY - b.headY;
+      const len = Math.max(1, Math.hypot(dx, dy));
+      const ux = dx / len;
+      const uy = dy / len;
+      const px = -uy;
+      const py = ux;
+
+      // Kite width at 22% along the bone
+      const shoulderDist = Math.min(len * 0.22, 24);
+      const halfWidth = Math.max(5, Math.min(14, len * 0.1));
+      const sx = b.headX + ux * shoulderDist;
+      const sy = b.headY + uy * shoulderDist;
+
+      ctx.beginPath();
+      ctx.moveTo(b.headX, b.headY);
+      ctx.lineTo(sx + px * halfWidth, sy + py * halfWidth);
+      ctx.lineTo(b.tailX, b.tailY);
+      ctx.lineTo(sx - px * halfWidth, sy - py * halfWidth);
+      ctx.closePath();
+
+      ctx.fillStyle = isSelected ? 'rgba(255, 212, 59, 0.48)' : `${b.color}44`;
+      ctx.fill();
+      ctx.lineWidth = isSelected ? 2.4 : 1.6;
+      ctx.strokeStyle = isSelected ? '#ffd43b' : b.color;
+      ctx.stroke();
+
+      // Head Joint Circle
+      ctx.beginPath();
+      ctx.arc(b.headX, b.headY, isSelected ? 6.5 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected ? '#ffd43b' : '#161616';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = isSelected ? '#ffffff' : b.color;
+      ctx.stroke();
+
+      // Tail Joint (End / IK Handle) Circle
+      ctx.beginPath();
+      ctx.arc(b.tailX, b.tailY, isSelected ? 6 : 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = toolState.boneMode === 'pose_ik' ? '#ff6b6b' : b.color;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#111111';
+      ctx.stroke();
+
+      // Label when bone tool is active or bone is selected
+      if (isBoneTool || isSelected) {
+        ctx.font = '600 11px sans-serif';
+        const midX = (b.headX + b.tailX) / 2;
+        const midY = (b.headY + b.tailY) / 2 - 8;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillText(b.name, midX + 1, midY + 1);
+        ctx.fillStyle = isSelected ? '#ffd43b' : '#ffffff';
+        ctx.fillText(b.name, midX, midY);
+      }
+    }
+
+    ctx.restore();
   }
 
   function updateComposite(): void {
@@ -303,16 +405,92 @@ export function createBrushEngine(): BrushEngine {
 
     const layerMap = new Map(layerManager.layers.map((l) => [l.id, l]));
     const activeDrawable = layerManager.getActiveDrawableLayer();
+    const evaluatedBones =
+      timelineManager && timelineManager.bones.length > 0
+        ? timelineManager.getEvaluatedBones(timelineManager.settings.currentFrame)
+        : null;
+
+    function getEffectiveBoundBoneId(layer: LayerNode): string | null {
+      let curr: LayerNode | undefined = layer;
+      while (curr) {
+        if (curr.boundBoneId) return curr.boundBoneId;
+        curr = curr.parentId ? layerMap.get(curr.parentId) : undefined;
+      }
+      return null;
+    }
+
+    function isLayerMeshSkinned(layer: LayerNode): boolean {
+      let curr: LayerNode | undefined = layer;
+      while (curr) {
+        if (curr.meshSkinningEnabled) return true;
+        curr = curr.parentId ? layerMap.get(curr.parentId) : undefined;
+      }
+      return false;
+    }
 
     function renderLayerTo(targetCtx: CanvasRenderingContext2D, layer: LayerNode, alpha: number): void {
       if (!layer.canvas) return;
+      const kfTransform =
+        timelineManager && !layer.isPaper
+          ? timelineManager.getLayerTransformAtFrame(layer, timelineManager.settings.currentFrame)
+          : null;
+
       targetCtx.save();
-      targetCtx.globalAlpha = alpha;
+      const effectiveAlpha = kfTransform ? alpha * kfTransform.opacity : alpha;
+      targetCtx.globalAlpha = Math.max(0, Math.min(1, effectiveAlpha));
       targetCtx.globalCompositeOperation = layer.blendMode;
-      targetCtx.drawImage(layer.canvas, 0, 0);
+
+      // 1. Track Keyframe Transform (Position, Rotation, Scale)
+      if (
+        kfTransform &&
+        (kfTransform.x !== 0 ||
+          kfTransform.y !== 0 ||
+          kfTransform.scaleX !== 1 ||
+          kfTransform.scaleY !== 1 ||
+          kfTransform.rotation !== 0)
+      ) {
+        const cx = DOC_W / 2;
+        const cy = DOC_H / 2;
+        targetCtx.translate(cx + kfTransform.x, cy + kfTransform.y);
+        if (kfTransform.rotation !== 0) {
+          targetCtx.rotate((kfTransform.rotation * Math.PI) / 180);
+        }
+        if (kfTransform.scaleX !== 1 || kfTransform.scaleY !== 1) {
+          targetCtx.scale(kfTransform.scaleX, kfTransform.scaleY);
+        }
+        targetCtx.translate(-cx, -cy);
+      }
+
+      // 2. Bone Deformation: Either Automatic Multi-Bone Mesh Skinning (LBS) or Rigid Bone Binding
+      const useMeshSkin =
+        !layer.isPaper && evaluatedBones && evaluatedBones.size > 0 && isLayerMeshSkinned(layer);
+      const boundBoneId = !layer.isPaper && evaluatedBones ? getEffectiveBoundBoneId(layer) : null;
+      const boundBoneEval = boundBoneId && evaluatedBones ? evaluatedBones.get(boundBoneId) : undefined;
+
+      if (useMeshSkin && timelineManager && evaluatedBones) {
+        let cached = meshCache.get(layer.id);
+        if (!cached || cached.boneCount !== timelineManager.bones.length) {
+          const built = buildLayerMeshSkin(layer.id, layer.canvas, timelineManager.bones, 10, 10);
+          if (built) {
+            cached = { boneCount: timelineManager.bones.length, mesh: built };
+            meshCache.set(layer.id, cached);
+          }
+        }
+        if (cached) {
+          renderSkinnedLayerMesh(targetCtx, layer.canvas, cached.mesh, evaluatedBones);
+        } else {
+          targetCtx.drawImage(layer.canvas, 0, 0);
+        }
+      } else if (boundBoneEval) {
+        const [a, b, c, d, tx, ty] = boundBoneEval.skinMatrix;
+        targetCtx.transform(a, b, c, d, tx, ty);
+        targetCtx.drawImage(layer.canvas, 0, 0);
+      } else {
+        targetCtx.drawImage(layer.canvas, 0, 0);
+      }
 
       if (layer.id === activeDrawable.id && (mode === 'paint' || mode === 'shape')) {
-        targetCtx.globalAlpha = alpha * getToolState().brush.opacity;
+        targetCtx.globalAlpha = Math.max(0, Math.min(1, effectiveAlpha * getToolState().brush.opacity));
         targetCtx.drawImage(strokeCanvas, 0, 0);
       }
       targetCtx.restore();
@@ -324,7 +502,7 @@ export function createBrushEngine(): BrushEngine {
       renderLayerTo(compositeContext, paperLayer, paperLayer.opacity);
     }
 
-    // 2. Render Onion Skinning if enabled
+    // 2. Render Onion Skinning if enabled (Papel Cebolla con mesa de luz integrada)
     if (timelineManager && timelineManager.onionSkin.enabled && timelineManager.tracks.length > 0) {
       for (const track of timelineManager.tracks) {
         if (!track.visible) continue;
@@ -332,9 +510,44 @@ export function createBrushEngine(): BrushEngine {
         for (const item of onionCels) {
           if (!item.layer.canvas) continue;
           onionContext.clearRect(0, 0, DOC_W, DOC_H);
-          onionContext.drawImage(item.layer.canvas, 0, 0);
+          onionContext.save();
 
-          if (timelineManager.onionSkin.mode === 'tint') {
+          const cx = DOC_W / 2;
+          const cy = DOC_H / 2;
+
+          // Track animated keyframe transform
+          if (
+            item.transform &&
+            (item.transform.x !== 0 ||
+              item.transform.y !== 0 ||
+              item.transform.scaleX !== 1 ||
+              item.transform.scaleY !== 1 ||
+              item.transform.rotation !== 0)
+          ) {
+            onionContext.translate(cx + item.transform.x, cy + item.transform.y);
+            onionContext.rotate((item.transform.rotation * Math.PI) / 180);
+            onionContext.scale(item.transform.scaleX, item.transform.scaleY);
+            onionContext.translate(-cx, -cy);
+          }
+
+          // Onion skin manual calibration transform (Light Table alignment: offset, rotate, scale, flip)
+          if (item.onionTransform) {
+            const ot = item.onionTransform;
+            const rot = (ot.rotation * Math.PI) / 180;
+            const sx = ot.scaleX * (ot.flipX ? -1 : 1);
+            const sy = ot.scaleY * (ot.flipY ? -1 : 1);
+
+            onionContext.translate(cx + ot.x, cy + ot.y);
+            if (rot !== 0) onionContext.rotate(rot);
+            if (sx !== 1 || sy !== 1) onionContext.scale(sx, sy);
+            onionContext.translate(-cx, -cy);
+          }
+
+          onionContext.drawImage(item.layer.canvas, 0, 0);
+          onionContext.restore();
+
+          // Apply tint color if monochrome tint mode is active
+          if (timelineManager.onionSkin.mode === 'tint' && item.tintColor) {
             onionContext.save();
             onionContext.globalCompositeOperation = 'source-in';
             onionContext.fillStyle = item.tintColor;
@@ -343,7 +556,7 @@ export function createBrushEngine(): BrushEngine {
           }
 
           compositeContext.save();
-          compositeContext.globalAlpha = item.opacity;
+          compositeContext.globalAlpha = item.opacity * (item.transform?.opacity ?? 1);
           compositeContext.drawImage(onionCanvas, 0, 0);
           compositeContext.restore();
         }
@@ -409,6 +622,11 @@ export function createBrushEngine(): BrushEngine {
       }
     }
 
+    // 4. Render 2D Bone Armature Gizmo Overlay (when enabled or when Bone Tool is active)
+    if (timelineManager && evaluatedBones && evaluatedBones.size > 0 && !timelineManager.settings.isPlaying) {
+      drawBonesOverlay(compositeContext, evaluatedBones, timelineManager.selectedBoneId);
+    }
+
     engine.compositeDirty = false;
   }
 
@@ -453,6 +671,9 @@ export function createBrushEngine(): BrushEngine {
     setTimelineManager(tm: TimelineManager) {
       timelineManager = tm;
       tm.subscribe(() => {
+        if (getToolState().boneMode === 'rig') {
+          meshCache.clear();
+        }
         engine.compositeDirty = true;
       });
       engine.compositeDirty = true;
@@ -518,6 +739,7 @@ export function createBrushEngine(): BrushEngine {
       const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
       history.push(active.id, current);
       floodFill(active.context, x, y, colorHex, tolerance);
+      meshCache.delete(active.id);
       engine.compositeDirty = true;
     },
     undo(): boolean {
@@ -531,6 +753,7 @@ export function createBrushEngine(): BrushEngine {
       const targetLayer = layerManager.layers.find((l) => l.id === record.layerId);
       if (targetLayer && targetLayer.context) {
         targetLayer.context.putImageData(record.data, 0, 0);
+        meshCache.delete(targetLayer.id);
         engine.compositeDirty = true;
         return true;
       }
@@ -547,6 +770,7 @@ export function createBrushEngine(): BrushEngine {
       const targetLayer = layerManager.layers.find((l) => l.id === record.layerId);
       if (targetLayer && targetLayer.context) {
         targetLayer.context.putImageData(record.data, 0, 0);
+        meshCache.delete(targetLayer.id);
         engine.compositeDirty = true;
         return true;
       }
@@ -560,6 +784,10 @@ export function createBrushEngine(): BrushEngine {
     },
     updateComposite,
   };
+
+  subscribeTools(() => {
+    engine.compositeDirty = true;
+  });
 
   updateComposite();
   return engine;

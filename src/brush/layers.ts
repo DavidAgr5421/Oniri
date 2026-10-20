@@ -14,6 +14,8 @@ export interface LayerNode {
   parentId: string | null;
   collapsed: boolean;
   clipped: boolean; // Clip at layer below
+  boundBoneId?: string | null; // Rigid cutout binding to a Bone2D
+  meshSkinningEnabled?: boolean; // Automatic multi-bone LBS mesh deformation
 }
 
 export interface LayerManager {
@@ -26,6 +28,7 @@ export interface LayerManager {
   renameLayer(id: string, newName: string): void;
   toggleFolderCollapse(id: string): void;
   toggleLayerClipping(id: string): void;
+  setLayerBoneBinding(layerId: string, boneId: string | null, meshSkinning?: boolean): void;
   moveToFolder(layerId: string, targetFolderId: string | null): boolean;
   getActiveLayer(): LayerNode;
   getActiveDrawableLayer(): LayerNode;
@@ -263,6 +266,15 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
         node.clipped = !node.clipped;
         notify();
       }
+    },
+    setLayerBoneBinding(layerId: string, boneId: string | null, meshSkinning?: boolean) {
+      const node = layers.find((l) => l.id === layerId);
+      if (!node || node.isPaper) return;
+      node.boundBoneId = boneId;
+      if (meshSkinning !== undefined) {
+        node.meshSkinningEnabled = meshSkinning;
+      }
+      notify();
     },
     moveToFolder(layerId: string, targetFolderId: string | null): boolean {
       const node = layers.find((l) => l.id === layerId);

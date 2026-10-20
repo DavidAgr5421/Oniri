@@ -1,4 +1,5 @@
-export type ToolId = 'pen' | 'brush' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'hand';
+export type ToolId = 'pen' | 'brush' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand';
+export type BoneToolMode = 'rig' | 'pose_fk' | 'pose_ik';
 export type ShapeType = 'line' | 'rectangle' | 'ellipse';
 export type ShapeFillMode = 'stroke' | 'fill';
 export type TipShape = 'circle' | 'square' | 'calligraphic';
@@ -129,6 +130,74 @@ export const SUBTOOLS: SubTool[] = [
       stabilization: 8,
     },
   },
+  {
+    id: 'maru-pen',
+    name: 'Pluma Maru (Redonda)',
+    tool: 'pen',
+    description: 'Plumilla fina de CSP para cabello, ojos y detalles delicados.',
+    settings: {
+      size: 3,
+      minSizeRatio: 0.05,
+      pressureSize: true,
+      pressureCurve: 1.3,
+      flow: 1.0,
+      pressureFlow: false,
+      inkMode: 'uniform',
+      hardness: 1.0,
+      antiAliasing: 'medium',
+      spacing: 0.05,
+      tipShape: 'circle',
+      taperStart: 5,
+      taperEnd: 12,
+      stabilization: 5,
+    },
+  },
+  {
+    id: 'calligraphy-pen',
+    name: 'Caligrafía',
+    tool: 'pen',
+    description: 'Punta biselada de grosor variable según el ángulo del trazo.',
+    settings: {
+      size: 14,
+      minSizeRatio: 0.35,
+      pressureSize: true,
+      pressureCurve: 1.1,
+      flow: 1.0,
+      pressureFlow: false,
+      inkMode: 'uniform',
+      hardness: 1.0,
+      antiAliasing: 'medium',
+      spacing: 0.04,
+      tipShape: 'calligraphic',
+      tipRoundness: 0.25,
+      tipAngle: 45,
+      taperStart: 6,
+      taperEnd: 14,
+      stabilization: 6,
+    },
+  },
+  {
+    id: 'millipen',
+    name: 'Marcador Millipen',
+    tool: 'pen',
+    description: 'Estilógrafo técnico de grosor uniforme sin variación por presión.',
+    settings: {
+      size: 5,
+      minSizeRatio: 1.0,
+      pressureSize: false,
+      pressureCurve: 1.0,
+      flow: 1.0,
+      pressureFlow: false,
+      inkMode: 'uniform',
+      hardness: 1.0,
+      antiAliasing: 'medium',
+      spacing: 0.05,
+      tipShape: 'circle',
+      taperStart: 0,
+      taperEnd: 0,
+      stabilization: 4,
+    },
+  },
 
   // Brush / Painting tools (B)
   {
@@ -217,6 +286,50 @@ export const SUBTOOLS: SubTool[] = [
       tipRoundness: 0.28,
       tipAngle: 35,
       followDirection: true,
+      taperStart: 0,
+      taperEnd: 0,
+      stabilization: 2,
+    },
+  },
+  {
+    id: 'gouache-brush',
+    name: 'Gouache Opaco',
+    tool: 'brush',
+    description: 'Cobertura mate de bordes definidos ideal para fondos de animación.',
+    settings: {
+      size: 32,
+      minSizeRatio: 0.45,
+      pressureSize: true,
+      pressureCurve: 1.15,
+      flow: 0.92,
+      pressureFlow: true,
+      inkMode: 'uniform',
+      hardness: 0.85,
+      antiAliasing: 'medium',
+      spacing: 0.05,
+      tipShape: 'circle',
+      taperStart: 2,
+      taperEnd: 4,
+      stabilization: 3,
+    },
+  },
+  {
+    id: 'airbrush-highlight',
+    name: 'Aerógrafo de Brillo',
+    tool: 'brush',
+    description: 'Haz concentrado para luces especulares y atmósfera.',
+    settings: {
+      size: 42,
+      minSizeRatio: 0.25,
+      pressureSize: true,
+      pressureCurve: 1.4,
+      flow: 0.55,
+      pressureFlow: true,
+      inkMode: 'accumulate',
+      hardness: 0.25,
+      antiAliasing: 'strong',
+      spacing: 0.04,
+      tipShape: 'circle',
       taperStart: 0,
       taperEnd: 0,
       stabilization: 2,
@@ -347,19 +460,74 @@ export const SUBTOOLS: SubTool[] = [
     description: 'Desplaza el encuadre del lienzo sin alterarlo.',
     settings: {},
   },
+
+  // Bone / 2D Rigging (J)
+  {
+    id: 'bone-rig',
+    name: 'Crear / Editar Esqueleto (Rig)',
+    tool: 'bone',
+    description: 'Haz clic y arrastra en el lienzo para crear cadenas de huesos 2D o mover articulaciones en reposo.',
+    settings: {},
+  },
+  {
+    id: 'bone-pose-fk',
+    name: 'Posar Huesos FK (Rotar / Mover)',
+    tool: 'bone',
+    description: 'Rota huesos individuales con cinemática directa (FK) y registra keyframes automáticamente.',
+    settings: {},
+  },
+  {
+    id: 'bone-pose-ik',
+    name: 'Posar Cadena IK (Cinemática Inversa)',
+    tool: 'bone',
+    description: 'Arrastra la punta de una extremidad (mano/pie) para resolver el ángulo de articulación automáticamente con IK de 2 huesos.',
+    settings: {},
+  },
 ];
+
+export type ColorTabId = 'picker' | 'rgb' | 'set' | 'harmony';
+export type PreviewBgMode = 'paper' | 'checker' | 'dark';
+export type BrushPropKey =
+  | 'size'
+  | 'opacity'
+  | 'flow'
+  | 'hardness'
+  | 'stabilization'
+  | 'pressureSize'
+  | 'taper'
+  | 'tipShape'
+  | 'antiAliasing'
+  | 'roundness'
+  | 'angle'
+  | 'spacing';
+
+export interface ColorSet {
+  id: string;
+  name: string;
+  colors: string[];
+}
 
 export interface ToolState {
   tool: ToolId;
   activeSubToolId: string;
   brush: BrushSettings;
   propertiesOpen: boolean;
+  // Sub Tool Detail: which properties are pinned/visible in the main Tool Property panel (CSP Eye icon)
+  visibleProperties: BrushPropKey[];
+  previewBgMode: PreviewBgMode;
+  // Bone Rigging & Animation state
+  boneMode: BoneToolMode;
+  showBonesOverlay: boolean;
+  autoKeyBones: boolean;
   // Clip Studio Paint Color System
+  colorTab: ColorTabId;
   primaryColor: string;
   secondaryColor: string;
   activeColorSlot: 'primary' | 'secondary';
   isTransparentColor: boolean;
   colorHistory: string[];
+  colorSets: ColorSet[];
+  activeColorSetId: string;
 }
 
 export const DEFAULT_BRUSH: BrushSettings = {
@@ -402,13 +570,50 @@ const DEFAULT_HISTORY = [
   '#bdc3c7',
 ];
 
+export const DEFAULT_COLOR_SETS: ColorSet[] = [
+  {
+    id: 'csp-standard',
+    name: 'Conjunto Estándar CSP',
+    colors: [
+      '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
+      '#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5',
+      '#3949ab', '#8e24aa', '#d81b60', '#6d4c41', '#546e7a', '#f4511e',
+      '#ffcdd2', '#ffe0b2', '#fff9c4', '#c8e6c9', '#b2ebf2', '#bbdefb',
+    ],
+  },
+  {
+    id: 'anime-skin',
+    name: 'Tonos de Piel & Anime',
+    colors: [
+      '#fff5eb', '#ffecd9', '#ffe0c2', '#f7cba4', '#eba87c', '#d1845c',
+      '#f9d5c5', '#eec0ad', '#dfa088', '#c67d63', '#9c563f', '#6e3726',
+      '#ffcad4', '#f4acb7', '#9d8189', '#4a3f45', '#2b2429', '#1a1518',
+    ],
+  },
+  {
+    id: 'vibrant-cel',
+    name: 'Cel Shading Vibrante',
+    colors: [
+      '#ff1744', '#ff9100', '#ffea00', '#00e676', '#00e5ff', '#2979ff',
+      '#651fff', '#d500f9', '#ff4081', '#1de9b6', '#76ff03', '#c6ff00',
+    ],
+  },
+];
+
+export const DEFAULT_VISIBLE_PROPS: BrushPropKey[] = [
+  'size',
+  'opacity',
+  'hardness',
+  'stabilization',
+];
+
 // ---------------------------------------------------------------------------
 // Sub Tool persistence (Clip Studio Paint "Sub Tool Detail" style)
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = 'oniri.subtools.v1';
 
-const TOOL_IDS: ToolId[] = ['pen', 'brush', 'eraser', 'eyedropper', 'bucket', 'shape', 'hand'];
+const TOOL_IDS: ToolId[] = ['pen', 'brush', 'eraser', 'eyedropper', 'bucket', 'shape', 'bone', 'hand'];
 
 function isValidSubTool(value: unknown): value is SubTool {
   if (!value || typeof value !== 'object') return false;
@@ -494,18 +699,76 @@ function mergeBrush(sub: SubTool, color: string): BrushSettings {
 // State
 // ---------------------------------------------------------------------------
 
+const COLOR_SETS_KEY = 'oniri.colorsets.v1';
+const VISIBLE_PROPS_KEY = 'oniri.visibleprops.v1';
+
+function loadColorSets(): ColorSet[] {
+  try {
+    const raw = localStorage.getItem(COLOR_SETS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return DEFAULT_COLOR_SETS.map((s) => ({ ...s, colors: [...s.colors] }));
+}
+
+function persistColorSets(sets: ColorSet[]): void {
+  try {
+    localStorage.setItem(COLOR_SETS_KEY, JSON.stringify(sets));
+  } catch {
+    // ignore
+  }
+}
+
+function loadVisibleProps(): BrushPropKey[] {
+  try {
+    const raw = localStorage.getItem(VISIBLE_PROPS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed as BrushPropKey[];
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return [...DEFAULT_VISIBLE_PROPS];
+}
+
+function persistVisibleProps(props: BrushPropKey[]): void {
+  try {
+    localStorage.setItem(VISIBLE_PROPS_KEY, JSON.stringify(props));
+  } catch {
+    // ignore
+  }
+}
+
 const initialSub = findSubTool('g-pen') ?? subTools[0];
+const initialSets = loadColorSets();
 
 let state: ToolState = {
   tool: 'pen',
   activeSubToolId: initialSub ? initialSub.id : 'g-pen',
   brush: initialSub ? mergeBrush(initialSub, DEFAULT_BRUSH.color) : { ...DEFAULT_BRUSH },
   propertiesOpen: true,
+  visibleProperties: loadVisibleProps(),
+  previewBgMode: 'paper',
+  boneMode: 'rig',
+  showBonesOverlay: true,
+  autoKeyBones: true,
+  colorTab: 'picker',
   primaryColor: '#111111',
   secondaryColor: '#ffffff',
   activeColorSlot: 'primary',
   isTransparentColor: false,
   colorHistory: DEFAULT_HISTORY,
+  colorSets: initialSets,
+  activeColorSetId: initialSets[0]?.id ?? 'csp-standard',
 };
 
 const listeners = new Set<(s: ToolState) => void>();
@@ -528,10 +791,18 @@ export function setTool(tool: ToolId): void {
   const firstSub = subtools[0];
   const nextSubId = firstSub ? firstSub.id : state.activeSubToolId;
 
+  let nextBoneMode = state.boneMode;
+  if (tool === 'bone') {
+    if (nextSubId === 'bone-rig') nextBoneMode = 'rig';
+    else if (nextSubId === 'bone-pose-fk') nextBoneMode = 'pose_fk';
+    else if (nextSubId === 'bone-pose-ik') nextBoneMode = 'pose_ik';
+  }
+
   state = {
     ...state,
     tool,
     activeSubToolId: nextSubId,
+    boneMode: nextBoneMode,
     brush: firstSub ? mergeBrush(firstSub, state.brush.color) : state.brush,
   };
   emit();
@@ -540,12 +811,90 @@ export function setTool(tool: ToolId): void {
 export function selectSubTool(subToolId: string): void {
   const found = findSubTool(subToolId);
   if (!found) return;
+  let nextBoneMode = state.boneMode;
+  if (found.id === 'bone-rig') nextBoneMode = 'rig';
+  else if (found.id === 'bone-pose-fk') nextBoneMode = 'pose_fk';
+  else if (found.id === 'bone-pose-ik') nextBoneMode = 'pose_ik';
+
   state = {
     ...state,
     tool: found.tool,
     activeSubToolId: found.id,
+    boneMode: nextBoneMode,
     brush: mergeBrush(found, state.brush.color),
   };
+  emit();
+}
+
+export function setBoneToolMode(mode: BoneToolMode): void {
+  const subId =
+    mode === 'rig' ? 'bone-rig' : mode === 'pose_fk' ? 'bone-pose-fk' : 'bone-pose-ik';
+  state = {
+    ...state,
+    tool: 'bone',
+    activeSubToolId: subId,
+    boneMode: mode,
+  };
+  emit();
+}
+
+export function setShowBonesOverlay(show: boolean): void {
+  state = { ...state, showBonesOverlay: show };
+  emit();
+}
+
+export function setAutoKeyBones(autoKey: boolean): void {
+  state = { ...state, autoKeyBones: autoKey };
+  emit();
+}
+
+export function toggleVisibleProperty(prop: BrushPropKey): void {
+  const exists = state.visibleProperties.includes(prop);
+  const next = exists
+    ? state.visibleProperties.filter((p) => p !== prop)
+    : [...state.visibleProperties, prop];
+  state = { ...state, visibleProperties: next };
+  persistVisibleProps(next);
+  emit();
+}
+
+export function setPreviewBgMode(mode: PreviewBgMode): void {
+  state = { ...state, previewBgMode: mode };
+  emit();
+}
+
+export function setColorTab(tab: ColorTabId): void {
+  if (state.colorTab === tab) return;
+  state = { ...state, colorTab: tab };
+  emit();
+}
+
+export function setActiveColorSet(setId: string): void {
+  if (!state.colorSets.some((s) => s.id === setId)) return;
+  state = { ...state, activeColorSetId: setId };
+  emit();
+}
+
+export function addColorToActiveSet(hex: string): void {
+  if (!hex || hex === 'transparent') return;
+  const norm = hex.toLowerCase();
+  const nextSets = state.colorSets.map((s) => {
+    if (s.id !== state.activeColorSetId) return s;
+    return { ...s, colors: [...s.colors, norm] };
+  });
+  state = { ...state, colorSets: nextSets };
+  persistColorSets(nextSets);
+  emit();
+}
+
+export function removeColorFromActiveSet(index: number): void {
+  const nextSets = state.colorSets.map((s) => {
+    if (s.id !== state.activeColorSetId) return s;
+    if (s.colors.length <= 1) return s;
+    return { ...s, colors: s.colors.filter((_, idx) => idx !== index) };
+  });
+  state = { ...state, colorSets: nextSets };
+  persistColorSets(nextSets);
   emit();
 }
 
@@ -678,8 +1027,16 @@ export function resetSubTool(subToolId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Colors
+// Colors & Color Harmonies
 // ---------------------------------------------------------------------------
+
+export function setActiveColor(color: string): void {
+  if (state.activeColorSlot === 'primary') {
+    setPrimaryColor(color);
+  } else {
+    setSecondaryColor(color);
+  }
+}
 
 export function setPrimaryColor(color: string): void {
   state = {
@@ -736,7 +1093,11 @@ export function toggleTransparentColor(force?: boolean): void {
     isTransparentColor: next,
     brush: {
       ...state.brush,
-      color: next ? 'transparent' : state.activeColorSlot === 'primary' ? state.primaryColor : state.secondaryColor,
+      color: next
+        ? 'transparent'
+        : state.activeColorSlot === 'primary'
+          ? state.primaryColor
+          : state.secondaryColor,
     },
   };
   emit();
@@ -747,6 +1108,138 @@ export function addColorToHistory(hex: string): void {
   const normalized = hex.toLowerCase();
   const filtered = state.colorHistory.filter((c) => c.toLowerCase() !== normalized);
   state.colorHistory = [normalized, ...filtered].slice(0, 16);
+}
+
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace('#', '').trim();
+  if (clean.length !== 6) return { r: 17, g: 17, b: 17 };
+  const n = parseInt(clean, 16);
+  if (Number.isNaN(n)) return { r: 17, g: 17, b: 17 };
+  return {
+    r: (n >> 16) & 255,
+    g: (n >> 8) & 255,
+    b: n & 255,
+  };
+}
+
+export function rgbToHex(r: number, g: number, b: number): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return (
+    '#' +
+    [clamp(r), clamp(g), clamp(b)].map((c) => c.toString(16).padStart(2, '0')).join('')
+  );
+}
+
+export function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const d = max - min;
+  let h = 0;
+  const s = max === 0 ? 0 : d / max;
+  const v = max;
+
+  if (max !== min) {
+    switch (max) {
+      case rn:
+        h = (gn - bn) / d + (gn < bn ? 6 : 0);
+        break;
+      case gn:
+        h = (bn - rn) / d + 2;
+        break;
+      default:
+        h = (rn - gn) / d + 4;
+        break;
+    }
+    h *= 60;
+  }
+  return { h, s, v };
+}
+
+export function hsvToRgb(h: number, s: number, v: number): { r: number; g: number; b: number } {
+  const hn = ((h % 360) + 360) % 360;
+  const c = v * s;
+  const x = c * (1 - Math.abs(((hn / 60) % 2) - 1));
+  const m = v - c;
+  let r1 = 0;
+  let g1 = 0;
+  let b1 = 0;
+  if (hn < 60) [r1, g1, b1] = [c, x, 0];
+  else if (hn < 120) [r1, g1, b1] = [x, c, 0];
+  else if (hn < 180) [r1, g1, b1] = [0, c, x];
+  else if (hn < 240) [r1, g1, b1] = [0, x, c];
+  else if (hn < 300) [r1, g1, b1] = [x, 0, c];
+  else [r1, g1, b1] = [c, 0, x];
+
+  return {
+    r: Math.round((r1 + m) * 255),
+    g: Math.round((g1 + m) * 255),
+    b: Math.round((b1 + m) * 255),
+  };
+}
+
+export function hsvToHex(h: number, s: number, v: number): string {
+  const { r, g, b } = hsvToRgb(h, s, v);
+  return rgbToHex(r, g, b);
+}
+
+export interface ColorHarmonyGroup {
+  label: string;
+  colors: { hex: string; tag: string }[];
+}
+
+export function computeColorHarmonies(baseHex: string): ColorHarmonyGroup[] {
+  const { r, g, b } = hexToRgb(baseHex);
+  const { h, s, v } = rgbToHsv(r, g, b);
+  // Ensure minimum saturation/value for chromatic harmonies even if base is near-black/white
+  const effS = s < 0.12 ? 0.68 : s;
+  const effV = v < 0.18 ? 0.78 : v;
+
+  return [
+    {
+      label: 'Complementario (Contraste Directo)',
+      colors: [
+        { hex: baseHex, tag: 'Base' },
+        { hex: hsvToHex(h + 180, effS, effV), tag: '180° Opuesto' },
+      ],
+    },
+    {
+      label: 'Complementario Dividido',
+      colors: [
+        { hex: baseHex, tag: 'Base' },
+        { hex: hsvToHex(h + 150, effS, effV), tag: '+150°' },
+        { hex: hsvToHex(h + 210, effS, effV), tag: '+210°' },
+      ],
+    },
+    {
+      label: 'Tríada Armónica',
+      colors: [
+        { hex: baseHex, tag: 'Base' },
+        { hex: hsvToHex(h + 120, effS, effV), tag: '+120°' },
+        { hex: hsvToHex(h + 240, effS, effV), tag: '+240°' },
+      ],
+    },
+    {
+      label: 'Análogos (Cercanos)',
+      colors: [
+        { hex: hsvToHex(h - 30, effS, effV), tag: '-30°' },
+        { hex: baseHex, tag: 'Base' },
+        { hex: hsvToHex(h + 30, effS, effV), tag: '+30°' },
+      ],
+    },
+    {
+      label: 'Escala de Luz y Sombra (Cel Shading)',
+      colors: [
+        { hex: hsvToHex(h + 8, Math.max(0.15, effS * 0.45), Math.min(1, effV * 1.25)), tag: 'Luz+' },
+        { hex: hsvToHex(h + 4, Math.max(0.25, effS * 0.75), Math.min(1, effV * 1.12)), tag: 'Luz' },
+        { hex: baseHex, tag: 'Base' },
+        { hex: hsvToHex(h - 8, Math.min(1, effS * 1.1), Math.max(0.12, effV * 0.75)), tag: 'Sombra 1' },
+        { hex: hsvToHex(h - 16, Math.min(1, effS * 1.2), Math.max(0.08, effV * 0.5)), tag: 'Sombra 2' },
+      ],
+    },
+  ];
 }
 
 export function toggleProperties(force?: boolean): void {

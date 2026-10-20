@@ -4,8 +4,8 @@
   position: absolute;
   bottom: 0;
   left: var(--left-dock-width, 48px); /* Offset for lateral toolbar & docked palettes */
-  right: 250px; /* Offset for layers panel */
-  height: 190px;
+  right: var(--right-dock-width, 250px); /* Offset for layers panel */
+  height: var(--timeline-height, 190px);
   background: rgba(26, 26, 26, 0.98);
   border-top: 1px solid var(--bg-panel-border);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.5);
@@ -144,7 +144,7 @@
 
 /* Left Tracks Column */
 .timeline-tracks-header-col {
-  width: 180px;
+  width: var(--timeline-tracks-width, 180px);
   flex-shrink: 0;
   border-right: 1px solid var(--bg-panel-border);
   background: #1d1d1d;
@@ -229,6 +229,43 @@
   overflow-y: auto;
   position: relative;
   background: #161616;
+  scrollbar-width: thin;
+  scrollbar-color: #384152 #141619;
+}
+
+/* Custom Scrollbars Matching Application Style */
+.timeline-grid-container::-webkit-scrollbar,
+.timeline-track-headers-list::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.timeline-grid-container::-webkit-scrollbar-track,
+.timeline-track-headers-list::-webkit-scrollbar-track {
+  background: linear-gradient(90deg, #121315 0%, #1a1c20 100%);
+  border-top: 1px solid #262930;
+  border-left: 1px solid #262930;
+}
+
+.timeline-grid-container::-webkit-scrollbar-thumb,
+.timeline-track-headers-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #384152 0%, #2b3240 100%);
+  border: 1px solid #526077;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  cursor: grab;
+}
+
+.timeline-grid-container::-webkit-scrollbar-thumb:hover,
+.timeline-track-headers-list::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #0ea5e9 0%, #0284c7 100%);
+  border-color: #7dd3fc;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.55);
+}
+
+.timeline-grid-container::-webkit-scrollbar-corner,
+.timeline-track-headers-list::-webkit-scrollbar-corner {
+  background: #121315;
 }
 
 .timeline-grid-content {
@@ -392,14 +429,59 @@
 }
 
 .onion-modal {
-  background: #252525;
-  border: 1px solid #444444;
+  background: #222222;
+  border: 1px solid #3c3c3c;
   border-radius: 8px;
-  width: 320px;
-  padding: 18px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+  width: 440px;
+  max-width: 95vw;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
   font-family: var(--font-family);
   color: var(--text-main);
+  display: flex;
+  flex-direction: column;
+}
+
+.onion-modal::-webkit-scrollbar {
+  width: 6px;
+}
+
+.onion-modal::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 3px;
+}
+
+.onion-modal-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #333;
+  margin-bottom: 12px;
+  padding-bottom: 4px;
+}
+
+.onion-modal-tab-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.onion-modal-tab-btn:hover {
+  color: #eee;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.onion-modal-tab-btn.active {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  font-weight: 600;
 }
 
 .onion-modal h3 {
@@ -462,17 +544,21 @@
 }
 
 .timeline-cel-block.dragging {
-  opacity: 0.6;
-  border-style: dashed;
-  border-color: #00e5ff;
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+  opacity: 0.9;
+  border-style: solid;
+  border-color: #00e5ff !important;
+  box-shadow: 0 0 14px rgba(0, 229, 255, 0.7);
   z-index: 50;
-  pointer-events: none;
+  cursor: grabbing !important;
+}
+
+.timeline-cel-block.moving-body {
+  transition: none !important;
 }
 
 .timeline-frame-cell.drop-target {
-  background: rgba(0, 153, 255, 0.3) !important;
-  outline: 1px dashed #00b4d8;
+  background: rgba(0, 229, 255, 0.3) !important;
+  outline: 1px dashed #00e5ff;
   z-index: 5;
 }
 
@@ -613,4 +699,605 @@
   min-width: 24px;
   text-align: right;
   font-family: monospace;
+}
+
+/* --- Scene Selector & Timeline Settings Modal --- */
+.timeline-scene-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: #161616;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid #333333;
+}
+
+.scene-select {
+  max-width: 145px;
+  font-weight: 600;
+  color: #00e5ff;
+}
+
+.timeline-frame-counter {
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.timeline-frame-counter:hover {
+  background: #1f2d3a;
+  border-color: #00e5ff;
+}
+
+.timeline-settings-modal {
+  width: 390px;
+}
+
+.tl-text-input {
+  background: #181818;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: var(--text-main);
+  padding: 4px 8px;
+  font-size: 12px;
+  width: 150px;
+}
+
+.tl-duration-summary {
+  background: #1b2631;
+  border: 1px solid #2e4358;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #62b0e8;
+  text-align: center;
+  margin-top: 8px;
+}
+
+/* --- Track Row Wrapper & Keyframe Sub-Lane --- */
+.timeline-track-header-item.has-kf-lane {
+  height: 58px;
+}
+
+.timeline-track-kf-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: #777;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.timeline-track-kf-btn:hover {
+  color: #ffd43b;
+  background: rgba(255, 212, 59, 0.1);
+}
+
+.timeline-track-kf-btn.active {
+  color: #ffd43b;
+  border-color: rgba(255, 212, 59, 0.4);
+  background: rgba(255, 212, 59, 0.14);
+}
+
+.timeline-track-row-wrapper {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid #242424;
+  position: relative;
+}
+
+.timeline-track-row-wrapper .timeline-track-row {
+  border-bottom: none;
+}
+
+.timeline-keyframe-lane {
+  height: 20px;
+  background: #14191f;
+  border-top: 1px dashed #283542;
+  position: relative;
+  display: flex;
+}
+
+.timeline-kf-cell {
+  width: var(--cell-width, 24px);
+  min-width: var(--cell-width, 24px);
+  flex-shrink: 0;
+  height: 100%;
+  border-right: 1px solid #1e252d;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.timeline-kf-cell:hover {
+  background: rgba(255, 212, 59, 0.08);
+}
+
+.timeline-kf-span-line {
+  position: absolute;
+  top: 9px;
+  height: 2px;
+  background: rgba(255, 212, 59, 0.55);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.timeline-kf-span-line.linear {
+  background: rgba(77, 171, 247, 0.65);
+}
+
+.timeline-kf-diamond {
+  position: absolute;
+  top: 5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: #ffd43b;
+  border: 1px solid #111;
+  transform: rotate(45deg);
+  cursor: pointer;
+  z-index: 6;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.7);
+  transition: transform 0.1s, background 0.1s;
+}
+
+.timeline-kf-diamond.linear {
+  background: #4dabf7;
+}
+
+.timeline-kf-diamond.hold {
+  transform: rotate(0deg);
+  background: #ff922b;
+  border-radius: 2px;
+}
+
+.timeline-kf-diamond:hover,
+.timeline-kf-diamond.active {
+  background: #ffffff;
+  border-color: #ffd43b;
+  box-shadow: 0 0 8px rgba(255, 212, 59, 0.9);
+  transform: rotate(45deg) scale(1.25);
+}
+
+.timeline-kf-diamond.hold:hover,
+.timeline-kf-diamond.hold.active {
+  transform: rotate(0deg) scale(1.25);
+}
+
+/* --- Clip Container & Cel Edge Resize Handles (CSP Style) --- */
+.timeline-clip-container {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  background: rgba(38, 60, 82, 0.22);
+  border-top: 2px solid #3b82f6;
+  border-left: 1px solid rgba(59, 130, 246, 0.45);
+  border-right: 1px solid rgba(59, 130, 246, 0.45);
+  pointer-events: none;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.timeline-clip-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
+  pointer-events: auto;
+  z-index: 4;
+}
+
+.timeline-clip-grip.left {
+  left: -2px;
+}
+
+.timeline-clip-grip.right {
+  right: -2px;
+}
+
+.timeline-clip-grip:hover {
+  background: rgba(0, 229, 255, 0.6);
+}
+
+.cel-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+}
+
+.cel-resize-handle.left {
+  left: 0;
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+
+.cel-resize-handle.right {
+  right: 0;
+  border-top-right-radius: 3px;
+  border-bottom-right-radius: 3px;
+}
+
+.timeline-cel-block:hover .cel-resize-handle,
+.timeline-cel-block.resizing .cel-resize-handle {
+  opacity: 1;
+  background: rgba(0, 229, 255, 0.5);
+}
+
+.cel-resize-handle:hover {
+  background: #00e5ff !important;
+  width: 5px;
+  opacity: 1;
+}
+
+.timeline-cel-block.resizing {
+  border-color: #00e5ff;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.55);
+  z-index: 30;
+}
+
+/* --- Ruler Range Brackets & Total Frames End Handle --- */
+.timeline-range-bracket {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 25;
+  background: rgba(0, 180, 216, 0.5);
+  transition: background 0.1s;
+}
+
+.timeline-range-bracket:hover {
+  background: #00e5ff;
+}
+
+.timeline-range-bracket.start-bracket {
+  border-left: 2px solid #00e5ff;
+  border-top: 2px solid #00e5ff;
+  border-bottom: 2px solid #00e5ff;
+}
+
+.timeline-range-bracket.end-bracket {
+  border-right: 2px solid #00e5ff;
+  border-top: 2px solid #00e5ff;
+  border-bottom: 2px solid #00e5ff;
+}
+
+.timeline-total-end-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -4px;
+  border-left: 2px solid #ff5252;
+  background: linear-gradient(90deg, rgba(255, 82, 82, 0.28), transparent);
+  cursor: col-resize;
+  z-index: 26;
+  display: flex;
+  align-items: flex-start;
+}
+
+.timeline-total-end-handle:hover,
+.timeline-total-end-handle.dragging {
+  border-left-color: #00e5ff;
+  background: linear-gradient(90deg, rgba(0, 229, 255, 0.4), transparent);
+}
+
+.end-handle-pill {
+  position: sticky;
+  top: 4px;
+  margin-left: 4px;
+  background: #2c1a1a;
+  border: 1px solid #ff5252;
+  color: #ff8a80;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: col-resize;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.timeline-total-end-handle:hover .end-handle-pill,
+.timeline-total-end-handle.dragging .end-handle-pill {
+  background: #102a38;
+  border-color: #00e5ff;
+  color: #00e5ff;
+}
+
+/* Compact Keyframe Interpolation Select */
+.timeline-select.interp-select-compact {
+  width: 80px;
+  font-size: 11px;
+  padding: 0 4px;
+}
+
+/* Scene Manager Modal */
+.scene-manager-modal {
+  max-width: 420px;
+}
+
+.scene-list-container::-webkit-scrollbar {
+  width: 5px;
+}
+
+.scene-list-container::-webkit-scrollbar-thumb {
+  background: #3e3e3e;
+  border-radius: 3px;
+}
+
+/* ==========================================================================
+   Animation Light Table Palette (Mesa de Luz - Clip Studio Paint Style)
+   ========================================================================== */
+.csp-light-table-palette {
+  width: 320px;
+  background: #1c1d21;
+  border: 1px solid #363b45;
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.75);
+  font-family: var(--font-family);
+  color: var(--text-main);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  z-index: 130;
+}
+
+.csp-lt-header {
+  height: 32px;
+  background: #242831;
+  border-bottom: 1px solid #363b45;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  cursor: move;
+}
+
+.csp-lt-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffd43b;
+}
+
+.csp-lt-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.csp-lt-mini-btn {
+  background: #16181d;
+  border: 1px solid #383e4a;
+  color: #aaa;
+  border-radius: 3px;
+  font-size: 10px;
+  padding: 2px 6px;
+  cursor: pointer;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.csp-lt-mini-btn:hover {
+  background: #2b313d;
+  color: #fff;
+}
+
+.csp-lt-mini-btn.active {
+  background: #005a9e;
+  border-color: #0078d4;
+  color: #fff;
+  font-weight: bold;
+}
+
+.csp-lt-mini-btn.close:hover {
+  background: #c0392b;
+  border-color: #e74c3c;
+  color: #fff;
+}
+
+.csp-lt-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.csp-lt-quick-bar {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.csp-lt-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #778;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  letter-spacing: 0.5px;
+}
+
+.csp-lt-text-link {
+  background: none;
+  border: none;
+  color: #ff6b6b;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.csp-lt-text-link:hover {
+  text-decoration: underline;
+}
+
+.csp-lt-list-wrap {
+  border: 1px solid #2d3340;
+  border-radius: 4px;
+  background: #14161a;
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.csp-lt-empty-hint {
+  padding: 12px;
+  text-align: center;
+  font-size: 11px;
+  color: #667;
+  line-height: 1.4;
+}
+
+.csp-lt-item-row {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  gap: 6px;
+  border-bottom: 1px solid #1f232b;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.csp-lt-item-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.csp-lt-item-row.active {
+  background: rgba(0, 229, 255, 0.12);
+  border-left: 2px solid #00e5ff;
+}
+
+.csp-lt-eye-btn {
+  background: none;
+  border: none;
+  color: #556;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  width: 16px;
+}
+
+.csp-lt-eye-btn.visible {
+  color: #00e5ff;
+}
+
+.csp-lt-item-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.csp-lt-item-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: #ddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.csp-lt-item-sub {
+  font-size: 9px;
+  color: #778;
+}
+
+.csp-lt-item-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #444;
+  flex-shrink: 0;
+}
+
+.csp-lt-item-del {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 4px;
+}
+
+.csp-lt-item-del:hover {
+  color: #ff5555;
+}
+
+.csp-lt-detail-box {
+  background: #181a1f;
+  border: 1px solid #2d3340;
+  border-radius: 5px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.csp-lt-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #ccc;
+  border-bottom: 1px solid #282d38;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.csp-lt-transform-section {
+  border-top: 1px solid #282d38;
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.csp-lt-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 22px);
+  grid-template-rows: repeat(3, 22px);
+  gap: 2px;
+}
+
+.csp-lt-dpad-btn {
+  background: #242831;
+  border: 1px solid #383e4a;
+  color: #aaa;
+  border-radius: 3px;
+  font-size: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.csp-lt-dpad-btn:hover {
+  background: #0ea5e9;
+  border-color: #38bdf8;
+  color: #fff;
+}
+
+.csp-lt-dpad-btn.center {
+  font-size: 11px;
+  color: #00e5ff;
 }
