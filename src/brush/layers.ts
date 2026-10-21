@@ -14,6 +14,9 @@ export interface LayerNode {
   parentId: string | null;
   collapsed: boolean;
   clipped: boolean; // Clip at layer below
+  locked?: boolean; // CSP Lock layer (padlock)
+  lockAlpha?: boolean; // CSP Lock transparent pixels (checkerboard lock)
+  isReference?: boolean; // CSP Reference layer (lighthouse beacon for smart fill)
   boundBoneId?: string | null; // Rigid cutout binding to a Bone2D
   meshSkinningEnabled?: boolean; // Automatic multi-bone LBS mesh deformation
 }
@@ -24,6 +27,13 @@ export interface LayerManager {
   createLayer(name?: string, parentId?: string | null, isPaper?: boolean, fillColor?: string): LayerNode;
   createFolder(name?: string, parentId?: string | null, isAnimationFolder?: boolean): LayerNode;
   createAnimationFolder(name?: string): LayerNode;
+  duplicateLayer(id?: string): LayerNode | null;
+  mergeLayerBelow(id?: string): boolean;
+  clearLayer(id?: string): boolean;
+  toggleLayerLock(id?: string): void;
+  toggleLayerLockAlpha(id?: string): void;
+  toggleLayerReference(id?: string): void;
+  getReferenceLayers(): LayerNode[];
   deleteLayer(id: string): boolean;
   renameLayer(id: string, newName: string): void;
   toggleFolderCollapse(id: string): void;
@@ -87,7 +97,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
   const paperLayer: LayerNode = {
     id: 'layer-paper',
     type: 'raster',
-    name: 'Paper',
+    name: 'Papel',
     canvas: paperCanvas,
     context: paperCtx,
     visible: true,
@@ -97,6 +107,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     parentId: null,
     collapsed: false,
     clipped: false,
+    locked: true,
   };
   layers.push(paperLayer);
 
@@ -106,7 +117,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
   const firstLayer: LayerNode = {
     id: `layer-${counter}`,
     type: 'raster',
-    name: `Layer ${counter}`,
+    name: `Capa ${counter}`,
     canvas: initCanvas,
     context: initCtx,
     visible: true,
@@ -116,6 +127,8 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     parentId: null,
     collapsed: false,
     clipped: false,
+    locked: false,
+    lockAlpha: false,
   };
   layers.push(firstLayer);
 
@@ -158,7 +171,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const layer: LayerNode = {
         id: `layer-${Date.now()}-${counter}`,
         type: 'raster',
-        name: name || `Layer ${counter}`,
+        name: name || `Capa ${counter}`,
         canvas,
         context: ctx,
         visible: true,
@@ -168,6 +181,8 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
         parentId: targetParent,
         collapsed: false,
         clipped: false,
+        locked: false,
+        lockAlpha: false,
       };
 
       // Insert relative to parent folder or active layer
@@ -187,7 +202,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const folder: LayerNode = {
         id: `folder-${Date.now()}-${counter}`,
         type: 'folder',
-        name: name || (isAnimationFolder ? `Animation Folder ${counter}` : `Folder ${counter}`),
+        name: name || (isAnimationFolder ? `Carpeta animación ${counter}` : `Carpeta ${counter}`),
         visible: true,
         opacity: 1,
         blendMode: 'source-over',
@@ -195,6 +210,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
         parentId,
         collapsed: false,
         clipped: false,
+        locked: false,
       };
 
       const activeIdx = layers.findIndex((l) => l.id === activeId);
@@ -210,6 +226,128 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     },
     createAnimationFolder(name) {
       return manager.createFolder(name, null, true);
+    },
+    duplicateLayer(id) {
+      const targetId = id || activeId;
+      const target = layers.find((l) => l.id === targetId);
+      if (!target || target.isPaper) return null;
+
+      counter++;
+      const targetIdx = layers.findIndex((l) => l.id === target.id);
+
+      if (target.type === 'raster') {
+        const copyCanvas = makeCanvas(docW, docH);
+        const copyCtx = copyCanvas.getContext('2d')!;
+        if (target.canvas) {
+          copyCtx.drawImage(target.canvas, 0, 0);
+        }
+
+        const newLayer: LayerNode = {
+          id: `layer-${Date.now()}-${counter}`,
+          type: 'raster',
+          name: `${target.name} (copia)`,
+          canvas: copyCanvas,
+          context: copyCtx,
+          visible: target.visible,
+          opacity: target.opacity,
+          blendMode: target.blendMode,
+          isPaper: false,
+          parentId: target.parentId,
+          collapsed: false,
+          clipped: target.clipped,
+          locked: false,
+          lockAlpha: target.lockAlpha,
+          boundBoneId: target.boundBoneId,
+          meshSkinningEnabled: target.meshSkinningEnabled,
+        };
+
+        layers.splice(targetIdx + 1, 0, newLayer);
+        activeId = newLayer.id;
+        notify();
+        return newLayer;
+      } else {
+        const newFolder: LayerNode = {
+          id: `folder-${Date.now()}-${counter}`,
+          type: 'folder',
+          name: `${target.name} (copia)`,
+          visible: target.visible,
+          opacity: target.opacity,
+          blendMode: target.blendMode,
+          isAnimationFolder: target.isAnimationFolder,
+          parentId: target.parentId,
+          collapsed: target.collapsed,
+          clipped: target.clipped,
+          locked: false,
+        };
+        layers.splice(targetIdx + 1, 0, newFolder);
+        activeId = newFolder.id;
+        notify();
+        return newFolder;
+      }
+    },
+    mergeLayerBelow(id) {
+      const targetId = id || activeId;
+      const targetIdx = layers.findIndex((l) => l.id === targetId);
+      if (targetIdx <= 0) return false;
+
+      const upper = layers[targetIdx];
+      if (!upper || upper.isPaper || upper.type !== 'raster' || !upper.canvas || upper.locked) {
+        return false;
+      }
+
+      // Find the raster layer directly below upper in layer list
+      let lowerIdx = targetIdx - 1;
+      while (lowerIdx >= 0 && layers[lowerIdx].type !== 'raster') {
+        lowerIdx--;
+      }
+      if (lowerIdx < 0) return false;
+      const lower = layers[lowerIdx];
+      if (lower.isPaper || !lower.context || lower.locked) return false;
+
+      // Draw upper onto lower with upper's opacity and blendMode
+      lower.context.save();
+      lower.context.globalAlpha = upper.opacity;
+      lower.context.globalCompositeOperation = upper.blendMode;
+      lower.context.drawImage(upper.canvas, 0, 0);
+      lower.context.restore();
+
+      // Remove upper layer
+      layers.splice(targetIdx, 1);
+      activeId = lower.id;
+      notify();
+      return true;
+    },
+    clearLayer(id) {
+      const targetId = id || activeId;
+      const target = layers.find((l) => l.id === targetId);
+      if (!target || target.isPaper || target.locked || !target.context) return false;
+      target.context.clearRect(0, 0, docW, docH);
+      notify();
+      return true;
+    },
+    toggleLayerLock(id) {
+      const targetId = id || activeId;
+      const target = layers.find((l) => l.id === targetId);
+      if (!target || target.isPaper) return;
+      target.locked = !target.locked;
+      notify();
+    },
+    toggleLayerLockAlpha(id) {
+      const targetId = id || activeId;
+      const target = layers.find((l) => l.id === targetId);
+      if (!target || target.isPaper || target.type !== 'raster') return;
+      target.lockAlpha = !target.lockAlpha;
+      notify();
+    },
+    toggleLayerReference(id) {
+      const targetId = id || activeId;
+      const target = layers.find((l) => l.id === targetId);
+      if (!target || target.isPaper) return;
+      target.isReference = !target.isReference;
+      notify();
+    },
+    getReferenceLayers() {
+      return layers.filter((l) => l.isReference && l.visible && !l.isPaper);
     },
     deleteLayer(id: string): boolean {
       if (layers.length <= 1) return false;
@@ -299,14 +437,14 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     },
     getActiveDrawableLayer(): LayerNode {
       const active = layers.find((l) => l.id === activeId);
-      if (active && active.type === 'raster' && active.context) {
+      if (active && active.type === 'raster' && active.context && !active.locked) {
         return active;
       }
       if (active && active.type === 'folder') {
-        const child = layers.find((l) => l.parentId === active.id && l.type === 'raster' && l.context);
+        const child = layers.find((l) => l.parentId === active.id && l.type === 'raster' && l.context && !l.locked);
         if (child) return child;
       }
-      const topRaster = [...layers].reverse().find((l) => l.type === 'raster' && l.context && !l.isPaper);
+      const topRaster = [...layers].reverse().find((l) => l.type === 'raster' && l.context && !l.isPaper && !l.locked);
       if (topRaster) return topRaster;
       return manager.createLayer();
     },

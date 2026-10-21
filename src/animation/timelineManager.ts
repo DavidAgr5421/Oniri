@@ -27,6 +27,7 @@ import type {
   TimelineSettings,
   TransformKeyframe,
 } from './timelineModel';
+import { transformManager } from '../selection/transformGizmo';
 
 export interface TimelineManager {
   readonly settings: TimelineSettings;
@@ -612,6 +613,9 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     // --- Playback ---
     play() {
+      if (transformManager.isTransforming()) {
+        transformManager.commitTransform();
+      }
       const settings = getActiveScene().settings;
       if (settings.isPlaying) return;
       settings.isPlaying = true;
@@ -743,6 +747,9 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     // --- Frame Navigation ---
     goToFrame(frame: number) {
+      if (transformManager.isTransforming()) {
+        transformManager.commitTransform();
+      }
       const settings = getActiveScene().settings;
       const clamped = Math.max(1, Math.min(settings.totalFrames, Math.round(frame)));
       if (settings.currentFrame === clamped) return;

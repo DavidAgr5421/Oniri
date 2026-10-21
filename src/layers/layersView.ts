@@ -1,16 +1,22 @@
 import type { TimelineManager } from '../animation/timelineManager';
+import type { BrushEngine } from '../brush/brushEngine';
 import type { LayerManager, LayerNode } from '../brush/layers';
 import './layers.css';
 
 const BLEND_MODES: { id: GlobalCompositeOperation; label: string }[] = [
   { id: 'source-over', label: 'Normal' },
-  { id: 'multiply', label: 'Multiply' },
-  { id: 'screen', label: 'Screen' },
-  { id: 'overlay', label: 'Overlay' },
-  { id: 'darken', label: 'Darken' },
-  { id: 'lighten', label: 'Lighten' },
-  { id: 'color-dodge', label: 'Color Dodge' },
-  { id: 'difference', label: 'Difference' },
+  { id: 'darken', label: 'Oscurecer' },
+  { id: 'multiply', label: 'Multiplicar' },
+  { id: 'color-burn', label: 'Subexponer color' },
+  { id: 'lighten', label: 'Aclarar' },
+  { id: 'screen', label: 'Trama (Screen)' },
+  { id: 'color-dodge', label: 'Sobreexponer color' },
+  { id: 'lighter', label: 'Añadir (brillo)' },
+  { id: 'overlay', label: 'Superponer' },
+  { id: 'soft-light', label: 'Luz suave' },
+  { id: 'hard-light', label: 'Luz intensa' },
+  { id: 'difference', label: 'Diferencia' },
+  { id: 'exclusion', label: 'Exclusión' },
 ];
 
 function getDepth(node: LayerNode, layerMap: Map<string, LayerNode>): number {
@@ -57,6 +63,7 @@ export function mountLayersView(
   container: HTMLElement,
   layerManager: LayerManager,
   timeline?: TimelineManager,
+  engine?: BrushEngine,
 ): void {
   container.innerHTML = '';
   container.style.position = 'absolute';
@@ -134,7 +141,7 @@ export function mountLayersView(
       <polyline points="2 17 12 22 22 17"/>
       <polyline points="2 12 12 17 22 12"/>
     </svg>
-    <span>Layer</span>
+    <span>Capa (Layers)</span>
   `;
   tabHeader.appendChild(tab);
   panel.appendChild(tabHeader);
@@ -186,7 +193,7 @@ export function mountLayersView(
   // --- 3. Parent Folder Assignment Strip ---
   const folderRow = document.createElement('div');
   folderRow.className = 'layer-folder-assign-row';
-  folderRow.innerHTML = `<span class="assign-label">Parent:</span>`;
+  folderRow.innerHTML = `<span class="assign-label">Carpeta:</span>`;
 
   const folderSelect = document.createElement('select');
   folderSelect.className = 'layer-folder-select';
@@ -235,14 +242,60 @@ export function mountLayersView(
   boneRow.append(boneSelect, meshSkinBtn);
   panel.appendChild(boneRow);
 
-  // --- 4. Palette Actions Toolbar ---
+  // --- 4. Palette Actions Toolbar (Clip Studio Paint Authentic) ---
   const actionsBar = document.createElement('div');
   actionsBar.className = 'layers-actions-bar';
 
-  // New Raster Layer (+)
+  // 1. Clip at Layer Below (Ajustar a capa inferior)
+  const clipLayerBtn = document.createElement('button');
+  clipLayerBtn.className = 'layer-action-btn clip-btn';
+  clipLayerBtn.title = 'Ajustar a capa inferior (Máscara de recorte)';
+  clipLayerBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="7" y="7" width="14" height="14" rx="2"/>
+      <path d="M3 17V5a2 2 0 0 1 2-2h12"/>
+      <polyline points="10 14 7 14 7 17"/>
+    </svg>
+  `;
+  clipLayerBtn.addEventListener('click', () => {
+    layerManager.toggleLayerClipping(layerManager.activeLayerId);
+  });
+
+  // 2. Lock Transparent Pixels (Bloquear píxeles transparentes - Alpha Lock)
+  const lockAlphaBtn = document.createElement('button');
+  lockAlphaBtn.className = 'layer-action-btn lock-alpha-btn';
+  lockAlphaBtn.title = 'Bloquear píxeles transparentes (Alpha Lock: pintar solo sobre dibujo existente)';
+  lockAlphaBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="1.5"/>
+      <rect x="3" y="3" width="9" height="9" fill="currentColor" fill-opacity="0.3" stroke="none"/>
+      <rect x="12" y="12" width="9" height="9" fill="currentColor" fill-opacity="0.3" stroke="none"/>
+      <rect x="11" y="12" width="8" height="7" rx="1.5" fill="#181818" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M13 12V10a2 2 0 1 1 4 0v2" stroke="currentColor" stroke-width="1.8"/>
+    </svg>
+  `;
+  lockAlphaBtn.addEventListener('click', () => {
+    layerManager.toggleLayerLockAlpha(layerManager.activeLayerId);
+  });
+
+  // 3. Lock Layer (Bloquear capa - Protección contra edición)
+  const lockLayerBtn = document.createElement('button');
+  lockLayerBtn.className = 'layer-action-btn lock-layer-btn';
+  lockLayerBtn.title = 'Bloquear capa (Protege contra cualquier dibujo, borrado o cambio)';
+  lockLayerBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="5" y="11" width="14" height="10" rx="2"/>
+      <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+    </svg>
+  `;
+  lockLayerBtn.addEventListener('click', () => {
+    layerManager.toggleLayerLock(layerManager.activeLayerId);
+  });
+
+  // 4. New Raster Layer (+)
   const addLayerBtn = document.createElement('button');
   addLayerBtn.className = 'layer-action-btn';
-  addLayerBtn.title = 'New Raster Layer';
+  addLayerBtn.title = 'Nueva capa de rasterizado';
   addLayerBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -253,10 +306,10 @@ export function mountLayersView(
   `;
   addLayerBtn.addEventListener('click', () => layerManager.createLayer());
 
-  // New Layer Folder (Folder +)
+  // 5. New Layer Folder (📁+)
   const addFolderBtn = document.createElement('button');
   addFolderBtn.className = 'layer-action-btn';
-  addFolderBtn.title = 'New Layer Folder';
+  addFolderBtn.title = 'Nueva carpeta de capas';
   addFolderBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -266,10 +319,10 @@ export function mountLayersView(
   `;
   addFolderBtn.addEventListener('click', () => layerManager.createFolder());
 
-  // New Animation Folder (Animation Track)
+  // 6. New Animation Folder (🎞️ Track CSP)
   const addAnimFolderBtn = document.createElement('button');
   addAnimFolderBtn.className = 'layer-action-btn';
-  addAnimFolderBtn.title = 'New Animation Folder (CSP Style)';
+  addAnimFolderBtn.title = 'Nueva carpeta de animación (Track de animación)';
   addAnimFolderBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ff9500" stroke-width="2">
       <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
@@ -284,25 +337,58 @@ export function mountLayersView(
   `;
   addAnimFolderBtn.addEventListener('click', () => layerManager.createAnimationFolder());
 
-  // Clip at Layer Below (Clipping Mask Toggle)
-  const clipLayerBtn = document.createElement('button');
-  clipLayerBtn.className = 'layer-action-btn clip-btn';
-  clipLayerBtn.title = 'Clip at Layer Below';
-  clipLayerBtn.innerHTML = `
+  // 7. Duplicate Layer (Duplicar capa - Ctrl+J)
+  const duplicateLayerBtn = document.createElement('button');
+  duplicateLayerBtn.className = 'layer-action-btn';
+  duplicateLayerBtn.title = 'Duplicar capa (Ctrl+J)';
+  duplicateLayerBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="7" y="7" width="14" height="14" rx="2"/>
-      <path d="M3 17V5a2 2 0 0 1 2-2h12"/>
-      <polyline points="10 14 7 14 7 17"/>
+      <rect x="8" y="8" width="13" height="13" rx="2"/>
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
     </svg>
   `;
-  clipLayerBtn.addEventListener('click', () => {
-    layerManager.toggleLayerClipping(layerManager.activeLayerId);
+  duplicateLayerBtn.addEventListener('click', () => {
+    layerManager.duplicateLayer(layerManager.activeLayerId);
   });
 
-  // Delete Layer / Folder
+  // 8. Merge with Layer Below (Fusionar con capa inferior - Ctrl+E)
+  const mergeBelowBtn = document.createElement('button');
+  mergeBelowBtn.className = 'layer-action-btn';
+  mergeBelowBtn.title = 'Combinar con capa inferior (Ctrl+E)';
+  mergeBelowBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="12" y1="3" x2="12" y2="15"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="4" y1="19" x2="20" y2="19" stroke-width="2.5"/>
+    </svg>
+  `;
+  mergeBelowBtn.addEventListener('click', () => {
+    layerManager.mergeLayerBelow(layerManager.activeLayerId);
+  });
+
+  // 9. Clear Layer (Borrar contenido de la capa - Delete)
+  const clearLayerBtn = document.createElement('button');
+  clearLayerBtn.className = 'layer-action-btn';
+  clearLayerBtn.title = 'Borrar contenido de la capa (Limpiar lienzo)';
+  clearLayerBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M18 2L22 6L9 19L5 19L5 15L18 2Z"/>
+      <line x1="14" y1="6" x2="18" y2="10"/>
+      <line x1="3" y1="22" x2="21" y2="22"/>
+    </svg>
+  `;
+  clearLayerBtn.addEventListener('click', () => {
+    if (engine) {
+      engine.clearActiveLayer();
+    } else {
+      layerManager.clearLayer(layerManager.activeLayerId);
+    }
+  });
+
+  // 10. Delete Layer / Folder (Eliminar capa seleccionada)
   const deleteLayerBtn = document.createElement('button');
   deleteLayerBtn.className = 'layer-action-btn';
-  deleteLayerBtn.title = 'Delete Selected Layer / Folder';
+  deleteLayerBtn.title = 'Eliminar capa o carpeta seleccionada';
   deleteLayerBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="3 6 5 6 21 6"/>
@@ -315,10 +401,10 @@ export function mountLayersView(
     layerManager.deleteLayer(layerManager.activeLayerId);
   });
 
-  // Move Up
+  // 11. Move Up (Subir capa)
   const moveUpBtn = document.createElement('button');
   moveUpBtn.className = 'layer-action-btn';
-  moveUpBtn.title = 'Move Layer Up';
+  moveUpBtn.title = 'Hacia la parte frontal (Subir capa)';
   moveUpBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="18 15 12 9 6 15"/>
@@ -328,10 +414,10 @@ export function mountLayersView(
     layerManager.moveLayerBranch(layerManager.activeLayerId, 'up');
   });
 
-  // Move Down
+  // 12. Move Down (Bajar capa)
   const moveDownBtn = document.createElement('button');
   moveDownBtn.className = 'layer-action-btn';
-  moveDownBtn.title = 'Move Layer Down';
+  moveDownBtn.title = 'Abajo (Bajar capa)';
   moveDownBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="6 9 12 15 18 9"/>
@@ -341,7 +427,20 @@ export function mountLayersView(
     layerManager.moveLayerBranch(layerManager.activeLayerId, 'down');
   });
 
-  actionsBar.append(addLayerBtn, addFolderBtn, addAnimFolderBtn, clipLayerBtn, deleteLayerBtn, moveUpBtn, moveDownBtn);
+  actionsBar.append(
+    clipLayerBtn,
+    lockAlphaBtn,
+    lockLayerBtn,
+    addLayerBtn,
+    addFolderBtn,
+    addAnimFolderBtn,
+    duplicateLayerBtn,
+    mergeBelowBtn,
+    clearLayerBtn,
+    deleteLayerBtn,
+    moveUpBtn,
+    moveDownBtn,
+  );
   panel.appendChild(actionsBar);
 
   // --- 5. Scrollable Layer List ---
@@ -362,11 +461,22 @@ export function mountLayersView(
       opacitySlider.value = String(opacityPct);
       opacityLabel.textContent = `${opacityPct}%`;
       clipLayerBtn.classList.toggle('active', !!active.clipped);
+      lockAlphaBtn.classList.toggle('active', !!active.lockAlpha);
+      lockLayerBtn.classList.toggle('active', !!active.locked);
+
+      // Disable buttons when layer is paper
+      const isPaper = !!active.isPaper;
+      clipLayerBtn.disabled = isPaper;
+      lockAlphaBtn.disabled = isPaper || active.type !== 'raster';
+      lockLayerBtn.disabled = isPaper;
+      clearLayerBtn.disabled = isPaper || !!active.locked;
+      deleteLayerBtn.disabled = isPaper;
+      mergeBelowBtn.disabled = isPaper || !!active.locked || active.type !== 'raster';
     }
 
     // Populate Parent Folder Select
     const folders = layerManager.layers.filter((l) => l.type === 'folder' && l.id !== active?.id);
-    folderSelect.innerHTML = `<option value="root">None (Root Level)</option>`;
+    folderSelect.innerHTML = `<option value="root">Ninguna (Nivel raíz)</option>`;
     for (const f of folders) {
       const opt = document.createElement('option');
       opt.value = f.id;
@@ -437,7 +547,7 @@ export function mountLayersView(
       // 2. Eye Visibility Button
       const eyeBtn = document.createElement('button');
       eyeBtn.className = 'layer-eye-btn';
-      eyeBtn.title = node.visible ? 'Hide Layer' : 'Show Layer';
+      eyeBtn.title = node.visible ? 'Ocultar capa' : 'Mostrar capa';
       eyeBtn.innerHTML = node.visible
         ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
         : `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#555555" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
@@ -451,7 +561,7 @@ export function mountLayersView(
       if (node.clipped) {
         const clipIndicator = document.createElement('div');
         clipIndicator.className = 'layer-clip-indicator';
-        clipIndicator.title = 'Clipped at layer below';
+        clipIndicator.title = 'Ajustada a la capa inferior';
         item.appendChild(clipIndicator);
       }
 
@@ -468,7 +578,7 @@ export function mountLayersView(
               <line x1="2" y1="12" x2="22" y2="12"/>
             </svg>
           `;
-          folderIcon.title = 'Animation Folder (Track)';
+          folderIcon.title = 'Carpeta de animación (Track)';
         } else {
           folderIcon.innerHTML = `
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -498,7 +608,7 @@ export function mountLayersView(
       const nameText = document.createElement('span');
       nameText.className = 'layer-name-text';
       nameText.textContent = node.name;
-      nameText.title = 'Double click to rename';
+      nameText.title = 'Doble clic para cambiar nombre';
 
       nameText.addEventListener('dblclick', (e) => {
         e.stopPropagation();
@@ -528,7 +638,22 @@ export function mountLayersView(
       });
       item.appendChild(nameText);
 
-      // 5b. Bone Binding / Mesh Skinning Badge
+      // 5b. Alpha Lock Badge (CSP checkerboard lock)
+      if (node.lockAlpha) {
+        const alphaBadge = document.createElement('span');
+        alphaBadge.className = 'layer-badge alpha-lock-badge';
+        alphaBadge.title = 'Píxeles transparentes bloqueados';
+        alphaBadge.innerHTML = `
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="1.5"/>
+            <rect x="3" y="3" width="9" height="9" fill="currentColor" fill-opacity="0.4" stroke="none"/>
+            <rect x="12" y="12" width="9" height="9" fill="currentColor" fill-opacity="0.4" stroke="none"/>
+          </svg>
+        `;
+        item.appendChild(alphaBadge);
+      }
+
+      // 5c. Bone Binding / Mesh Skinning Badge
       if (node.meshSkinningEnabled) {
         const meshBadge = document.createElement('span');
         meshBadge.className = 'layer-badge';
@@ -548,11 +673,12 @@ export function mountLayersView(
         item.appendChild(boneBadge);
       }
 
-      // 6. Paper Lock Badge
-      if (node.isPaper) {
+      // 6. Lock Badge (Locked layer or Paper)
+      if (node.locked || node.isPaper) {
         const lockBadge = document.createElement('span');
-        lockBadge.className = 'layer-badge';
-        lockBadge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+        lockBadge.className = 'layer-badge lock-badge';
+        lockBadge.title = node.isPaper ? 'Capa de papel protegida' : 'Capa bloqueada';
+        lockBadge.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
         item.appendChild(lockBadge);
       }
 

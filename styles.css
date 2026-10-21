@@ -1613,3 +1613,129 @@ body {
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+
+/* ==========================================================================
+   Free Transform Floating Toolbar (CSP Style HUD)
+   ========================================================================== */
+.csp-transform-toolbar {
+  position: fixed;
+  z-index: 9999;
+  background: rgba(20, 23, 28, 0.95);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 136, 255, 0.3);
+  padding: 3px 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.csp-trans-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: #232730;
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.csp-trans-btn:hover {
+  background: #323846;
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #ffffff;
+}
+
+.csp-trans-btn.confirm {
+  background: #15803d;
+  border-color: #22c55e;
+  color: #ffffff;
+}
+
+.csp-trans-btn.confirm:hover {
+  background: #16a34a;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+.csp-trans-btn.cancel {
+  background: #991b1b;
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+.csp-trans-btn.cancel:hover {
+  background: #dc2626;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+}
+
+.csp-trans-btn.icon-only {
+  width: 28px;
+  height: 28px;
+}
+
+.csp-trans-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.16);
+  margin: 0 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Modal transform state (CSP-style exclusive mode, REA study 2.1)     */
+/* ------------------------------------------------------------------ */
+body[data-transform-modal='on'] #tools-container,
+body[data-transform-modal='on'] #layers-container,
+body[data-transform-modal='on'] #timeline-container {
+  pointer-events: none;
+  filter: grayscale(0.65) brightness(0.75);
+  opacity: 0.7;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+
+body[data-transform-modal='on'] #viewport canvas {
+  cursor: crosshair;
+}
+
+.transform-modal-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%) translateY(8px);
+  z-index: 10001;
+  max-width: 420px;
+  padding: 8px 14px;
+  background: rgba(20, 23, 28, 0.96);
+  border: 1px solid rgba(255, 170, 0, 0.55);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+  color: #ffd28a;
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.transform-modal-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Selection launcher: same shell as the transform launcher, distinct accent */
+.csp-sel-launcher {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 200, 60, 0.32);
+  border-color: rgba(255, 200, 60, 0.35);
+}
+
+.csp-sel-launcher .csp-trans-btn:hover {
+  border-color: rgba(255, 200, 60, 0.55);
+}

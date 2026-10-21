@@ -150,8 +150,9 @@
 
 .layers-actions-bar {
   display: flex;
-  gap: 4px;
-  padding: 6px 10px;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 6px;
   background: #1b1b1b;
   border-bottom: 1px solid #333333;
 }
@@ -161,7 +162,9 @@
   border: 1px solid transparent;
   border-radius: 3px;
   color: #8c8c8c;
-  padding: 4px 6px;
+  padding: 2px;
+  min-width: 22px;
+  height: 22px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -169,15 +172,46 @@
   transition: all 0.1s ease;
 }
 
-.layer-action-btn:hover {
+.layer-action-btn:hover:not(:disabled) {
   background: #2d2d2d;
   color: #ffffff;
+}
+
+.layer-action-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
 }
 
 .layer-action-btn.active {
   background: #007acc;
   color: #ffffff;
   border-color: #0098ff;
+}
+
+.layer-action-btn.lock-alpha-btn.active {
+  background: #1e3a8a;
+  color: #93c5fd;
+  border-color: #3b82f6;
+}
+
+.layer-action-btn.lock-layer-btn.active {
+  background: #78350f;
+  color: #fde047;
+  border-color: #eab308;
+}
+
+.layer-badge.alpha-lock-badge {
+  color: #60a5fa;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.layer-badge.lock-badge {
+  color: #fbbf24;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
 }
 
 .layers-list {

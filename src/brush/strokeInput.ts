@@ -2,12 +2,18 @@ import * as THREE from 'three';
 import type { BrushEngine } from './brushEngine';
 import {
   activeTool,
+  getTabletSettings,
   getToolState,
   setTool,
   subscribeTools,
   swapColors,
   toggleTransparentColor,
 } from '../tools/toolState';
+import { evaluatePressure, isPhysicalEraser, tiltFootprint } from './pressureResponse';
+import { selectionModel } from '../selection/selectionModel';
+import { marchingAnts } from '../selection/marchingAnts';
+import { transformManager } from '../selection/transformGizmo';
+import { isTransformModalLocked, warnTransformModalBlocked } from '../selection/transformModal';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
@@ -28,6 +34,8 @@ interface PointerLike {
   clientY: number;
   pressure: number;
   pointerType?: string;
+  tiltX?: number;
+  tiltY?: number;
 }
 
 interface SmoothPoint {
@@ -55,10 +63,15 @@ function coalescedSamples(event: PointerEvent): PointerEvent[] {
  * that onto every mouse stroke made stamps semi-transparent (visible circles
  * on every tick), so the mouse gets full pressure and the starting/ending
  * tapers handle the finesse instead.
+ *
+ * The pen reads its analog value and passes it through the device response
+ * curve (CSP Preferences > Tablet, REA study 5.3): the raw sample is never
+ * fed raw to the brush.
  */
 function pressureOf(event: PointerLike): number {
   if (event.pointerType === 'pen') {
-    return event.pressure > 0 ? event.pressure : 0.5;
+    const raw = event.pressure > 0 ? event.pressure : 0.5;
+    return evaluatePressure(raw, getTabletSettings().pressure);
   }
   return 1.0;
 }
@@ -68,9 +81,23 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   const raycaster = new THREE.Raycaster();
   const pointerVec = new THREE.Vector2();
 
-  let activeStroke: 'brush' | 'eraser' | 'shape' | 'bone' | null = null;
+  let activeStroke: 'brush' | 'eraser' | 'shape' | 'bone' | 'select' | 'mask-move' | 'transform' | null = null;
   let activePointerId: number | null = null;
   let lastPointerType = 'mouse';
+
+  // Selection drag state
+  let selectionDragState: {
+    type: 'rect' | 'ellipse' | 'lasso' | 'poly';
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    points: { x: number; y: number }[];
+    combineMode: 'replace' | 'add' | 'subtract';
+  } | null = null;
+
+  // Selection mask move state (drag inside an existing selection)
+  let maskMoveStart: { x: number; y: number } | null = null;
 
   // Bone drag state
   let boneDragState: {
@@ -141,6 +168,24 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   /**
+   * Feeds the pen lean of a sample into the engine (REA study 5.1). Everything
+   * that is not an active ink stroke with tilt enabled drops back to an
+   * upright nib, so the last tilt of a stroke can never leak into the next one.
+   */
+  const applyTiltFrom = (event: PointerLike): void => {
+    const tablet = getTabletSettings();
+    if (
+      !tablet.tiltEnabled ||
+      event.pointerType !== 'pen' ||
+      (activeStroke !== 'brush' && activeStroke !== 'eraser')
+    ) {
+      engine.setStrokeTilt(null);
+      return;
+    }
+    engine.setStrokeTilt(tiltFootprint(event.tiltX ?? 0, event.tiltY ?? 0, tablet.tiltAmount));
+  };
+
+  /**
    * Keeps the last 3 smoothed points and emits a quadratic Bezier piece from
    * the midpoint of (p0,p1) to the midpoint of (p1,p2), with p1 as control.
    * Each new point continues exactly where the previous one ended, so there
@@ -205,6 +250,91 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const finish = (pointerId?: number): void => {
+    if (activeStroke === 'transform') {
+      transformManager.handlePointerUp();
+      activeStroke = null;
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        try {
+          canvas.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      return;
+    }
+
+    if (activeStroke === 'mask-move') {
+      selectionModel.endMoveMask();
+      maskMoveStart = null;
+      activeStroke = null;
+      updateCursor();
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        try {
+          canvas.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      return;
+    }
+
+    if (activeStroke === 'select') {
+      if (selectionDragState) {
+        const { type, startX, startY, currentX, currentY, points, combineMode } = selectionDragState;
+        const dist = Math.hypot(currentX - startX, currentY - startY);
+
+        if (type === 'poly') {
+          // Keep polyline active for next clicks until closed or double-clicked
+          if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+            try {
+              canvas.releasePointerCapture(pointerId);
+            } catch {
+              // ignore
+            }
+          }
+          activePointerId = null;
+          activeStroke = null;
+          return;
+        }
+
+        if (dist < 4 && type !== 'lasso') {
+          // Clicked without dragging: if combineMode is 'replace', deselect!
+          if (combineMode === 'replace') {
+            selectionModel.clearSelection();
+          }
+        } else if (type === 'rect') {
+          selectionModel.selectRect(startX, startY, currentX - startX, currentY - startY, combineMode);
+        } else if (type === 'ellipse') {
+          selectionModel.selectEllipse(
+            (startX + currentX) / 2,
+            (startY + currentY) / 2,
+            Math.abs(currentX - startX) / 2,
+            Math.abs(currentY - startY) / 2,
+            combineMode,
+          );
+        } else if (type === 'lasso') {
+          if (points.length >= 3) {
+            selectionModel.selectPolygon(points, combineMode);
+          }
+        }
+      }
+
+      selectionDragState = null;
+      marchingAnts.setDragPreview(null);
+      activeStroke = null;
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        try {
+          canvas.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      return;
+    }
+
     const wasBone = activeStroke === 'bone';
     if (activeStroke === 'brush' || activeStroke === 'eraser') {
       // Stabilizer catch-up: pull the smoothed curve toward the raw release
@@ -265,6 +395,50 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const doc = pointerToDoc(event);
     if (!doc) return;
 
+    if (transformManager.isTransforming()) {
+      // CSP modal state: the gizmo owns the pointer. Drawing tools, fills and
+      // new selections stay blocked until confirm/cancel (REA study, 2.1).
+      const handled = transformManager.handlePointerDown(doc.x, doc.y, event);
+      if (handled) {
+        activePointerId = event.pointerId;
+        lastPointerType = event.pointerType || 'mouse';
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+        activeStroke = 'transform';
+      }
+      return;
+    }
+
+    // Physical eraser tip (REA study 5.4): erases with the current sub tool
+    // settings without touching the selected tool, and restores it as soon as
+    // the pen is flipped back.
+    if (isPhysicalEraser(event)) {
+      activePointerId = event.pointerId;
+      lastPointerType = event.pointerType || 'pen';
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignored
+      }
+      const erasePressure = pressureOf(event);
+      smoothedX = doc.x;
+      smoothedY = doc.y;
+      rawLastX = doc.x;
+      rawLastY = doc.y;
+      lastSamplePressure = erasePressure;
+      velX = 0;
+      velY = 0;
+      smoothHist = [{ x: doc.x, y: doc.y, p: erasePressure }];
+      curveEmitted = smoothHist[0];
+      activeStroke = 'eraser';
+      applyTiltFrom(event);
+      engine.beginErase(doc.x, doc.y, erasePressure);
+      return;
+    }
+
     if (tool === 'eyedropper') {
       const compCtx = engine.compositeCanvas.getContext('2d')!;
       const [r, g, b] = compCtx.getImageData(
@@ -281,6 +455,79 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     if (tool === 'bucket') {
       const { color, tolerance } = getToolState().brush;
       engine.fill(Math.floor(doc.x), Math.floor(doc.y), color, tolerance);
+      return;
+    }
+
+    if (tool === 'select') {
+      const subId = getToolState().activeSubToolId;
+      let selType: 'rect' | 'ellipse' | 'lasso' | 'poly' = 'rect';
+      if (subId === 'select-ellipse') selType = 'ellipse';
+      else if (subId === 'select-lasso') selType = 'lasso';
+      else if (subId === 'select-poly') selType = 'poly';
+
+      let combineMode = getToolState().selectionCombineMode;
+      if (event.shiftKey) combineMode = 'add';
+      else if (event.altKey) combineMode = 'subtract';
+
+      // Drag inside an existing selection moves only the selection tent
+      // (CSP "move selection", REA study 4.1). Modifiers still create a new
+      // combined selection instead.
+      if (
+        !event.shiftKey &&
+        !event.altKey &&
+        combineMode === 'replace' &&
+        selectionModel.isPointInsideSelection(doc.x, doc.y) &&
+        selectionModel.beginMoveMask()
+      ) {
+        activePointerId = event.pointerId;
+        lastPointerType = event.pointerType || 'mouse';
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // Ignored
+        }
+        activeStroke = 'mask-move';
+        maskMoveStart = { x: doc.x, y: doc.y };
+        canvas.style.cursor = 'move';
+        return;
+      }
+
+      activePointerId = event.pointerId;
+      lastPointerType = event.pointerType || 'mouse';
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignored
+      }
+      activeStroke = 'select';
+
+      if (selType === 'poly' && selectionDragState && selectionDragState.type === 'poly') {
+        const firstPt = selectionDragState.points[0];
+        const distToFirst = firstPt ? Math.hypot(doc.x - firstPt.x, doc.y - firstPt.y) : 999;
+        if (selectionDragState.points.length >= 3 && distToFirst < 16) {
+          selectionModel.selectPolygon(selectionDragState.points, selectionDragState.combineMode);
+          selectionDragState = null;
+          marchingAnts.setDragPreview(null);
+          activeStroke = null;
+          return;
+        }
+        selectionDragState.points.push({ x: doc.x, y: doc.y });
+        selectionDragState.currentX = doc.x;
+        selectionDragState.currentY = doc.y;
+        marchingAnts.setDragPreview(selectionDragState);
+        return;
+      }
+
+      selectionDragState = {
+        type: selType,
+        startX: doc.x,
+        startY: doc.y,
+        currentX: doc.x,
+        currentY: doc.y,
+        points: [{ x: doc.x, y: doc.y }],
+        combineMode,
+      };
+      marchingAnts.setDragPreview(selectionDragState);
       return;
     }
 
@@ -449,11 +696,11 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     curveEmitted = smoothHist[0];
 
     const isErase = tool === 'eraser' || getToolState().isTransparentColor;
+    activeStroke = isErase ? 'eraser' : 'brush';
+    applyTiltFrom(event);
     if (isErase) {
-      activeStroke = 'eraser';
       engine.beginErase(doc.x, doc.y, pressure);
     } else {
-      activeStroke = 'brush';
       engine.beginStroke(doc.x, doc.y, pressure);
     }
   };
@@ -509,6 +756,37 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
+    if (activeStroke === 'transform') {
+      const doc = pointerToDoc(event);
+      if (doc) transformManager.handlePointerMove(doc.x, doc.y, event);
+      return;
+    }
+
+    if (activeStroke === 'mask-move') {
+      const doc = pointerToDoc(event);
+      if (doc && maskMoveStart) {
+        selectionModel.moveMaskBy(doc.x - maskMoveStart.x, doc.y - maskMoveStart.y);
+      }
+      return;
+    }
+
+    if (activeStroke === 'select') {
+      const doc = pointerToDoc(event);
+      if (!doc || !selectionDragState) return;
+      selectionDragState.currentX = doc.x;
+      selectionDragState.currentY = doc.y;
+
+      if (selectionDragState.type === 'lasso') {
+        const pts = selectionDragState.points;
+        const lastPt = pts[pts.length - 1];
+        if (!lastPt || Math.hypot(doc.x - lastPt.x, doc.y - lastPt.y) > 3) {
+          pts.push({ x: doc.x, y: doc.y });
+        }
+      }
+      marchingAnts.setDragPreview(selectionDragState);
+      return;
+    }
+
     if (activeStroke === 'shape') {
       const doc = pointerToDoc(event);
       if (doc) engine.updateShape(doc.x, doc.y);
@@ -518,6 +796,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     // High-frequency samples (coalesced) are fed one by one so no input
     // resolution is lost between two pointermove events.
     for (const sample of coalescedSamples(event)) {
+      applyTiltFrom(sample);
       const doc = pointerToDoc(sample);
       if (!doc) continue;
       handleStrokePoint(doc, pressureOf(sample));
@@ -567,6 +846,28 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const isCtrl = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
 
+    // CSP modal transform state (REA study, 2.1): only confirm / cancel / the
+    // transform toggle itself may run. Every other command is refused.
+    if (isTransformModalLocked()) {
+      if (event.key === 'Enter' || event.key === 'NumpadEnter') {
+        event.preventDefault();
+        transformManager.commitTransform();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        transformManager.cancelTransform();
+      } else if (isCtrl && key === 't') {
+        event.preventDefault();
+        transformManager.commitTransform();
+      } else if (isCtrl && key === 'z' && !event.shiftKey) {
+        // CSP: undo while transforming discards the in-flight transform
+        event.preventDefault();
+        transformManager.cancelTransform();
+      } else if (!isSpacePressed && !['control', 'meta', 'shift', 'alt'].includes(key)) {
+        warnTransformModalBlocked('Transformación activa');
+      }
+      return;
+    }
+
     if (isCtrl && key === 'z' && !event.shiftKey) {
       event.preventDefault();
       engine.undo();
@@ -588,10 +889,99 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
+    // Layer Shortcuts (Clip Studio Paint standard: Ctrl+J duplicate, Ctrl+E merge below, Delete clear)
+    if (isCtrl && key === 'j') {
+      event.preventDefault();
+      engine.layerManager.duplicateLayer();
+      return;
+    }
+
+    if (isCtrl && key === 'e') {
+      event.preventDefault();
+      engine.layerManager.mergeLayerBelow();
+      return;
+    }
+
+    // Free Transform (Ctrl+T, Enter commit, Esc cancel)
+    if (isCtrl && key === 't') {
+      event.preventDefault();
+      if (transformManager.isTransforming()) {
+        transformManager.commitTransform();
+      } else {
+        transformManager.startTransform(engine);
+      }
+      return;
+    }
+
+    if (event.key === 'Enter' && transformManager.isTransforming()) {
+      event.preventDefault();
+      transformManager.commitTransform();
+      return;
+    }
+
+    if (event.key === 'Escape' && transformManager.isTransforming()) {
+      event.preventDefault();
+      transformManager.cancelTransform();
+      return;
+    }
+
+    // Selection Shortcuts (Clip Studio Paint / Photoshop standard)
+    if (isCtrl && key === 'd') {
+      event.preventDefault();
+      selectionModel.clearSelection();
+      return;
+    }
+
+    if (isCtrl && key === 'a') {
+      event.preventDefault();
+      selectionModel.selectAll();
+      return;
+    }
+
+    if (isCtrl && event.shiftKey && key === 'i') {
+      event.preventDefault();
+      selectionModel.invertSelection();
+      return;
+    }
+
+    if (event.altKey && (event.key === 'Delete' || event.key === 'Backspace')) {
+      event.preventDefault();
+      engine.fillSelection();
+      return;
+    }
+
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      engine.clearActiveLayer();
+      return;
+    }
+
+    // Arrow-key nudge of the selection tent (1px, or 10px with Shift)
+    if (
+      !isCtrl &&
+      !event.altKey &&
+      activeTool() === 'select' &&
+      selectionModel.hasSelection() &&
+      (event.key === 'ArrowUp' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'ArrowLeft' ||
+        event.key === 'ArrowRight')
+    ) {
+      event.preventDefault();
+      const step = event.shiftKey ? 10 : 1;
+      if (event.key === 'ArrowUp') selectionModel.nudgeMask(0, -step);
+      else if (event.key === 'ArrowDown') selectionModel.nudgeMask(0, step);
+      else if (event.key === 'ArrowLeft') selectionModel.nudgeMask(-step, 0);
+      else selectionModel.nudgeMask(step, 0);
+      return;
+    }
+
     if (!isCtrl && !event.altKey) {
       if (key === 'p') setTool('pen');
       else if (key === 'b') setTool('brush');
+      else if (key === 'd') setTool('effect');
       else if (key === 'e') setTool('eraser');
+      else if (key === 'm') setTool('select');
       else if (key === 'i') setTool('eyedropper');
       else if (key === 'g') setTool('bucket');
       else if (key === 'u') setTool('shape');
@@ -609,10 +999,27 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
   };
 
+  const onDblClick = (): void => {
+    // CSP: double click on the canvas commits an active transform
+    if (transformManager.isTransforming()) {
+      transformManager.commitTransform();
+      return;
+    }
+    if (selectionDragState && selectionDragState.type === 'poly') {
+      if (selectionDragState.points.length >= 3) {
+        selectionModel.selectPolygon(selectionDragState.points, selectionDragState.combineMode);
+      }
+      selectionDragState = null;
+      marchingAnts.setDragPreview(null);
+      activeStroke = null;
+    }
+  };
+
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerEnd);
   canvas.addEventListener('pointercancel', onPointerEnd);
+  canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
@@ -625,6 +1032,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerEnd);
       canvas.removeEventListener('pointercancel', onPointerEnd);
+      canvas.removeEventListener('dblclick', onDblClick);
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);

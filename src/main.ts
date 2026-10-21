@@ -6,6 +6,10 @@ import { attachStrokeInput } from './brush/strokeInput';
 import { mountLayersView } from './layers/layersView';
 import { setBrushSettings } from './tools/toolState';
 import { mountToolsView } from './tools/toolsView';
+import { marchingAnts } from './selection/marchingAnts';
+import { transformManager } from './selection/transformGizmo';
+import { mountSelectionLauncher } from './selection/selectionLauncher';
+import { mountTransformToolbar } from './selection/transformToolbar';
 
 // --- Viewport & Three.js Setup ---
 const viewport = document.getElementById('viewport') ?? document.body;
@@ -75,6 +79,22 @@ const canvasMat = new THREE.MeshBasicMaterial({ map: canvasTexture, side: THREE.
 const canvasMesh = new THREE.Mesh(canvasGeo, canvasMat);
 scene.add(canvasMesh);
 
+// Selection Overlay (Marching Ants)
+const selectionTexture = new THREE.CanvasTexture(marchingAnts.overlayCanvas);
+selectionTexture.minFilter = THREE.LinearFilter;
+selectionTexture.magFilter = THREE.LinearFilter;
+selectionTexture.generateMipmaps = false;
+
+const selectionMat = new THREE.MeshBasicMaterial({
+  map: selectionTexture,
+  transparent: true,
+  depthTest: false,
+  side: THREE.DoubleSide,
+});
+const selectionMesh = new THREE.Mesh(canvasGeo, selectionMat);
+selectionMesh.position.set(0, 0, 0.005);
+scene.add(selectionMesh);
+
 // Attach Pointer Input
 attachStrokeInput({
   canvas,
@@ -94,6 +114,15 @@ if (toolsContainer) {
   mountToolsView(toolsContainer, {
     onUndo: () => engine.undo(),
     onRedo: () => engine.redo(),
+    onFillSelection: () => engine.fillSelection(),
+    onClearSelection: () => engine.clearActiveLayer(),
+    onTransform: () => {
+      if (transformManager.isTransforming()) {
+        transformManager.commitTransform();
+      } else {
+        transformManager.startTransform(engine);
+      }
+    },
     timeline,
   });
 }
@@ -101,14 +130,18 @@ if (toolsContainer) {
 // Mount Layers Panel (CSP Style)
 const layersContainer = document.getElementById('layers-container');
 if (layersContainer) {
-  mountLayersView(layersContainer, engine.layerManager, timeline);
+  mountLayersView(layersContainer, engine.layerManager, timeline, engine);
 }
 
 // Mount Timeline Palette (CSP Style)
 const timelineContainer = document.getElementById('timeline-container');
 if (timelineContainer) {
   mountTimelineView(timelineContainer, timeline, engine.layerManager);
+  mountTransformToolbar({ camera, canvas });
 }
+
+// Mount CSP-style floating launchers (Selection Launcher + Transform Launcher)
+mountSelectionLauncher({ camera, canvas, engine });
 
 // Render Loop
 function animate(): void {
@@ -117,6 +150,11 @@ function animate(): void {
   if (engine.compositeDirty) {
     engine.updateComposite();
     canvasTexture.needsUpdate = true;
+  }
+
+  const antsDirty = marchingAnts.render();
+  if (antsDirty) {
+    selectionTexture.needsUpdate = true;
   }
 
   renderer.render(scene, camera);

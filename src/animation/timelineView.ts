@@ -1,4 +1,5 @@
 import type { LayerManager } from '../brush/layers';
+import { isTransformModalLocked } from '../selection/transformModal';
 import './timeline.css';
 import type { TimelineManager } from './timelineManager';
 import type { AnimationTrack, InterpolationType, TimeDisplayFormat } from './timelineModel';
@@ -1438,6 +1439,12 @@ export function mountTimelineView(
   // --- 5. Global Keyboard Shortcuts ---
   window.addEventListener('keydown', (e) => {
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
+      return;
+    }
+
+    // CSP modal transform state: timeline playback & scrubbing are locked
+    if (isTransformModalLocked()) {
+      e.preventDefault();
       return;
     }
 

@@ -1,7 +1,13 @@
 import type { AntiAliasingLevel, TipShape } from '../tools/toolState';
+import { getBrushTextureAsset, subscribeTextureAssets } from './brushTextureAssets';
 
-const CACHE_LIMIT = 256;
+// Room for the pressure steps and the tilt squash levels of one stroke.
+const CACHE_LIMIT = 512;
 const PADDING = 2;
+
+subscribeTextureAssets(() => {
+  cache.clear();
+});
 
 // Anti-aliasing transition width in pixels (Clip Studio Paint style levels).
 const AA_WIDTH: Record<AntiAliasingLevel, number> = {
@@ -18,6 +24,7 @@ export interface StampTextureOptions {
   antiAliasing?: AntiAliasingLevel;
   tipShape?: TipShape;
   tipRoundness?: number;
+  tipTexture?: string;
 }
 
 const cache = new Map<string, HTMLCanvasElement>();
@@ -115,6 +122,40 @@ function buildStamp(
   return canvas;
 }
 
+function buildTextureStamp(
+  diameter: number,
+  color: string,
+  tipTextureId: string,
+  tipRoundness: number,
+  hardness: number,
+  antiAliasing: AntiAliasingLevel,
+): HTMLCanvasElement {
+  const asset = getBrushTextureAsset(tipTextureId);
+  const scaleY = Math.max(0.1, tipRoundness);
+
+  if (asset && asset.loaded && asset.image) {
+    const maxDim = Math.max(asset.width, asset.height) || 1;
+    const w = Math.max(1, diameter * (asset.width / maxDim));
+    const h = Math.max(1, diameter * (asset.height / maxDim) * scaleY);
+    const pad = PADDING + 2;
+    const size = Math.max(2, Math.ceil(Math.max(w, h))) + pad * 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+
+    const x = (size - w) / 2;
+    const y = (size - h) / 2;
+    ctx.drawImage(asset.image, x, y, w, h);
+    ctx.globalCompositeOperation = 'source-in';
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, size, size);
+    return canvas;
+  }
+  // fallback if texture not loaded yet
+  return buildStamp(diameter, hardness, color, antiAliasing, 'circle', tipRoundness);
+}
+
 export function getStampTexture(options: StampTextureOptions): HTMLCanvasElement {
   const diameter = Math.max(0.4, options.diameter);
   const hardness = Math.min(1, Math.max(0, options.hardness));
@@ -122,19 +163,32 @@ export function getStampTexture(options: StampTextureOptions): HTMLCanvasElement
   const antiAliasing: AntiAliasingLevel = options.antiAliasing ?? 'medium';
   const tipShape: TipShape = options.tipShape ?? 'circle';
   const tipRoundness = Math.min(1, Math.max(0.1, options.tipRoundness ?? 1));
+  const tipTexture = options.tipTexture || 'default';
 
   // Quantize the size (0.25px, coarser for big brushes) to bound cache growth
   // while keeping tapered needles visually continuous.
   const step = diameter > 20 ? 0.5 : 0.25;
   const quantized = Math.max(0.4, Math.round(diameter / step) * step);
-  const key = `${quantized.toFixed(2)}:${hardness.toFixed(3)}:${color}:${antiAliasing}:${tipShape}:${tipRoundness.toFixed(2)}`;
+  const key = `${quantized.toFixed(2)}:${hardness.toFixed(3)}:${color}:${antiAliasing}:${tipShape}:${tipRoundness.toFixed(2)}:${tipTexture}`;
 
   let stamp = cache.get(key);
-  if (!stamp) {
-    if (cache.size >= CACHE_LIMIT) cache.clear();
-    stamp = buildStamp(quantized, hardness, color, antiAliasing, tipShape, tipRoundness);
+  if (stamp) {
+    // Map iteration order is the eviction order, so touching the entry keeps
+    // the stamps of the stroke being drawn away from the eviction limit.
+    cache.delete(key);
     cache.set(key, stamp);
+    return stamp;
   }
+  if (cache.size >= CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  if (tipTexture && tipTexture !== 'default' && tipTexture !== 'none') {
+    stamp = buildTextureStamp(quantized, color, tipTexture, tipRoundness, hardness, antiAliasing);
+  } else {
+    stamp = buildStamp(quantized, hardness, color, antiAliasing, tipShape, tipRoundness);
+  }
+  cache.set(key, stamp);
   return stamp;
 }
 

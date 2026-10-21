@@ -1,10 +1,29 @@
-export type ToolId = 'pen' | 'brush' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand';
+export type ToolId = 'pen' | 'brush' | 'effect' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand' | 'select';
 export type BoneToolMode = 'rig' | 'pose_fk' | 'pose_ik';
+export type SelectionCombineMode = 'replace' | 'add' | 'subtract';
 export type ShapeType = 'line' | 'rectangle' | 'ellipse';
 export type ShapeFillMode = 'stroke' | 'fill';
 export type TipShape = 'circle' | 'square' | 'calligraphic';
 export type AntiAliasingLevel = 'none' | 'weak' | 'medium' | 'strong';
 export type InkMode = 'uniform' | 'accumulate';
+
+export type TipTextureId = 'default' | 'flat-square' | 'gasagasa' | 'brush02' | 'star02' | 'star04';
+export type PaperTextureId = 'none' | 'oil-paint' | 'pencil-paper';
+
+export type { PressureCurveMode, PressureCurveSettings } from '../brush/pressureResponse';
+import type { PressureCurveSettings } from '../brush/pressureResponse';
+
+/**
+ * Device-level input response (CSP File > Preferences > Tablet). Not part of a
+ * sub tool: the pressure curve and the tilt behaviour belong to the tablet, the
+ * sub tool only decides how the responded pressure is spent.
+ */
+export interface TabletSettings {
+  pressure: PressureCurveSettings;
+  tiltEnabled: boolean;
+  /** 0 = keep the footprint upright, 1 = full physical elongation. */
+  tiltAmount: number;
+}
 
 export interface BrushSettings {
   size: number;
@@ -29,483 +48,22 @@ export interface BrushSettings {
   shapeType: ShapeType;
   shapeFill: ShapeFillMode;
   color: string;
+  tipTexture?: TipTextureId;
+  paperTexture?: PaperTextureId;
+  textureDensity?: number;
+  textureScale?: number;
+  colorMix?: number;
+  colorMixAlpha?: number;
+  smudge?: number;
+  spray?: boolean;
+  sprayRadius?: number;
+  sprayDensity?: number;
+  compositeMode?: 'source-over' | 'lighter' | 'screen' | 'destination-out';
+  subColorMix?: boolean;
 }
 
-export interface SubTool {
-  id: string;
-  name: string;
-  tool: ToolId;
-  description: string;
-  settings: Partial<BrushSettings>;
-  custom?: boolean;
-}
-
-export const SUBTOOLS: SubTool[] = [
-  // Pen / Inking tools (P)
-  {
-    id: 'g-pen',
-    name: 'Pluma G (G-Pen)',
-    tool: 'pen',
-    description: 'Trazo nítido y dinámico con alta respuesta a la presión.',
-    settings: {
-      size: 6,
-      minSizeRatio: 0.0,
-      pressureSize: true,
-      pressureCurve: 1.35,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'medium',
-      spacing: 0.06,
-      tipShape: 'circle',
-      taperStart: 8,
-      taperEnd: 18,
-      stabilization: 5,
-    },
-  },
-  {
-    id: 'real-g-pen',
-    name: 'Pluma G Real',
-    tool: 'pen',
-    description: 'Textura analógica y leve sangrado para manga tradicional.',
-    settings: {
-      size: 5,
-      minSizeRatio: 0.1,
-      pressureSize: true,
-      pressureCurve: 1.2,
-      flow: 0.95,
-      pressureFlow: true,
-      inkMode: 'uniform',
-      hardness: 0.85,
-      antiAliasing: 'weak',
-      spacing: 0.07,
-      tipShape: 'circle',
-      taperStart: 6,
-      taperEnd: 14,
-      stabilization: 4,
-    },
-  },
-  {
-    id: 'turnip-pen',
-    name: 'Pluma Cuchara (Kabura)',
-    tool: 'pen',
-    description: 'Grosor consistente y líneas limpias para entintar detalles.',
-    settings: {
-      size: 4,
-      minSizeRatio: 0.65,
-      pressureSize: true,
-      pressureCurve: 1.0,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'medium',
-      spacing: 0.06,
-      tipShape: 'circle',
-      taperStart: 3,
-      taperEnd: 8,
-      stabilization: 6,
-    },
-  },
-  {
-    id: 'manga-line',
-    name: 'manga line art',
-    tool: 'pen',
-    description: 'Inspirado en el legendario pincel todo-en-uno de CSP (怠けものブラシ): línea principal con presión fuerte, acuarela y pintura suave con presión ligera.',
-    settings: {
-      size: 8,
-      minSizeRatio: 0.1,
-      pressureSize: true,
-      pressureCurve: 1.45,
-      flow: 0.98,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.9,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 8,
-      taperEnd: 18,
-      stabilization: 7,
-    },
-  },
-  {
-    id: 'maru-pen',
-    name: 'Pluma Maru (Redonda)',
-    tool: 'pen',
-    description: 'Plumilla fina de CSP para cabello, ojos y detalles delicados.',
-    settings: {
-      size: 3,
-      minSizeRatio: 0.05,
-      pressureSize: true,
-      pressureCurve: 1.3,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 5,
-      taperEnd: 12,
-      stabilization: 5,
-    },
-  },
-  {
-    id: 'calligraphy-pen',
-    name: 'Caligrafía',
-    tool: 'pen',
-    description: 'Punta biselada de grosor variable según el ángulo del trazo.',
-    settings: {
-      size: 14,
-      minSizeRatio: 0.35,
-      pressureSize: true,
-      pressureCurve: 1.1,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'medium',
-      spacing: 0.04,
-      tipShape: 'calligraphic',
-      tipRoundness: 0.25,
-      tipAngle: 45,
-      taperStart: 6,
-      taperEnd: 14,
-      stabilization: 6,
-    },
-  },
-  {
-    id: 'millipen',
-    name: 'Marcador Millipen',
-    tool: 'pen',
-    description: 'Estilógrafo técnico de grosor uniforme sin variación por presión.',
-    settings: {
-      size: 5,
-      minSizeRatio: 1.0,
-      pressureSize: false,
-      pressureCurve: 1.0,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 4,
-    },
-  },
-
-  // Brush / Painting tools (B)
-  {
-    id: 'manga-line-art-brush',
-    name: 'manga line art',
-    tool: 'brush',
-    description: 'Inspirado en el legendario pincel todo-en-uno de CSP (怠けものブラシ): trazo firme con presión fuerte, veladura y mezcla acuarela con presión ligera.',
-    settings: {
-      size: 14,
-      minSizeRatio: 0.1,
-      pressureSize: true,
-      pressureCurve: 1.45,
-      flow: 0.95,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.88,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 8,
-      taperEnd: 18,
-      stabilization: 7,
-    },
-  },
-  {
-    id: 'watercolor',
-    name: 'Acuarela Suave',
-    tool: 'brush',
-    description: 'Bordes suaves translúcidos ideales para colorear y sombras.',
-    settings: {
-      size: 30,
-      minSizeRatio: 0.5,
-      pressureSize: true,
-      pressureCurve: 1.2,
-      flow: 0.45,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.35,
-      antiAliasing: 'strong',
-      spacing: 0.08,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 3,
-    },
-  },
-  {
-    id: 'thick-paint',
-    name: 'Óleo / Pintura Densa',
-    tool: 'brush',
-    description: 'Pincelada corpórea con cobertura rápida y buena mezcla.',
-    settings: {
-      size: 26,
-      minSizeRatio: 0.6,
-      pressureSize: true,
-      pressureCurve: 1.2,
-      flow: 0.85,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.7,
-      antiAliasing: 'medium',
-      spacing: 0.06,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 2,
-    },
-  },
-  {
-    id: 'airbrush',
-    name: 'Aerógrafo Suave',
-    tool: 'brush',
-    description: 'Gradaciones difuminadas sin textura de borde evidente.',
-    settings: {
-      size: 60,
-      minSizeRatio: 0.4,
-      pressureSize: true,
-      pressureCurve: 1.1,
-      flow: 0.3,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.1,
-      antiAliasing: 'strong',
-      spacing: 0.04,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 1,
-    },
-  },
-  {
-    id: 'flat-brush',
-    name: 'Pincel Plano',
-    tool: 'brush',
-    description: 'Puntas rectangulares para fondos arquitectónicos y ropa.',
-    settings: {
-      size: 22,
-      minSizeRatio: 0.7,
-      pressureSize: false,
-      pressureCurve: 1.2,
-      flow: 0.85,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.9,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'square',
-      tipRoundness: 0.28,
-      tipAngle: 35,
-      followDirection: true,
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 2,
-    },
-  },
-  {
-    id: 'gouache-brush',
-    name: 'Gouache Opaco',
-    tool: 'brush',
-    description: 'Cobertura mate de bordes definidos ideal para fondos de animación.',
-    settings: {
-      size: 32,
-      minSizeRatio: 0.45,
-      pressureSize: true,
-      pressureCurve: 1.15,
-      flow: 0.92,
-      pressureFlow: true,
-      inkMode: 'uniform',
-      hardness: 0.85,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 2,
-      taperEnd: 4,
-      stabilization: 3,
-    },
-  },
-  {
-    id: 'airbrush-highlight',
-    name: 'Aerógrafo de Brillo',
-    tool: 'brush',
-    description: 'Haz concentrado para luces especulares y atmósfera.',
-    settings: {
-      size: 42,
-      minSizeRatio: 0.25,
-      pressureSize: true,
-      pressureCurve: 1.4,
-      flow: 0.55,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.25,
-      antiAliasing: 'strong',
-      spacing: 0.04,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 2,
-    },
-  },
-
-  // Eraser tools (E)
-  {
-    id: 'hard-eraser',
-    name: 'Borrador Duro',
-    tool: 'eraser',
-    description: 'Eliminación 100% limpia sin halos difusos.',
-    settings: {
-      size: 24,
-      minSizeRatio: 0.3,
-      pressureSize: false,
-      pressureCurve: 1.2,
-      flow: 1.0,
-      pressureFlow: false,
-      inkMode: 'uniform',
-      hardness: 1.0,
-      antiAliasing: 'medium',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 3,
-    },
-  },
-  {
-    id: 'soft-eraser',
-    name: 'Borrador Suave',
-    tool: 'eraser',
-    description: 'Desvanecimiento gradual para degradados y luz.',
-    settings: {
-      size: 36,
-      minSizeRatio: 0.5,
-      pressureSize: true,
-      pressureCurve: 1.2,
-      flow: 0.6,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.25,
-      antiAliasing: 'strong',
-      spacing: 0.05,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 2,
-    },
-  },
-  {
-    id: 'kneaded-eraser',
-    name: 'Goma Maleable',
-    tool: 'eraser',
-    description: 'Baja opacidad para aclarar trazos suavemente.',
-    settings: {
-      size: 50,
-      minSizeRatio: 0.6,
-      pressureSize: true,
-      pressureCurve: 1.1,
-      flow: 0.3,
-      pressureFlow: true,
-      inkMode: 'accumulate',
-      hardness: 0.4,
-      antiAliasing: 'strong',
-      spacing: 0.06,
-      tipShape: 'circle',
-      taperStart: 0,
-      taperEnd: 0,
-      stabilization: 2,
-    },
-  },
-
-  // Shape tools (U)
-  {
-    id: 'straight-line',
-    name: 'Línea Directa',
-    tool: 'shape',
-    description: 'Trazos rectos precisos entre dos puntos.',
-    settings: { shapeType: 'line', shapeFill: 'stroke', size: 4 },
-  },
-  {
-    id: 'rect',
-    name: 'Rectángulo',
-    tool: 'shape',
-    description: 'Cajas delimitadoras y marcos ortogonales.',
-    settings: { shapeType: 'rectangle', shapeFill: 'stroke', size: 4 },
-  },
-  {
-    id: 'ellipse',
-    name: 'Elipse / Círculo',
-    tool: 'shape',
-    description: 'Círculos y óvalos con o sin relleno.',
-    settings: { shapeType: 'ellipse', shapeFill: 'stroke', size: 4 },
-  },
-
-  // Bucket tools (G)
-  {
-    id: 'bucket-layer',
-    name: 'Capa de Edición',
-    tool: 'bucket',
-    description: 'Rellena respetando únicamente las líneas de la capa actual.',
-    settings: { tolerance: 20 },
-  },
-  {
-    id: 'bucket-all',
-    name: 'Todas las Capas',
-    tool: 'bucket',
-    description: 'Rellena respetando la composición visible de todas las capas.',
-    settings: { tolerance: 35 },
-  },
-
-  // Eyedropper (I)
-  {
-    id: 'eyedropper-pixel',
-    name: 'Cuentagotas',
-    tool: 'eyedropper',
-    description: 'Muestrea el color exacto del píxel seleccionado.',
-    settings: {},
-  },
-
-  // Hand (H)
-  {
-    id: 'hand-pan',
-    name: 'Mover Lienzo',
-    tool: 'hand',
-    description: 'Desplaza el encuadre del lienzo sin alterarlo.',
-    settings: {},
-  },
-
-  // Bone / 2D Rigging (J)
-  {
-    id: 'bone-rig',
-    name: 'Crear / Editar Esqueleto (Rig)',
-    tool: 'bone',
-    description: 'Haz clic y arrastra en el lienzo para crear cadenas de huesos 2D o mover articulaciones en reposo.',
-    settings: {},
-  },
-  {
-    id: 'bone-pose-fk',
-    name: 'Posar Huesos FK (Rotar / Mover)',
-    tool: 'bone',
-    description: 'Rota huesos individuales con cinemática directa (FK) y registra keyframes automáticamente.',
-    settings: {},
-  },
-  {
-    id: 'bone-pose-ik',
-    name: 'Posar Cadena IK (Cinemática Inversa)',
-    tool: 'bone',
-    description: 'Arrastra la punta de una extremidad (mano/pie) para resolver el ángulo de articulación automáticamente con IK de 2 huesos.',
-    settings: {},
-  },
-];
+export { type SubTool, SUBTOOLS } from './subtoolPresets';
+import { type SubTool, SUBTOOLS } from './subtoolPresets';
 
 export type ColorTabId = 'picker' | 'rgb' | 'set' | 'harmony';
 export type PreviewBgMode = 'paper' | 'checker' | 'dark';
@@ -521,18 +79,38 @@ export type BrushPropKey =
   | 'antiAliasing'
   | 'roundness'
   | 'angle'
-  | 'spacing';
+  | 'spacing'
+  | 'colorMix'
+  | 'paperTexture'
+  | 'textureDensity'
+  | 'spray'
+  | 'sprayRadius'
+  | 'sprayDensity'
+  | 'compositeMode';
 
-export interface ColorSet {
-  id: string;
-  name: string;
-  colors: string[];
-}
+export {
+  type ColorSet,
+  DEFAULT_COLOR_SETS,
+  DEFAULT_HISTORY,
+  hexToRgb,
+  rgbToHex,
+  rgbToHsv,
+  hsvToRgb,
+  hsvToHex,
+  type ColorHarmonyGroup,
+  computeColorHarmonies,
+} from './colorPalettes';
+import {
+  type ColorSet,
+  DEFAULT_COLOR_SETS,
+  DEFAULT_HISTORY,
+} from './colorPalettes';
 
 export interface ToolState {
   tool: ToolId;
   activeSubToolId: string;
   brush: BrushSettings;
+  tablet: TabletSettings;
   propertiesOpen: boolean;
   // Sub Tool Detail: which properties are pinned/visible in the main Tool Property panel (CSP Eye icon)
   visibleProperties: BrushPropKey[];
@@ -550,6 +128,7 @@ export interface ToolState {
   colorHistory: string[];
   colorSets: ColorSet[];
   activeColorSetId: string;
+  selectionCombineMode: SelectionCombineMode;
 }
 
 export const DEFAULT_BRUSH: BrushSettings = {
@@ -575,67 +154,89 @@ export const DEFAULT_BRUSH: BrushSettings = {
   shapeType: 'rectangle',
   shapeFill: 'stroke',
   color: '#000000',
+  tipTexture: 'default',
+  paperTexture: 'none',
+  textureDensity: 0.0,
+  textureScale: 1.0,
+  colorMix: 0.0,
+  colorMixAlpha: 0.0,
+  smudge: 0.0,
+  spray: false,
+  sprayRadius: 20,
+  sprayDensity: 3,
+  compositeMode: 'source-over',
+  subColorMix: false,
 };
-
-const DEFAULT_HISTORY = [
-  '#000000',
-  '#ffffff',
-  '#e74c3c',
-  '#e67e22',
-  '#f1c40f',
-  '#2ecc71',
-  '#1abc9c',
-  '#3498db',
-  '#9b59b6',
-  '#34495e',
-  '#7f8c8d',
-  '#bdc3c7',
-];
-
-export const DEFAULT_COLOR_SETS: ColorSet[] = [
-  {
-    id: 'csp-standard',
-    name: 'Conjunto Estándar CSP',
-    colors: [
-      '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
-      '#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5',
-      '#3949ab', '#8e24aa', '#d81b60', '#6d4c41', '#546e7a', '#f4511e',
-      '#ffcdd2', '#ffe0b2', '#fff9c4', '#c8e6c9', '#b2ebf2', '#bbdefb',
-    ],
-  },
-  {
-    id: 'anime-skin',
-    name: 'Tonos de Piel & Anime',
-    colors: [
-      '#fff5eb', '#ffecd9', '#ffe0c2', '#f7cba4', '#eba87c', '#d1845c',
-      '#f9d5c5', '#eec0ad', '#dfa088', '#c67d63', '#9c563f', '#6e3726',
-      '#ffcad4', '#f4acb7', '#9d8189', '#4a3f45', '#2b2429', '#1a1518',
-    ],
-  },
-  {
-    id: 'vibrant-cel',
-    name: 'Cel Shading Vibrante',
-    colors: [
-      '#ff1744', '#ff9100', '#ffea00', '#00e676', '#00e5ff', '#2979ff',
-      '#651fff', '#d500f9', '#ff4081', '#1de9b6', '#76ff03', '#c6ff00',
-    ],
-  },
-];
 
 export const DEFAULT_VISIBLE_PROPS: BrushPropKey[] = [
   'size',
   'opacity',
   'hardness',
   'stabilization',
+  'colorMix',
+  'paperTexture',
 ];
+
+export const DEFAULT_TABLET: TabletSettings = {
+  pressure: { mode: 'linear', gamma: 1 },
+  tiltEnabled: false,
+  tiltAmount: 0.8,
+};
+
+// ---------------------------------------------------------------------------
+// Tablet (device) persistence
+// ---------------------------------------------------------------------------
+
+const TABLET_KEY = 'oniri.tablet.v1';
+
+const PRESSURE_MODES: PressureCurveSettings['mode'][] = ['linear', 'soft', 'hard', 'custom'];
+
+function loadTabletSettings(): TabletSettings {
+  try {
+    const raw = localStorage.getItem(TABLET_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<TabletSettings>;
+      if (parsed && typeof parsed === 'object') {
+        const pressure = parsed.pressure;
+        const validPressure =
+          pressure &&
+          typeof pressure === 'object' &&
+          PRESSURE_MODES.includes(pressure.mode) &&
+          typeof pressure.gamma === 'number' &&
+          Number.isFinite(pressure.gamma);
+        return {
+          pressure: validPressure
+            ? { mode: pressure.mode, gamma: Math.min(2.5, Math.max(0.3, pressure.gamma)) }
+            : { ...DEFAULT_TABLET.pressure },
+          tiltEnabled: parsed.tiltEnabled === true,
+          tiltAmount:
+            typeof parsed.tiltAmount === 'number' && Number.isFinite(parsed.tiltAmount)
+              ? Math.min(1, Math.max(0, parsed.tiltAmount))
+              : DEFAULT_TABLET.tiltAmount,
+        };
+      }
+    }
+  } catch {
+    // Storage corrupted or unavailable: factory tablet defaults.
+  }
+  return { ...DEFAULT_TABLET, pressure: { ...DEFAULT_TABLET.pressure } };
+}
+
+function persistTabletSettings(settings: TabletSettings): void {
+  try {
+    localStorage.setItem(TABLET_KEY, JSON.stringify(settings));
+  } catch {
+    // Storage full or unavailable: the in-memory session keeps working.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Sub Tool persistence (Clip Studio Paint "Sub Tool Detail" style)
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = 'oniri.subtools.v1';
+const STORAGE_KEY = 'oniri.subtools.v5';
 
-const TOOL_IDS: ToolId[] = ['pen', 'brush', 'eraser', 'eyedropper', 'bucket', 'shape', 'bone', 'hand'];
+const TOOL_IDS: ToolId[] = ['pen', 'brush', 'effect', 'eraser', 'eyedropper', 'bucket', 'shape', 'bone', 'hand', 'select'];
 
 function isValidSubTool(value: unknown): value is SubTool {
   if (!value || typeof value !== 'object') return false;
@@ -669,7 +270,7 @@ function loadSubTools(): SubTool[] {
       const parsed = JSON.parse(raw) as Partial<SubToolStorage>;
       if (
         parsed &&
-        parsed.v === 1 &&
+        parsed.v === 4 &&
         Array.isArray(parsed.items) &&
         parsed.items.length > 0 &&
         parsed.items.every(isValidSubTool)
@@ -680,12 +281,6 @@ function loadSubTools(): SubTool[] {
           : [];
         const present = new Set(items.map((s) => s.id));
         for (const base of SUBTOOLS) {
-          const existing = items.find((i) => i.id === base.id);
-          if (existing && !existing.custom && (base.id === 'manga-line' || base.id === 'manga-line-art-brush')) {
-            existing.name = base.name;
-            existing.description = base.description;
-            existing.settings = { ...base.settings, ...existing.settings, pressureFlow: true, inkMode: 'accumulate' };
-          }
           if (!present.has(base.id) && !deletedBaseIds.includes(base.id)) {
             items.push({ ...base, settings: { ...base.settings } });
           }
@@ -703,7 +298,7 @@ let subTools: SubTool[] = loadSubTools();
 
 function persistSubTools(): void {
   try {
-    const storage: SubToolStorage = { v: 1, items: subTools, deleted: [...deletedBaseIds] };
+    const storage: SubToolStorage = { v: 4, items: subTools, deleted: [...deletedBaseIds] };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(storage));
   } catch {
     // Storage full or unavailable: the in-memory session keeps working.
@@ -720,7 +315,8 @@ function factorySettingsFor(tool: ToolId): Partial<BrushSettings> {
 }
 
 function mergeBrush(sub: SubTool, color: string): BrushSettings {
-  return { ...DEFAULT_BRUSH, ...sub.settings, color };
+  const chosenColor = sub.settings.color && color === '#000000' ? sub.settings.color : (color || sub.settings.color || DEFAULT_BRUSH.color);
+  return { ...DEFAULT_BRUSH, ...sub.settings, color: chosenColor };
 }
 
 // ---------------------------------------------------------------------------
@@ -783,6 +379,7 @@ let state: ToolState = {
   tool: 'pen',
   activeSubToolId: initialSub ? initialSub.id : 'g-pen',
   brush: initialSub ? mergeBrush(initialSub, '#000000') : { ...DEFAULT_BRUSH },
+  tablet: loadTabletSettings(),
   propertiesOpen: true,
   visibleProperties: loadVisibleProps(),
   previewBgMode: 'paper',
@@ -797,6 +394,7 @@ let state: ToolState = {
   colorHistory: DEFAULT_HISTORY,
   colorSets: initialSets,
   activeColorSetId: initialSets[0]?.id ?? 'csp-standard',
+  selectionCombineMode: 'replace',
 };
 
 const listeners = new Set<(s: ToolState) => void>();
@@ -891,6 +489,12 @@ export function setPreviewBgMode(mode: PreviewBgMode): void {
   emit();
 }
 
+export function setSelectionCombineMode(mode: SelectionCombineMode): void {
+  if (state.selectionCombineMode === mode) return;
+  state = { ...state, selectionCombineMode: mode };
+  emit();
+}
+
 export function setColorTab(tab: ColorTabId): void {
   if (state.colorTab === tab) return;
   state = { ...state, colorTab: tab };
@@ -957,6 +561,36 @@ export function setBrushSettings(patch: Partial<BrushSettings>): void {
     }
     addColorToHistory(patch.color);
   }
+  emit();
+}
+
+// ---------------------------------------------------------------------------
+// Tablet settings (device level, shared by every tool)
+// ---------------------------------------------------------------------------
+
+export function getTabletSettings(): TabletSettings {
+  return state.tablet;
+}
+
+export function setTabletSettings(patch: Partial<TabletSettings>): void {
+  const next: TabletSettings = {
+    pressure: { ...state.tablet.pressure, ...(patch.pressure ?? {}) },
+    tiltEnabled: patch.tiltEnabled ?? state.tablet.tiltEnabled,
+    tiltAmount:
+      patch.tiltAmount !== undefined
+        ? Math.min(1, Math.max(0, patch.tiltAmount))
+        : state.tablet.tiltAmount,
+  };
+  if (
+    next.pressure.mode === state.tablet.pressure.mode &&
+    next.pressure.gamma === state.tablet.pressure.gamma &&
+    next.tiltEnabled === state.tablet.tiltEnabled &&
+    next.tiltAmount === state.tablet.tiltAmount
+  ) {
+    return;
+  }
+  state = { ...state, tablet: next };
+  persistTabletSettings(next);
   emit();
 }
 
@@ -1136,138 +770,6 @@ export function addColorToHistory(hex: string): void {
   const normalized = hex.toLowerCase();
   const filtered = state.colorHistory.filter((c) => c.toLowerCase() !== normalized);
   state.colorHistory = [normalized, ...filtered].slice(0, 16);
-}
-
-export function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const clean = hex.replace('#', '').trim();
-  if (clean.length !== 6) return { r: 17, g: 17, b: 17 };
-  const n = parseInt(clean, 16);
-  if (Number.isNaN(n)) return { r: 17, g: 17, b: 17 };
-  return {
-    r: (n >> 16) & 255,
-    g: (n >> 8) & 255,
-    b: n & 255,
-  };
-}
-
-export function rgbToHex(r: number, g: number, b: number): string {
-  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-  return (
-    '#' +
-    [clamp(r), clamp(g), clamp(b)].map((c) => c.toString(16).padStart(2, '0')).join('')
-  );
-}
-
-export function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
-  const rn = r / 255;
-  const gn = g / 255;
-  const bn = b / 255;
-  const max = Math.max(rn, gn, bn);
-  const min = Math.min(rn, gn, bn);
-  const d = max - min;
-  let h = 0;
-  const s = max === 0 ? 0 : d / max;
-  const v = max;
-
-  if (max !== min) {
-    switch (max) {
-      case rn:
-        h = (gn - bn) / d + (gn < bn ? 6 : 0);
-        break;
-      case gn:
-        h = (bn - rn) / d + 2;
-        break;
-      default:
-        h = (rn - gn) / d + 4;
-        break;
-    }
-    h *= 60;
-  }
-  return { h, s, v };
-}
-
-export function hsvToRgb(h: number, s: number, v: number): { r: number; g: number; b: number } {
-  const hn = ((h % 360) + 360) % 360;
-  const c = v * s;
-  const x = c * (1 - Math.abs(((hn / 60) % 2) - 1));
-  const m = v - c;
-  let r1 = 0;
-  let g1 = 0;
-  let b1 = 0;
-  if (hn < 60) [r1, g1, b1] = [c, x, 0];
-  else if (hn < 120) [r1, g1, b1] = [x, c, 0];
-  else if (hn < 180) [r1, g1, b1] = [0, c, x];
-  else if (hn < 240) [r1, g1, b1] = [0, x, c];
-  else if (hn < 300) [r1, g1, b1] = [x, 0, c];
-  else [r1, g1, b1] = [c, 0, x];
-
-  return {
-    r: Math.round((r1 + m) * 255),
-    g: Math.round((g1 + m) * 255),
-    b: Math.round((b1 + m) * 255),
-  };
-}
-
-export function hsvToHex(h: number, s: number, v: number): string {
-  const { r, g, b } = hsvToRgb(h, s, v);
-  return rgbToHex(r, g, b);
-}
-
-export interface ColorHarmonyGroup {
-  label: string;
-  colors: { hex: string; tag: string }[];
-}
-
-export function computeColorHarmonies(baseHex: string): ColorHarmonyGroup[] {
-  const { r, g, b } = hexToRgb(baseHex);
-  const { h, s, v } = rgbToHsv(r, g, b);
-  // Ensure minimum saturation/value for chromatic harmonies even if base is near-black/white
-  const effS = s < 0.12 ? 0.68 : s;
-  const effV = v < 0.18 ? 0.78 : v;
-
-  return [
-    {
-      label: 'Complementario (Contraste Directo)',
-      colors: [
-        { hex: baseHex, tag: 'Base' },
-        { hex: hsvToHex(h + 180, effS, effV), tag: '180° Opuesto' },
-      ],
-    },
-    {
-      label: 'Complementario Dividido',
-      colors: [
-        { hex: baseHex, tag: 'Base' },
-        { hex: hsvToHex(h + 150, effS, effV), tag: '+150°' },
-        { hex: hsvToHex(h + 210, effS, effV), tag: '+210°' },
-      ],
-    },
-    {
-      label: 'Tríada Armónica',
-      colors: [
-        { hex: baseHex, tag: 'Base' },
-        { hex: hsvToHex(h + 120, effS, effV), tag: '+120°' },
-        { hex: hsvToHex(h + 240, effS, effV), tag: '+240°' },
-      ],
-    },
-    {
-      label: 'Análogos (Cercanos)',
-      colors: [
-        { hex: hsvToHex(h - 30, effS, effV), tag: '-30°' },
-        { hex: baseHex, tag: 'Base' },
-        { hex: hsvToHex(h + 30, effS, effV), tag: '+30°' },
-      ],
-    },
-    {
-      label: 'Escala de Luz y Sombra (Cel Shading)',
-      colors: [
-        { hex: hsvToHex(h + 8, Math.max(0.15, effS * 0.45), Math.min(1, effV * 1.25)), tag: 'Luz+' },
-        { hex: hsvToHex(h + 4, Math.max(0.25, effS * 0.75), Math.min(1, effV * 1.12)), tag: 'Luz' },
-        { hex: baseHex, tag: 'Base' },
-        { hex: hsvToHex(h - 8, Math.min(1, effS * 1.1), Math.max(0.12, effV * 0.75)), tag: 'Sombra 1' },
-        { hex: hsvToHex(h - 16, Math.min(1, effS * 1.2), Math.max(0.08, effV * 0.5)), tag: 'Sombra 2' },
-      ],
-    },
-  ];
 }
 
 export function toggleProperties(force?: boolean): void {

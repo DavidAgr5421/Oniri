@@ -2,16 +2,17 @@ import type {
   AntiAliasingLevel,
   BoneToolMode,
   BrushPropKey,
-  ColorTabId,
-  PreviewBgMode,
+  PaperTextureId,
+  PressureCurveMode,
+  SelectionCombineMode,
   ShapeFillMode,
   ShapeType,
-  SubTool,
   TipShape,
   ToolId,
   ToolState,
 } from './toolState';
 import {
+  getTabletSettings,
   getToolState,
   getSubToolsForTool,
   getActiveSubTool,
@@ -24,29 +25,21 @@ import {
   setAutoKeyBones,
   setBoneToolMode,
   setBrushSettings,
-  setPrimaryColor,
-  setSecondaryColor,
+  setSelectionCombineMode,
   setShowBonesOverlay,
+  setTabletSettings,
   setTool,
   subscribeTools,
   swapColors,
   toggleProperties,
   toggleTransparentColor,
-  toggleVisibleProperty,
-  setPreviewBgMode,
-  setColorTab,
-  setActiveColorSet,
-  addColorToActiveSet,
-  removeColorFromActiveSet,
-  hexToRgb,
-  rgbToHex,
-  rgbToHsv,
-  hsvToHex,
-  computeColorHarmonies,
 } from './toolState';
+import { GAMMA_MAX, GAMMA_MIN, gammaForMode } from '../brush/pressureResponse';
 import type { TimelineManager } from '../animation/timelineManager';
-import { brushDiameterAt, brushStampAlpha } from '../brush/brushEngine';
-import { getStampTexture } from '../brush/stampTexture';
+import { selectionModel } from '../selection/selectionModel';
+import { createBrushPreview } from './brushPreview';
+import { createColorPickerSection } from './colorPickerView';
+import { createCustomScrollContainer } from './customScrollbar';
 
 interface ToolDef {
   id: ToolId;
@@ -56,6 +49,12 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
+  {
+    id: 'select',
+    label: 'Área de Selección',
+    shortcut: 'M',
+    icon: '<rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 3"/>',
+  },
   {
     id: 'pen',
     label: 'Pluma',
@@ -67,6 +66,12 @@ const TOOLS: ToolDef[] = [
     label: 'Pincel',
     shortcut: 'B',
     icon: '<path d="M4 20l3-1 11-11a2 2 0 0 0-3-3L4 16z" fill="currentColor"/><circle cx="18" cy="6" r="1.5" fill="currentColor"/>',
+  },
+  {
+    id: 'effect',
+    label: 'Decoración / Efectos',
+    shortcut: 'D',
+    icon: '<path d="M12 2l2.4 5.6L20 10l-4.2 4.1 1 5.9-4.8-3-4.8 3 1-5.9L4 10l5.6-2.4z" fill="currentColor"/><path d="M19 2l.9 2.1L22 5l-1.6 1.5.4 2.2-1.8-1.1-1.8 1.1.4-2.2L16 5l2.1-.9z" fill="currentColor"/>',
   },
   {
     id: 'eraser',
@@ -106,629 +111,22 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
+import {
+  openSubToolDetailModal,
+  TIP_SHAPES,
+  AA_LEVELS,
+  PAPER_TEXTURES,
+} from './subToolDetailModal';
+
 const QUICK_SIZES = [3, 5, 8, 12, 18, 28, 45, 70];
-
-const TIP_SHAPES: { id: TipShape; label: string }[] = [
-  { id: 'circle', label: 'Círculo' },
-  { id: 'square', label: 'Plano' },
-  { id: 'calligraphic', label: 'Caligráfico' },
-];
-
-const AA_LEVELS: { id: AntiAliasingLevel; label: string }[] = [
-  { id: 'none', label: 'Ninguno' },
-  { id: 'weak', label: 'Débil' },
-  { id: 'medium', label: 'Medio' },
-  { id: 'strong', label: 'Fuerte' },
-];
 
 export interface ToolsViewOptions {
   onUndo?: () => void;
   onRedo?: () => void;
+  onFillSelection?: () => void;
+  onClearSelection?: () => void;
+  onTransform?: () => void;
   timeline?: TimelineManager;
-}
-
-// ---------------------------------------------------------------------------
-// Reusable Custom Draggable Scrollbar Container (Clip Studio Paint Style)
-// ---------------------------------------------------------------------------
-interface CustomScrollContainer {
-  wrap: HTMLDivElement;
-  list: HTMLDivElement;
-  scrollbar: HTMLDivElement;
-  thumb: HTMLDivElement;
-  update: () => void;
-}
-
-function createCustomScrollContainer(extraWrapClass = ''): CustomScrollContainer {
-  const wrap = document.createElement('div');
-  wrap.className = `csp-scroll-wrap ${extraWrapClass}`;
-
-  const list = document.createElement('div');
-  list.className = 'csp-scroll-list';
-
-  const scrollbar = document.createElement('div');
-  scrollbar.className = 'csp-custom-scrollbar';
-
-  const thumb = document.createElement('div');
-  thumb.className = 'csp-custom-scroll-thumb';
-  scrollbar.appendChild(thumb);
-
-  wrap.append(list, scrollbar);
-
-  const update = (): void => {
-    const clientH = list.clientHeight;
-    const scrollH = list.scrollHeight;
-    const scrollT = list.scrollTop;
-
-    if (scrollH <= clientH + 2) {
-      scrollbar.classList.add('hidden');
-      return;
-    }
-    scrollbar.classList.remove('hidden');
-
-    const thumbH = Math.max(20, (clientH / scrollH) * clientH);
-    const maxScroll = scrollH - clientH;
-    const maxTop = clientH - thumbH;
-    const top = maxScroll > 0 ? (scrollT / maxScroll) * maxTop : 0;
-
-    thumb.style.height = `${Math.round(thumbH)}px`;
-    thumb.style.transform = `translateY(${Math.round(top)}px)`;
-  };
-
-  list.addEventListener('scroll', update, { passive: true });
-
-  let isDragging = false;
-  let dragStartY = 0;
-  let dragStartScrollTop = 0;
-
-  thumb.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    isDragging = true;
-    dragStartY = e.clientY;
-    dragStartScrollTop = list.scrollTop;
-    thumb.classList.add('dragging');
-    thumb.setPointerCapture(e.pointerId);
-  });
-
-  thumb.addEventListener('pointermove', (e) => {
-    if (!isDragging) return;
-    const dy = e.clientY - dragStartY;
-    const clientH = list.clientHeight;
-    const scrollH = list.scrollHeight;
-    const thumbH = Math.max(20, (clientH / scrollH) * clientH);
-    const maxScroll = scrollH - clientH;
-    const maxTop = clientH - thumbH;
-    if (maxTop > 0) {
-      list.scrollTop = dragStartScrollTop + (dy / maxTop) * maxScroll;
-    }
-  });
-
-  const stopDrag = (e: PointerEvent) => {
-    if (!isDragging) return;
-    isDragging = false;
-    thumb.classList.remove('dragging');
-    try {
-      thumb.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  };
-  thumb.addEventListener('pointerup', stopDrag);
-  thumb.addEventListener('pointercancel', stopDrag);
-
-  scrollbar.addEventListener('pointerdown', (e) => {
-    if (e.target === thumb) return;
-    const rect = scrollbar.getBoundingClientRect();
-    const clickY = e.clientY - rect.top;
-    const clientH = list.clientHeight;
-    const scrollH = list.scrollHeight;
-    const targetRatio = Math.max(0, Math.min(1, clickY / clientH));
-    list.scrollTop = targetRatio * (scrollH - clientH);
-  });
-
-  return { wrap, list, scrollbar, thumb, update };
-}
-
-// ---------------------------------------------------------------------------
-// Sub Tool Detail Modal (Clip Studio Paint Wrench Window)
-// ---------------------------------------------------------------------------
-let activeDetailModal: HTMLElement | null = null;
-
-function closeSubToolDetailModal(): void {
-  if (activeDetailModal) {
-    activeDetailModal.remove();
-    activeDetailModal = null;
-  }
-}
-
-function openSubToolDetailModal(subTool: SubTool): void {
-  closeSubToolDetailModal();
-
-  const backdrop = document.createElement('div');
-  backdrop.className = 'csp-modal-backdrop';
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) closeSubToolDetailModal();
-  });
-
-  const win = document.createElement('div');
-  win.className = 'csp-subtool-detail-window';
-
-  // Window Header
-  const header = document.createElement('div');
-  header.className = 'csp-subtool-detail-header';
-  header.innerHTML = `
-    <div style="display:flex;align-items:center;gap:6px;">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-      </svg>
-      <span>Detalle de subherramienta — <strong>${subTool.name}</strong></span>
-    </div>
-    <button class="csp-subtool-action-btn" id="csp-detail-close" title="Cerrar (Esc)">✕</button>
-  `;
-  header.querySelector('#csp-detail-close')?.addEventListener('click', closeSubToolDetailModal);
-  win.appendChild(header);
-
-  // Window Body
-  const body = document.createElement('div');
-  body.className = 'csp-subtool-detail-body';
-
-  const catsCol = document.createElement('div');
-  catsCol.className = 'csp-subtool-detail-cats';
-
-  const contentCol = document.createElement('div');
-  contentCol.className = 'csp-subtool-detail-content';
-
-  type CatId = 'size' | 'ink' | 'smooth' | 'tip' | 'stroke' | 'taper' | 'correction';
-  const categories: { id: CatId; label: string }[] = [
-    { id: 'size', label: 'Tamaño del pincel' },
-    { id: 'ink', label: 'Tinta' },
-    { id: 'smooth', label: 'Suavizado' },
-    { id: 'tip', label: 'Punta del pincel' },
-    { id: 'stroke', label: 'Trazo' },
-    { id: 'taper', label: 'Inicio y fin' },
-    { id: 'correction', label: 'Corrección' },
-  ];
-
-  let activeCat: CatId = 'size';
-  const catButtons = new Map<CatId, HTMLButtonElement>();
-
-  function makeEyeButton(propKey: BrushPropKey): HTMLButtonElement {
-    const btn = document.createElement('button');
-    btn.className = 'csp-eye-pin-btn';
-    const isPinned = getToolState().visibleProperties.includes(propKey);
-    btn.classList.toggle('pinned', isPinned);
-    btn.title = isPinned
-      ? 'Visible en la barra lateral. Haz clic para ocultar.'
-      : 'Oculto de la barra lateral. Haz clic para fijar (👁).';
-    btn.innerHTML = `<span style="font-size:12px;">${isPinned ? '👁' : '◦'}</span>`;
-    btn.addEventListener('click', () => {
-      toggleVisibleProperty(propKey);
-      const nextPinned = getToolState().visibleProperties.includes(propKey);
-      btn.classList.toggle('pinned', nextPinned);
-      btn.title = nextPinned
-        ? 'Visible en la barra lateral. Haz clic para ocultar.'
-        : 'Oculto de la barra lateral. Haz clic para fijar (👁).';
-      btn.innerHTML = `<span style="font-size:12px;">${nextPinned ? '👁' : '◦'}</span>`;
-    });
-    return btn;
-  }
-
-  function renderCategory(cat: CatId): void {
-    contentCol.innerHTML = '';
-    const st = getToolState();
-    const b = st.brush;
-
-    if (cat === 'size') {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('size');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Tamaño del pincel</span>
-          <span class="prop-value" id="dt-size-val">${Math.round(b.size)} px</span>
-        </div>
-      `;
-      const slider1 = document.createElement('input');
-      slider1.type = 'range';
-      slider1.className = 'csp-slider';
-      slider1.min = '1';
-      slider1.max = '200';
-      slider1.value = String(Math.round(b.size));
-      slider1.addEventListener('input', () => {
-        setBrushSettings({ size: Number(slider1.value) });
-        const valNode = main1.querySelector('#dt-size-val');
-        if (valNode) valNode.textContent = `${slider1.value} px`;
-      });
-      main1.appendChild(slider1);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-
-      const row2 = document.createElement('div');
-      row2.className = 'csp-detail-prop-row';
-      const eye2 = makeEyeButton('pressureSize');
-      const main2 = document.createElement('div');
-      main2.className = 'csp-detail-prop-main';
-      main2.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Tamaño mínimo por presión</span>
-          <span class="prop-value" id="dt-psize-val">${Math.round(b.minSizeRatio * 100)}%</span>
-        </div>
-      `;
-      const chkWrap = document.createElement('div');
-      chkWrap.className = 'csp-toggle-row';
-      const chk = document.createElement('input');
-      chk.type = 'checkbox';
-      chk.className = 'csp-checkbox';
-      chk.id = 'dt-psize-chk';
-      chk.checked = b.pressureSize;
-      const chkLbl = document.createElement('label');
-      chkLbl.className = 'csp-check-label';
-      chkLbl.htmlFor = 'dt-psize-chk';
-      chkLbl.textContent = 'Activar variación de tamaño por presión';
-      chkWrap.append(chk, chkLbl);
-
-      const slider2 = document.createElement('input');
-      slider2.type = 'range';
-      slider2.className = 'csp-slider';
-      slider2.min = '0';
-      slider2.max = '100';
-      slider2.value = String(Math.round(b.minSizeRatio * 100));
-      slider2.disabled = !b.pressureSize;
-
-      chk.addEventListener('change', () => {
-        setBrushSettings({ pressureSize: chk.checked });
-        slider2.disabled = !chk.checked;
-      });
-      slider2.addEventListener('input', () => {
-        setBrushSettings({ minSizeRatio: Number(slider2.value) / 100 });
-        const valNode = main2.querySelector('#dt-psize-val');
-        if (valNode) valNode.textContent = `${slider2.value}%`;
-      });
-      main2.append(chkWrap, slider2);
-      row2.append(eye2, main2);
-      contentCol.appendChild(row2);
-    } else if (cat === 'ink') {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('opacity');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Opacidad general</span>
-          <span class="prop-value" id="dt-op-val">${Math.round(b.opacity * 100)}%</span>
-        </div>
-      `;
-      const slider1 = document.createElement('input');
-      slider1.type = 'range';
-      slider1.className = 'csp-slider';
-      slider1.min = '1';
-      slider1.max = '100';
-      slider1.value = String(Math.round(b.opacity * 100));
-      slider1.addEventListener('input', () => {
-        setBrushSettings({ opacity: Number(slider1.value) / 100 });
-        const val = main1.querySelector('#dt-op-val');
-        if (val) val.textContent = `${slider1.value}%`;
-      });
-      main1.appendChild(slider1);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-
-      const row2 = document.createElement('div');
-      row2.className = 'csp-detail-prop-row';
-      const eye2 = makeEyeButton('flow');
-      const main2 = document.createElement('div');
-      main2.className = 'csp-detail-prop-main';
-      main2.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Densidad de pintura / Flujo</span>
-          <span class="prop-value" id="dt-fl-val">${Math.round(b.flow * 100)}%</span>
-        </div>
-      `;
-      const slider2 = document.createElement('input');
-      slider2.type = 'range';
-      slider2.className = 'csp-slider';
-      slider2.min = '1';
-      slider2.max = '100';
-      slider2.value = String(Math.round(b.flow * 100));
-      slider2.addEventListener('input', () => {
-        setBrushSettings({ flow: Number(slider2.value) / 100 });
-        const val = main2.querySelector('#dt-fl-val');
-        if (val) val.textContent = `${slider2.value}%`;
-      });
-
-      const chkWrap2 = document.createElement('div');
-      chkWrap2.className = 'csp-toggle-row';
-      const chk2 = document.createElement('input');
-      chk2.type = 'checkbox';
-      chk2.className = 'csp-checkbox';
-      chk2.id = 'dt-fl-chk';
-      chk2.checked = b.pressureFlow;
-      const chkLbl2 = document.createElement('label');
-      chkLbl2.className = 'csp-check-label';
-      chkLbl2.htmlFor = 'dt-fl-chk';
-      chkLbl2.textContent = 'Densidad según presión de pluma';
-      chkWrap2.append(chk2, chkLbl2);
-      chk2.addEventListener('change', () => {
-        setBrushSettings({ pressureFlow: chk2.checked });
-      });
-
-      main2.append(slider2, chkWrap2);
-      row2.append(eye2, main2);
-      contentCol.appendChild(row2);
-    } else if (cat === 'smooth') {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('stabilization');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Estabilización de trazo</span>
-          <span class="prop-value" id="dt-st-val">${Math.round(b.stabilization)}</span>
-        </div>
-      `;
-      const slider1 = document.createElement('input');
-      slider1.type = 'range';
-      slider1.className = 'csp-slider';
-      slider1.min = '0';
-      slider1.max = '10';
-      slider1.value = String(Math.round(b.stabilization));
-      slider1.addEventListener('input', () => {
-        setBrushSettings({ stabilization: Number(slider1.value) });
-        const val = main1.querySelector('#dt-st-val');
-        if (val) val.textContent = slider1.value;
-      });
-      main1.appendChild(slider1);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-
-      const row2 = document.createElement('div');
-      row2.className = 'csp-detail-prop-row';
-      const eye2 = makeEyeButton('antiAliasing');
-      const main2 = document.createElement('div');
-      main2.className = 'csp-detail-prop-main';
-      main2.innerHTML = `<span class="prop-label">Suavizado (Anti-Aliasing)</span>`;
-      const aaGroup = document.createElement('div');
-      aaGroup.className = 'csp-seg-group';
-      for (const aa of AA_LEVELS) {
-        const btn = document.createElement('button');
-        btn.className = `csp-seg-btn${b.antiAliasing === aa.id ? ' active' : ''}`;
-        btn.textContent = aa.label;
-        btn.addEventListener('click', () => {
-          setBrushSettings({ antiAliasing: aa.id });
-          renderCategory('smooth');
-        });
-        aaGroup.appendChild(btn);
-      }
-      main2.appendChild(aaGroup);
-      row2.append(eye2, main2);
-      contentCol.appendChild(row2);
-    } else if (cat === 'tip') {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('tipShape');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `<span class="prop-label">Forma de la punta</span>`;
-      const tipGroup = document.createElement('div');
-      tipGroup.className = 'csp-seg-group';
-      for (const ts of TIP_SHAPES) {
-        const btn = document.createElement('button');
-        btn.className = `csp-seg-btn${b.tipShape === ts.id ? ' active' : ''}`;
-        btn.textContent = ts.label;
-        btn.addEventListener('click', () => {
-          setBrushSettings({ tipShape: ts.id });
-          renderCategory('tip');
-        });
-        tipGroup.appendChild(btn);
-      }
-      main1.appendChild(tipGroup);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-
-      const row2 = document.createElement('div');
-      row2.className = 'csp-detail-prop-row';
-      const eye2 = makeEyeButton('roundness');
-      const main2 = document.createElement('div');
-      main2.className = 'csp-detail-prop-main';
-      main2.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Achatamiento / Redondez</span>
-          <span class="prop-value" id="dt-rn-val">${Math.round(b.tipRoundness * 100)}%</span>
-        </div>
-      `;
-      const slider2 = document.createElement('input');
-      slider2.type = 'range';
-      slider2.className = 'csp-slider';
-      slider2.min = '10';
-      slider2.max = '100';
-      slider2.value = String(Math.round(b.tipRoundness * 100));
-      slider2.addEventListener('input', () => {
-        setBrushSettings({ tipRoundness: Number(slider2.value) / 100 });
-        const val = main2.querySelector('#dt-rn-val');
-        if (val) val.textContent = `${slider2.value}%`;
-      });
-      main2.appendChild(slider2);
-      row2.append(eye2, main2);
-      contentCol.appendChild(row2);
-
-      const row3 = document.createElement('div');
-      row3.className = 'csp-detail-prop-row';
-      const eye3 = makeEyeButton('angle');
-      const main3 = document.createElement('div');
-      main3.className = 'csp-detail-prop-main';
-      main3.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Ángulo de inclinación</span>
-          <span class="prop-value" id="dt-an-val">${Math.round(b.tipAngle)}°</span>
-        </div>
-      `;
-      const slider3 = document.createElement('input');
-      slider3.type = 'range';
-      slider3.className = 'csp-slider';
-      slider3.min = '0';
-      slider3.max = '180';
-      slider3.value = String(Math.round(b.tipAngle));
-      slider3.addEventListener('input', () => {
-        setBrushSettings({ tipAngle: Number(slider3.value) });
-        const val = main3.querySelector('#dt-an-val');
-        if (val) val.textContent = `${slider3.value}°`;
-      });
-      main3.appendChild(slider3);
-      row3.append(eye3, main3);
-      contentCol.appendChild(row3);
-    } else if (cat === 'stroke') {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('spacing');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Intervalo entre estampas (Espaciado)</span>
-          <span class="prop-value" id="dt-sp-val">${Math.round(b.spacing * 100)}%</span>
-        </div>
-      `;
-      const slider1 = document.createElement('input');
-      slider1.type = 'range';
-      slider1.className = 'csp-slider';
-      slider1.min = '3';
-      slider1.max = '50';
-      slider1.value = String(Math.round(b.spacing * 100));
-      slider1.addEventListener('input', () => {
-        setBrushSettings({ spacing: Number(slider1.value) / 100 });
-        const val = main1.querySelector('#dt-sp-val');
-        if (val) val.textContent = `${slider1.value}%`;
-      });
-      main1.appendChild(slider1);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-    } else if (cat === 'taper') {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('taper');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Afinado de inicio (Entrada)</span>
-          <span class="prop-value" id="dt-tps-val">${Math.round(b.taperStart)} px</span>
-        </div>
-      `;
-      const slider1 = document.createElement('input');
-      slider1.type = 'range';
-      slider1.className = 'csp-slider';
-      slider1.min = '0';
-      slider1.max = '60';
-      slider1.value = String(Math.round(b.taperStart));
-      slider1.addEventListener('input', () => {
-        setBrushSettings({ taperStart: Number(slider1.value) });
-        const val = main1.querySelector('#dt-tps-val');
-        if (val) val.textContent = `${slider1.value} px`;
-      });
-
-      const header2 = document.createElement('div');
-      header2.className = 'prop-row-header';
-      header2.style.marginTop = '6px';
-      header2.innerHTML = `
-        <span class="prop-label">Afinado de fin (Salida)</span>
-        <span class="prop-value" id="dt-tpe-val">${Math.round(b.taperEnd)} px</span>
-      `;
-      const slider2 = document.createElement('input');
-      slider2.type = 'range';
-      slider2.className = 'csp-slider';
-      slider2.min = '0';
-      slider2.max = '80';
-      slider2.value = String(Math.round(b.taperEnd));
-      slider2.addEventListener('input', () => {
-        setBrushSettings({ taperEnd: Number(slider2.value) });
-        const val = header2.querySelector('#dt-tpe-val');
-        if (val) val.textContent = `${slider2.value} px`;
-      });
-
-      main1.append(slider1, header2, slider2);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-    } else {
-      const row1 = document.createElement('div');
-      row1.className = 'csp-detail-prop-row';
-      const eye1 = makeEyeButton('hardness');
-      const main1 = document.createElement('div');
-      main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `
-        <div class="prop-row-header">
-          <span class="prop-label">Dureza de punta</span>
-          <span class="prop-value" id="dt-hd-val">${Math.round(b.hardness * 100)}%</span>
-        </div>
-      `;
-      const slider1 = document.createElement('input');
-      slider1.type = 'range';
-      slider1.className = 'csp-slider';
-      slider1.min = '10';
-      slider1.max = '100';
-      slider1.value = String(Math.round(b.hardness * 100));
-      slider1.addEventListener('input', () => {
-        setBrushSettings({ hardness: Number(slider1.value) / 100 });
-        const val = main1.querySelector('#dt-hd-val');
-        if (val) val.textContent = `${slider1.value}%`;
-      });
-      main1.appendChild(slider1);
-      row1.append(eye1, main1);
-      contentCol.appendChild(row1);
-    }
-  }
-
-  for (const c of categories) {
-    const btn = document.createElement('button');
-    btn.className = `csp-detail-cat-btn${c.id === activeCat ? ' active' : ''}`;
-    btn.textContent = c.label;
-    btn.addEventListener('click', () => {
-      activeCat = c.id;
-      for (const [id, b] of catButtons) {
-        b.classList.toggle('active', id === activeCat);
-      }
-      renderCategory(activeCat);
-    });
-    catsCol.appendChild(btn);
-    catButtons.set(c.id, btn);
-  }
-
-  body.append(catsCol, contentCol);
-  win.appendChild(body);
-
-  const footer = document.createElement('div');
-  footer.className = 'csp-subtool-detail-footer';
-  footer.innerHTML = `
-    <button class="csp-seg-btn" id="dt-reset-btn" style="padding:4px 8px;">↺ Ajustes de fábrica</button>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <span style="font-size:10px;color:#8c95a4;">👁 Haz clic en el ojo para fijar al panel lateral</span>
-      <button class="csp-seg-btn active" id="dt-ok-btn" style="padding:4px 12px;font-weight:600;">Cerrar</button>
-    </div>
-  `;
-  footer.querySelector('#dt-reset-btn')?.addEventListener('click', () => {
-    resetSubTool(subTool.id);
-    renderCategory(activeCat);
-  });
-  footer.querySelector('#dt-ok-btn')?.addEventListener('click', closeSubToolDetailModal);
-  win.appendChild(footer);
-
-  backdrop.appendChild(win);
-  document.body.appendChild(backdrop);
-  activeDetailModal = backdrop;
-
-  renderCategory('size');
-
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      closeSubToolDetailModal();
-      window.removeEventListener('keydown', onKey);
-    }
-  };
-  window.addEventListener('keydown', onKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -859,6 +257,10 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const dock = document.createElement('div');
   dock.className = 'csp-sidebar-dock';
 
+  // Section 3 Color Picker Component
+  const colorPickerComp = createColorPickerSection();
+  const colorSection = colorPickerComp.section;
+
   // Load saved dock inner width (default 240px)
   const savedDockWidth = localStorage.getItem('oniri.dock.width');
   let currentDockInnerW = savedDockWidth ? Math.max(220, Math.min(480, Number(savedDockWidth))) : 240;
@@ -892,7 +294,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     localStorage.setItem('oniri.dock.width', String(currentDockInnerW));
     subtoolScroll.update();
     propScroll.update();
-    colorScroll.update();
+    colorPickerComp.scroll.update();
   });
 
   const stopDockWDrag = (e: PointerEvent) => {
@@ -1098,149 +500,10 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   }
 
   // 0. Stroke Preview with distinct high-contrast background modes
-  const PREVIEW_W = 210;
-  const PREVIEW_H = 62;
-  const previewDpr = Math.min(2, window.devicePixelRatio || 1);
-
-  const previewBox = document.createElement('div');
-  previewBox.className = 'prop-row-box ink-only';
-  previewBox.style.display = 'none';
-
-  const previewWrap = document.createElement('div');
-  previewWrap.className = 'csp-preview-wrap';
-
-  const previewCanvas = document.createElement('canvas');
-  previewCanvas.className = 'csp-preview-canvas bg-paper';
-  previewCanvas.width = Math.round(PREVIEW_W * previewDpr);
-  previewCanvas.height = Math.round(PREVIEW_H * previewDpr);
-  previewCanvas.title = 'Visión del pincel (Trazo dinámico con respuesta a presión)';
-  previewWrap.appendChild(previewCanvas);
-
-  const previewOverlayBar = document.createElement('div');
-  previewOverlayBar.className = 'csp-preview-overlay-bar';
-
-  const previewBgBtn = document.createElement('button');
-  previewBgBtn.className = 'csp-preview-mini-btn';
-  previewBgBtn.innerHTML = `<span>◐</span><span id="preview-bg-name">Papel</span>`;
-  previewBgBtn.title = 'Cambiar fondo de vista previa (Papel / Damero / Oscuro)';
-  previewBgBtn.addEventListener('click', () => {
-    const cur = getToolState().previewBgMode;
-    const next: PreviewBgMode = cur === 'paper' ? 'checker' : cur === 'checker' ? 'dark' : 'paper';
-    setPreviewBgMode(next);
-  });
-  previewOverlayBar.appendChild(previewBgBtn);
-  previewWrap.appendChild(previewOverlayBar);
-  previewBox.appendChild(previewWrap);
+  const brushPreview = createBrushPreview();
+  const previewBox = brushPreview.element;
+  const queuePreview = brushPreview.update;
   propBody.appendChild(previewBox);
-
-  const drawStrokePreview = (): void => {
-    const ctx = previewCanvas.getContext('2d');
-    if (!ctx) return;
-    const st = getToolState();
-    const b = st.brush;
-    const mode = st.previewBgMode;
-
-    previewCanvas.className = `csp-preview-canvas bg-${mode}`;
-    const bgName = previewBox.querySelector('#preview-bg-name');
-    if (bgName) {
-      bgName.textContent = mode === 'paper' ? 'Papel' : mode === 'checker' ? 'Damero' : 'Oscuro';
-    }
-
-    ctx.setTransform(previewDpr, 0, 0, previewDpr, 0, 0);
-    ctx.clearRect(0, 0, PREVIEW_W, PREVIEW_H);
-
-    let renderColor = !b.color || b.color === 'transparent' ? '#111111' : b.color;
-    if (mode === 'dark') {
-      const rgb = hexToRgb(renderColor);
-      const luminance = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
-      if (luminance < 65) {
-        renderColor = '#f3f4f6';
-      }
-    }
-
-    const pad = 12;
-    const midY = PREVIEW_H / 2;
-    const amp = PREVIEW_H / 2 - pad;
-    const pathWidth = PREVIEW_W - pad * 2;
-    const fit = Math.min(1, 30 / Math.max(1, b.size));
-    const spacing = Math.min(0.5, Math.max(0.03, b.spacing));
-
-    const N = 120;
-    const pathX: number[] = [];
-    const pathY: number[] = [];
-    const pathArc: number[] = [0];
-    for (let i = 0; i <= N; i++) {
-      const t = i / N;
-      const x = pad + t * pathWidth;
-      const y = midY + Math.sin(t * Math.PI * 2) * amp;
-      if (i > 0) {
-        const prev = i - 1;
-        pathArc.push(pathArc[prev] + Math.hypot(x - pathX[prev], y - pathY[prev]));
-      }
-      pathX.push(x);
-      pathY.push(y);
-    }
-    const totalLen = pathArc[N];
-
-    const sampleAt = (arc: number): { x: number; y: number; dx: number; dy: number } => {
-      let i = 1;
-      while (i < N && pathArc[i] < arc) i++;
-      const a0 = pathArc[i - 1];
-      const a1 = pathArc[i];
-      const u = a1 > a0 ? (arc - a0) / (a1 - a0) : 0;
-      return {
-        x: pathX[i - 1] + (pathX[i] - pathX[i - 1]) * u,
-        y: pathY[i - 1] + (pathY[i] - pathY[i - 1]) * u,
-        dx: pathX[i] - pathX[i - 1],
-        dy: pathY[i] - pathY[i - 1],
-      };
-    };
-
-    let pos = 0;
-    let guard = 0;
-    while (pos <= totalLen && guard++ < 3000) {
-      const t = pos / totalLen;
-      const pt = sampleAt(pos);
-      const pressure = 0.25 + 0.75 * Math.pow(Math.sin(Math.PI * t), 0.7);
-      const realDiameter = brushDiameterAt(b, pressure, pos / Math.max(fit, 0.001));
-      const diameter = Math.max(0.4, realDiameter * fit);
-      const alpha = brushStampAlpha(b, pressure);
-      const stamp = getStampTexture({
-        diameter,
-        hardness: b.hardness,
-        color: renderColor,
-        antiAliasing: b.antiAliasing,
-        tipShape: b.tipShape,
-        tipRoundness: b.tipRoundness,
-      });
-      const follows = b.followDirection && b.tipShape !== 'calligraphic';
-      const angleDeg = (follows ? (Math.atan2(pt.dy, pt.dx) * 180) / Math.PI : 0) + b.tipAngle;
-      const symmetric = b.tipShape !== 'square' && b.tipRoundness >= 0.999;
-
-      ctx.globalAlpha = alpha;
-      if (!symmetric && angleDeg !== 0) {
-        ctx.save();
-        ctx.translate(pt.x, pt.y);
-        ctx.rotate((angleDeg * Math.PI) / 180);
-        ctx.drawImage(stamp, -stamp.width / 2, -stamp.height / 2);
-        ctx.restore();
-      } else {
-        ctx.drawImage(stamp, pt.x - stamp.width / 2, pt.y - stamp.height / 2);
-      }
-      pos += Math.max(0.3, diameter * spacing);
-    }
-    ctx.globalAlpha = 1;
-  };
-
-  let previewQueued = false;
-  const queuePreview = (): void => {
-    if (previewQueued) return;
-    previewQueued = true;
-    requestAnimationFrame(() => {
-      previewQueued = false;
-      drawStrokePreview();
-    });
-  };
 
   // 1. Brush Size Box
   const sizeBox = document.createElement('div');
@@ -1458,6 +721,97 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(angleBox);
   inkPropertyBoxes.set('angle', angleBox);
 
+  // 11. Color Mix Box
+  const colorMixBox = document.createElement('div');
+  colorMixBox.className = 'prop-row-box';
+  const colorMixHeader = makePropHeader('Mezcla de color / Acuarela', '0%');
+  const colorMixSlider = makeSlider('0', '100', '1');
+  colorMixSlider.addEventListener('input', () => {
+    setBrushSettings({ colorMix: Number(colorMixSlider.value) / 100 });
+  });
+  colorMixBox.append(colorMixHeader.header, colorMixSlider);
+  propBody.appendChild(colorMixBox);
+  inkPropertyBoxes.set('colorMix', colorMixBox);
+
+  // 12. Paper Texture Box
+  const paperBox = document.createElement('div');
+  paperBox.className = 'prop-row-box';
+  const paperLabel = document.createElement('span');
+  paperLabel.className = 'prop-label';
+  paperLabel.textContent = 'Textura de papel (Grano)';
+  const paperSeg = makeSegGroup<PaperTextureId>(PAPER_TEXTURES, (id) => setBrushSettings({ paperTexture: id }));
+  paperBox.append(paperLabel, paperSeg.group);
+  propBody.appendChild(paperBox);
+  inkPropertyBoxes.set('paperTexture', paperBox);
+
+  // 13. Texture Density Box
+  const densityBox = document.createElement('div');
+  densityBox.className = 'prop-row-box';
+  const densityHeader = makePropHeader('Densidad de textura', '0%');
+  const densitySlider = makeSlider('0', '100', '1');
+  densitySlider.addEventListener('input', () => {
+    setBrushSettings({ textureDensity: Number(densitySlider.value) / 100 });
+  });
+  densityBox.append(densityHeader.header, densitySlider);
+  propBody.appendChild(densityBox);
+  inkPropertyBoxes.set('textureDensity', densityBox);
+
+  // 13b. Tablet device settings (REA study 5.1/5.3): the pressure response and
+  // the nib tilt belong to the tablet, not to a sub tool, so this box is always
+  // visible for ink tools instead of being pinned like the brush properties.
+  const tabletBox = document.createElement('div');
+  tabletBox.className = 'prop-row-box tablet-box';
+  const PRESSURE_MODE_LABELS: Record<PressureCurveMode, string> = {
+    linear: 'Lineal',
+    soft: 'Suave',
+    hard: 'Dura',
+    custom: 'Personalizada',
+  };
+  const tabletHeader = makePropHeader('Respuesta de presión (tableta)', 'Lineal');
+  const pressureSeg = makeSegGroup<PressureCurveMode>(
+    [
+      { id: 'linear', label: 'Lineal' },
+      { id: 'soft', label: 'Suave' },
+      { id: 'hard', label: 'Dura' },
+      { id: 'custom', label: 'A medida' },
+    ],
+    (id) =>
+      setTabletSettings({
+        pressure: { mode: id, gamma: gammaForMode(id, getTabletSettings().pressure.gamma) },
+      }),
+  );
+
+  const gammaHeader = makePropHeader('Sensibilidad de la curva', '1.00');
+  const gammaSlider = makeSlider(String(GAMMA_MIN), String(GAMMA_MAX), '0.05');
+  gammaSlider.addEventListener('input', () => {
+    setTabletSettings({ pressure: { mode: 'custom', gamma: Number(gammaSlider.value) } });
+  });
+
+  const tiltToggle = makeCheckbox('tilt-check', 'Inclinación de tableta (tilt)');
+  const tiltRow = document.createElement('div');
+  tiltRow.className = 'csp-toggle-row';
+  tiltRow.append(tiltToggle.box, tiltToggle.label);
+  tiltToggle.box.addEventListener('change', () => {
+    setTabletSettings({ tiltEnabled: tiltToggle.box.checked });
+  });
+
+  const tiltHeader = makePropHeader('Fuerza de inclinación', '80%');
+  const tiltSlider = makeSlider('0', '100', '1');
+  tiltSlider.addEventListener('input', () => {
+    setTabletSettings({ tiltAmount: Number(tiltSlider.value) / 100 });
+  });
+
+  tabletBox.append(
+    tabletHeader.header,
+    pressureSeg.group,
+    gammaHeader.header,
+    gammaSlider,
+    tiltRow,
+    tiltHeader.header,
+    tiltSlider,
+  );
+  propBody.appendChild(tabletBox);
+
   // Non-ink tools: Bucket tolerance
   const tolBox = document.createElement('div');
   tolBox.className = 'prop-row-box bucket-only';
@@ -1527,6 +881,80 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   }
   shapeBox.appendChild(shapeFillGroup);
   propBody.appendChild(shapeBox);
+
+  // Selection Tool Properties
+  const selectBox = document.createElement('div');
+  selectBox.className = 'prop-row-box select-only';
+  selectBox.style.display = 'none';
+  selectBox.style.flexDirection = 'column';
+  selectBox.style.gap = '8px';
+
+  const selectModeLabel = document.createElement('span');
+  selectModeLabel.className = 'prop-label';
+  selectModeLabel.textContent = 'Modo de Selección';
+  selectBox.appendChild(selectModeLabel);
+
+  const selectModes: { id: SelectionCombineMode; label: string }[] = [
+    { id: 'replace', label: 'Nuevo' },
+    { id: 'add', label: '+ Añadir' },
+    { id: 'subtract', label: '- Restar' },
+  ];
+  const selectModeSeg = makeSegGroup<SelectionCombineMode>(selectModes, (id) => setSelectionCombineMode(id));
+  selectBox.appendChild(selectModeSeg.group);
+
+  const selectActionsLabel = document.createElement('span');
+  selectActionsLabel.className = 'prop-label';
+  selectActionsLabel.style.marginTop = '4px';
+  selectActionsLabel.textContent = 'Operaciones de Selección';
+  selectBox.appendChild(selectActionsLabel);
+
+  const selectActionsGrid = document.createElement('div');
+  selectActionsGrid.style.display = 'grid';
+  selectActionsGrid.style.gridTemplateColumns = '1fr 1fr';
+  selectActionsGrid.style.gap = '4px';
+
+  function createSelActionBtn(text: string, title: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'csp-seg-btn';
+    btn.textContent = text;
+    btn.title = title;
+    btn.style.padding = '5px 4px';
+    btn.style.fontSize = '11px';
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  const deselectBtn = createSelActionBtn('Deseleccionar', 'Deseleccionar todo (Ctrl+D)', () => {
+    selectionModel.clearSelection();
+  });
+  const selectAllBtn = createSelActionBtn('Seleccionar Todo', 'Seleccionar todo el lienzo (Ctrl+A)', () => {
+    selectionModel.selectAll();
+  });
+  const invertBtn = createSelActionBtn('Invertir', 'Invertir selección actual (Ctrl+Shift+I)', () => {
+    selectionModel.invertSelection();
+  });
+  const fillSelBtn = createSelActionBtn('Rellenar', 'Rellenar área seleccionada con el color activo (Alt+Del)', () => {
+    options?.onFillSelection?.();
+  });
+  const clearSelBtn = createSelActionBtn('Borrar', 'Borrar contenido dentro de la selección (Del)', () => {
+    options?.onClearSelection?.();
+  });
+  const transformBtn = createSelActionBtn('Transformar (Ctrl+T)', 'Transformación libre: escalar, rotar, trasladar', () => {
+    options?.onTransform?.();
+  });
+
+  selectActionsGrid.append(deselectBtn, selectAllBtn, invertBtn, fillSelBtn, clearSelBtn, transformBtn);
+  selectBox.appendChild(selectActionsGrid);
+
+  const selectHint = document.createElement('div');
+  selectHint.style.fontSize = '10px';
+  selectHint.style.lineHeight = '1.35';
+  selectHint.style.color = '#9aa0a6';
+  selectHint.style.marginTop = '2px';
+  selectHint.textContent = 'Shift: Añadir a selección. Alt: Restar de selección. Clic para deseleccionar.';
+  selectBox.appendChild(selectHint);
+
+  propBody.appendChild(selectBox);
 
   // Non-ink tools: Bone Rigging & Animation
   const boneBox = document.createElement('div');
@@ -1669,10 +1097,10 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   splitterPropColor.addEventListener('pointermove', (e) => {
     if (!isDraggingSplitter2) return;
     const dy = e.clientY - startSplitter2Y;
-    currentColorH = Math.max(120, Math.min(500, startColorH - dy));
+    const currentColorH = Math.max(120, Math.min(500, startColorH - dy));
     colorSection.style.height = `${currentColorH}px`;
     localStorage.setItem('oniri.color.height', String(currentColorH));
-    colorScroll.update();
+    colorPickerComp.scroll.update();
     propScroll.update();
   });
 
@@ -1690,414 +1118,12 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   splitterPropColor.addEventListener('pointercancel', stopSplitter2);
   dock.appendChild(splitterPropColor);
 
-  // =========================================================================
-  // Section 3: Color Palette (4 Modes: Selector, RGB/HSV, Conjunto, Contraste)
-  // =========================================================================
-  const colorSection = document.createElement('div');
-  colorSection.className = 'dock-section color-section';
-
-  const savedColorH = localStorage.getItem('oniri.color.height');
-  let currentColorH = savedColorH ? Math.max(120, Math.min(500, Number(savedColorH))) : 270;
-  colorSection.style.height = `${currentColorH}px`;
-
-  const colorHeader = document.createElement('div');
-  colorHeader.className = 'dock-section-header';
-  colorHeader.innerHTML = `
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="12" cy="12" r="10"/>
-      <path d="M12 2a10 10 0 0 0 0 20v-4a6 6 0 0 1 0-12V2z" fill="currentColor"/>
-    </svg>
-    <span class="color-section-title">Color y Muestras</span>
-  `;
-  colorSection.appendChild(colorHeader);
-
-  // Section 3 custom scroll container (no overall sidebar scrollbar!)
-  const colorScroll = createCustomScrollContainer('csp-color-scroll-wrap');
-  const colorBody = colorScroll.list;
-
-  // 4 Mode Tabs
-  const colorTabsBar = document.createElement('div');
-  colorTabsBar.className = 'csp-color-tabs';
-
-  const tabsDef: { id: ColorTabId; label: string }[] = [
-    { id: 'picker', label: 'Círculo' },
-    { id: 'rgb', label: 'RGB' },
-    { id: 'set', label: 'Conjunto' },
-    { id: 'harmony', label: 'Armonía' },
-  ];
-  const tabButtons = new Map<ColorTabId, HTMLButtonElement>();
-
-  for (const t of tabsDef) {
-    const btn = document.createElement('button');
-    btn.className = 'csp-color-tab-btn';
-    btn.textContent = t.label;
-    btn.addEventListener('click', () => setColorTab(t.id));
-    colorTabsBar.appendChild(btn);
-    tabButtons.set(t.id, btn);
-  }
-  colorBody.appendChild(colorTabsBar);
-
-  // Container for dynamic tab content
-  const tabPanelsContainer = document.createElement('div');
-  tabPanelsContainer.style.display = 'flex';
-  tabPanelsContainer.style.flexDirection = 'column';
-  tabPanelsContainer.style.gap = '8px';
-  colorBody.appendChild(tabPanelsContainer);
-
-  // Common quick row (Native color input, Hex input, Slot badge)
-  const colorPickerRow = document.createElement('div');
-  colorPickerRow.className = 'csp-color-picker-row';
-
-  const colorInput = document.createElement('input');
-  colorInput.type = 'color';
-  colorInput.className = 'csp-color-input';
-  colorInput.title = 'Selector nativo del sistema';
-  colorInput.addEventListener('input', () => {
-    const st = getToolState();
-    if (st.activeColorSlot === 'primary') {
-      setPrimaryColor(colorInput.value);
-    } else {
-      setSecondaryColor(colorInput.value);
-    }
-  });
-
-  const hexInput = document.createElement('input');
-  hexInput.type = 'text';
-  hexInput.className = 'csp-hex-input';
-  hexInput.maxLength = 7;
-  hexInput.placeholder = '#000000';
-  hexInput.addEventListener('change', () => {
-    let val = hexInput.value.trim();
-    if (!val.startsWith('#')) val = '#' + val;
-    if (/^#[0-9a-fA-F]{6}$/.test(val)) {
-      const st = getToolState();
-      if (st.activeColorSlot === 'primary') {
-        setPrimaryColor(val);
-      } else {
-        setSecondaryColor(val);
-      }
-    }
-  });
-
-  const slotBadge = document.createElement('span');
-  slotBadge.className = 'csp-slot-badge';
-  slotBadge.textContent = 'Principal';
-
-  colorPickerRow.append(colorInput, hexInput, slotBadge);
-  colorBody.appendChild(colorPickerRow);
-
-  // Recent History Swatches Grid (always accessible at the bottom)
-  const historyGrid = document.createElement('div');
-  historyGrid.className = 'csp-history-grid';
-  colorBody.appendChild(historyGrid);
-
-  colorSection.appendChild(colorScroll.wrap);
   dock.appendChild(colorSection);
-
   container.appendChild(dock);
 
-  // -------------------------------------------------------------------------
-  // Interactive HSV Color Wheel Canvas (Tab 1: 'picker')
-  // -------------------------------------------------------------------------
-  const wheelWrap = document.createElement('div');
-  wheelWrap.className = 'csp-color-wheel-wrap';
 
-  const wheelCanvas = document.createElement('canvas');
-  wheelCanvas.className = 'csp-color-wheel-canvas';
-  const WHEEL_SIZE = 176;
-  const wheelDpr = Math.min(2, window.devicePixelRatio || 1);
-  wheelCanvas.width = Math.round(WHEEL_SIZE * wheelDpr);
-  wheelCanvas.height = Math.round(WHEEL_SIZE * wheelDpr);
-  wheelWrap.appendChild(wheelCanvas);
 
-  let isDraggingWheelHue = false;
-  let isDraggingWheelSV = false;
 
-  const drawColorWheel = (curHex: string): void => {
-    const ctx = wheelCanvas.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(wheelDpr, 0, 0, wheelDpr, 0, 0);
-    ctx.clearRect(0, 0, WHEEL_SIZE, WHEEL_SIZE);
-
-    const cx = WHEEL_SIZE / 2;
-    const cy = WHEEL_SIZE / 2;
-    const rOuter = WHEEL_SIZE / 2 - 4;
-    const rInner = rOuter - 18;
-
-    for (let angle = 0; angle < 360; angle += 1) {
-      const rad0 = ((angle - 0.5) * Math.PI) / 180;
-      const rad1 = ((angle + 1.5) * Math.PI) / 180;
-      ctx.beginPath();
-      ctx.arc(cx, cy, rOuter, rad0, rad1);
-      ctx.arc(cx, cy, rInner, rad1, rad0, true);
-      ctx.closePath();
-      ctx.fillStyle = `hsl(${angle}, 100%, 50%)`;
-      ctx.fill();
-    }
-
-    const { r, g, b } = hexToRgb(curHex);
-    const { h, s, v } = rgbToHsv(r, g, b);
-
-    const sqHalf = (rInner - 8) / Math.SQRT2;
-    const sqX0 = cx - sqHalf;
-    const sqY0 = cy - sqHalf;
-    const sqSide = sqHalf * 2;
-
-    const gradH = ctx.createLinearGradient(sqX0, 0, sqX0 + sqSide, 0);
-    gradH.addColorStop(0, '#ffffff');
-    gradH.addColorStop(1, `hsl(${Math.round(h)}, 100%, 50%)`);
-    ctx.fillStyle = gradH;
-    ctx.fillRect(sqX0, sqY0, sqSide, sqSide);
-
-    const gradV = ctx.createLinearGradient(0, sqY0, 0, sqY0 + sqSide);
-    gradV.addColorStop(0, 'rgba(0,0,0,0)');
-    gradV.addColorStop(1, '#000000');
-    ctx.fillStyle = gradV;
-    ctx.fillRect(sqX0, sqY0, sqSide, sqSide);
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sqX0, sqY0, sqSide, sqSide);
-
-    const hRad = (h * Math.PI) / 180;
-    const hMarkerR = (rOuter + rInner) / 2;
-    const hmx = cx + Math.cos(hRad) * hMarkerR;
-    const hmy = cy + Math.sin(hRad) * hMarkerR;
-    ctx.beginPath();
-    ctx.arc(hmx, hmy, 4.5, 0, Math.PI * 2);
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(hmx, hmy, 5.5, 0, Math.PI * 2);
-    ctx.strokeStyle = '#111111';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    const smx = sqX0 + s * sqSide;
-    const smy = sqY0 + (1 - v) * sqSide;
-    ctx.beginPath();
-    ctx.arc(smx, smy, 4, 0, Math.PI * 2);
-    ctx.strokeStyle = v > 0.5 ? '#111111' : '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(smx, smy, 5, 0, Math.PI * 2);
-    ctx.strokeStyle = v > 0.5 ? '#ffffff' : '#111111';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  };
-
-  const handleWheelPointer = (e: PointerEvent): void => {
-    const rect = wheelCanvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const cx = WHEEL_SIZE / 2;
-    const cy = WHEEL_SIZE / 2;
-    const dist = Math.hypot(px - cx, py - cy);
-
-    const rOuter = WHEEL_SIZE / 2 - 4;
-    const rInner = rOuter - 18;
-    const sqHalf = (rInner - 8) / Math.SQRT2;
-    const sqX0 = cx - sqHalf;
-    const sqY0 = cy - sqHalf;
-    const sqSide = sqHalf * 2;
-
-    const st = getToolState();
-    const curHex = st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor;
-    const { r, g, b } = hexToRgb(curHex);
-    let { h, s, v } = rgbToHsv(r, g, b);
-
-    if (isDraggingWheelHue || (!isDraggingWheelSV && dist >= rInner - 4 && dist <= rOuter + 6)) {
-      isDraggingWheelHue = true;
-      const angle = (Math.atan2(py - cy, px - cx) * 180) / Math.PI;
-      h = (angle + 360) % 360;
-    } else if (
-      isDraggingWheelSV ||
-      (!isDraggingWheelHue && px >= sqX0 - 4 && px <= sqX0 + sqSide + 4 && py >= sqY0 - 4 && py <= sqY0 + sqSide + 4)
-    ) {
-      isDraggingWheelSV = true;
-      s = Math.max(0, Math.min(1, (px - sqX0) / sqSide));
-      v = Math.max(0, Math.min(1, 1 - (py - sqY0) / sqSide));
-    }
-
-    const nextHex = hsvToHex(h, s, v);
-    if (st.activeColorSlot === 'primary') {
-      setPrimaryColor(nextHex);
-    } else {
-      setSecondaryColor(nextHex);
-    }
-  };
-
-  wheelCanvas.addEventListener('pointerdown', (e) => {
-    wheelCanvas.setPointerCapture(e.pointerId);
-    handleWheelPointer(e);
-  });
-  wheelCanvas.addEventListener('pointermove', (e) => {
-    if (isDraggingWheelHue || isDraggingWheelSV) {
-      handleWheelPointer(e);
-    }
-  });
-  const stopWheelDrag = (e: PointerEvent) => {
-    isDraggingWheelHue = false;
-    isDraggingWheelSV = false;
-    try {
-      wheelCanvas.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  };
-  wheelCanvas.addEventListener('pointerup', stopWheelDrag);
-  wheelCanvas.addEventListener('pointercancel', stopWheelDrag);
-
-  // -------------------------------------------------------------------------
-  // RGB / HSV Sliders Panel (Tab 2: 'rgb')
-  // -------------------------------------------------------------------------
-  const rgbSlidersPanel = document.createElement('div');
-  rgbSlidersPanel.className = 'csp-rgb-sliders-wrap';
-
-  function createChannelSliderRow(
-    tag: string,
-    min: number,
-    max: number,
-    onChange: (val: number) => void,
-  ): { row: HTMLDivElement; slider: HTMLInputElement; numInput: HTMLInputElement } {
-    const row = document.createElement('div');
-    row.className = 'csp-channel-row';
-
-    const tagEl = document.createElement('span');
-    tagEl.className = 'csp-channel-tag';
-    tagEl.textContent = tag;
-
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.className = 'csp-channel-slider';
-    slider.min = String(min);
-    slider.max = String(max);
-
-    const numInput = document.createElement('input');
-    numInput.type = 'number';
-    numInput.className = 'csp-channel-num';
-    numInput.min = String(min);
-    numInput.max = String(max);
-
-    slider.addEventListener('input', () => {
-      const v = Number(slider.value);
-      numInput.value = String(v);
-      onChange(v);
-    });
-
-    numInput.addEventListener('change', () => {
-      let v = Number(numInput.value);
-      v = Math.max(min, Math.min(max, v));
-      slider.value = String(v);
-      onChange(v);
-    });
-
-    row.append(tagEl, slider, numInput);
-    return { row, slider, numInput };
-  }
-
-  const redRow = createChannelSliderRow('R', 0, 255, (rVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const hex = rgbToHex(rVal, cur.g, cur.b);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
-  });
-  const greenRow = createChannelSliderRow('G', 0, 255, (gVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const hex = rgbToHex(cur.r, gVal, cur.b);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
-  });
-  const blueRow = createChannelSliderRow('B', 0, 255, (bVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const hex = rgbToHex(cur.r, cur.g, bVal);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
-  });
-
-  const hueRow = createChannelSliderRow('H', 0, 360, (hVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const { s, v } = rgbToHsv(cur.r, cur.g, cur.b);
-    const hex = hsvToHex(hVal, s, v);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
-  });
-  const satRow = createChannelSliderRow('S', 0, 100, (sVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const { h, v } = rgbToHsv(cur.r, cur.g, cur.b);
-    const hex = hsvToHex(h, sVal / 100, v);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
-  });
-  const valRow = createChannelSliderRow('V', 0, 100, (vVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const { h, s } = rgbToHsv(cur.r, cur.g, cur.b);
-    const hex = hsvToHex(h, s, vVal / 100);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
-  });
-
-  hueRow.slider.style.background =
-    'linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)';
-
-  rgbSlidersPanel.append(
-    redRow.row,
-    greenRow.row,
-    blueRow.row,
-    document.createElement('div'),
-    hueRow.row,
-    satRow.row,
-    valRow.row,
-  );
-
-  // -------------------------------------------------------------------------
-  // Color Set Palette Panel (Tab 3: 'set')
-  // -------------------------------------------------------------------------
-  const colorSetPanel = document.createElement('div');
-  colorSetPanel.style.display = 'flex';
-  colorSetPanel.style.flexDirection = 'column';
-  colorSetPanel.style.gap = '6px';
-
-  const setToolbar = document.createElement('div');
-  setToolbar.className = 'csp-colorset-toolbar';
-
-  const setSelect = document.createElement('select');
-  setSelect.className = 'csp-colorset-select';
-  setSelect.addEventListener('change', () => {
-    setActiveColorSet(setSelect.value);
-  });
-
-  const addColorBtn = document.createElement('button');
-  addColorBtn.className = 'csp-subtool-action-btn';
-  addColorBtn.textContent = '+ Guardar';
-  addColorBtn.title = 'Añadir color actual a este conjunto';
-  addColorBtn.addEventListener('click', () => {
-    const st = getToolState();
-    const cur = st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor;
-    addColorToActiveSet(cur);
-  });
-
-  setToolbar.append(setSelect, addColorBtn);
-  colorSetPanel.appendChild(setToolbar);
-
-  const setGrid = document.createElement('div');
-  setGrid.className = 'csp-history-grid';
-  setGrid.style.gridTemplateColumns = 'repeat(8, 1fr)';
-  colorSetPanel.appendChild(setGrid);
-
-  // -------------------------------------------------------------------------
-  // Color Harmonies Panel (Tab 4: 'harmony')
-  // -------------------------------------------------------------------------
-  const harmonyPanel = document.createElement('div');
-  harmonyPanel.className = 'csp-harmony-list';
 
   // --- 3. Synchronize View with State ---
   const sync = (state: ToolState): void => {
@@ -2184,7 +1210,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     requestAnimationFrame(() => {
       subtoolScroll.update();
       propScroll.update();
-      colorScroll.update();
+      colorPickerComp.scroll.update();
     });
 
     resetBtn.disabled = !activeSub;
@@ -2192,7 +1218,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
     // 6. Tool Properties values & visibility filtering
     const isBoneTool = state.tool === 'bone';
-    const isInkTool = state.tool === 'pen' || state.tool === 'brush' || state.tool === 'eraser';
+    const isInkTool = state.tool === 'pen' || state.tool === 'brush' || state.tool === 'effect' || state.tool === 'eraser';
 
     previewBox.style.display = isInkTool ? 'block' : 'none';
 
@@ -2260,6 +1286,31 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     angleSlider.value = String(Math.round(state.brush.tipAngle));
     angleHeader.value.textContent = `${Math.round(state.brush.tipAngle)}°`;
 
+    colorMixSlider.value = String(Math.round((state.brush.colorMix ?? 0) * 100));
+    colorMixHeader.value.textContent = `${Math.round((state.brush.colorMix ?? 0) * 100)}%`;
+
+    for (const [id, btn] of paperSeg.buttons) {
+      btn.classList.toggle('active', (state.brush.paperTexture ?? 'none') === id);
+    }
+
+    densitySlider.value = String(Math.round((state.brush.textureDensity ?? 0) * 100));
+    densityHeader.value.textContent = `${Math.round((state.brush.textureDensity ?? 0) * 100)}%`;
+
+    tabletBox.style.display = isInkTool ? 'block' : 'none';
+    if (isInkTool) {
+      const tablet = state.tablet;
+      tabletHeader.value.textContent = PRESSURE_MODE_LABELS[tablet.pressure.mode];
+      for (const [id, btn] of pressureSeg.buttons) {
+        btn.classList.toggle('active', tablet.pressure.mode === id);
+      }
+      gammaSlider.value = String(tablet.pressure.gamma);
+      gammaHeader.value.textContent = tablet.pressure.gamma.toFixed(2);
+      tiltToggle.box.checked = tablet.tiltEnabled;
+      tiltSlider.disabled = !tablet.tiltEnabled;
+      tiltSlider.value = String(Math.round(tablet.tiltAmount * 100));
+      tiltHeader.value.textContent = `${Math.round(tablet.tiltAmount * 100)}%`;
+    }
+
     tolBox.style.display = state.tool === 'bucket' ? 'block' : 'none';
     tolSlider.value = String(Math.round(state.brush.tolerance));
     const tolValNode = propBody.querySelector('#tol-val');
@@ -2271,6 +1322,14 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     }
     for (const [id, btn] of fillBtns) {
       btn.classList.toggle('active', state.brush.shapeFill === id);
+    }
+
+    const isSelectTool = state.tool === 'select';
+    selectBox.style.display = isSelectTool ? 'flex' : 'none';
+    if (isSelectTool) {
+      for (const [id, btn] of selectModeSeg.buttons) {
+        btn.classList.toggle('active', state.selectionCombineMode === id);
+      }
     }
 
     boneBox.style.display = isBoneTool ? 'flex' : 'none';
@@ -2384,142 +1443,13 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     }
 
     // 7. Color Section & 4 Modes
-    const currentActiveColor =
-      state.activeColorSlot === 'primary' ? state.primaryColor : state.secondaryColor;
-    colorInput.value = currentActiveColor;
-    hexInput.value = currentActiveColor.toUpperCase();
-    slotBadge.textContent = state.activeColorSlot === 'primary' ? 'Principal' : 'Secundario';
-    if (state.isTransparentColor) {
-      slotBadge.textContent = 'Transparente';
-    }
-
-    for (const [id, btn] of tabButtons) {
-      btn.classList.toggle('active', state.colorTab === id);
-    }
-
-    tabPanelsContainer.innerHTML = '';
-
-    if (state.colorTab === 'picker') {
-      tabPanelsContainer.appendChild(wheelWrap);
-      drawColorWheel(currentActiveColor);
-    } else if (state.colorTab === 'rgb') {
-      tabPanelsContainer.appendChild(rgbSlidersPanel);
-      const { r, g, b } = hexToRgb(currentActiveColor);
-      const { h, s, v } = rgbToHsv(r, g, b);
-
-      redRow.slider.value = String(r);
-      redRow.numInput.value = String(r);
-      redRow.slider.style.background = `linear-gradient(90deg, rgb(0,${g},${b}), rgb(255,${g},${b}))`;
-
-      greenRow.slider.value = String(g);
-      greenRow.numInput.value = String(g);
-      greenRow.slider.style.background = `linear-gradient(90deg, rgb(${r},0,${b}), rgb(${r},255,${b}))`;
-
-      blueRow.slider.value = String(b);
-      blueRow.numInput.value = String(b);
-      blueRow.slider.style.background = `linear-gradient(90deg, rgb(${r},${g},0), rgb(${r},${g},255))`;
-
-      hueRow.slider.value = String(Math.round(h));
-      hueRow.numInput.value = String(Math.round(h));
-
-      satRow.slider.value = String(Math.round(s * 100));
-      satRow.numInput.value = String(Math.round(s * 100));
-      satRow.slider.style.background = `linear-gradient(90deg, ${hsvToHex(h, 0, v)}, ${hsvToHex(h, 1, v)})`;
-
-      valRow.slider.value = String(Math.round(v * 100));
-      valRow.numInput.value = String(Math.round(v * 100));
-      valRow.slider.style.background = `linear-gradient(90deg, #000000, ${hsvToHex(h, s, 1)})`;
-    } else if (state.colorTab === 'set') {
-      tabPanelsContainer.appendChild(colorSetPanel);
-
-      setSelect.innerHTML = '';
-      for (const cs of state.colorSets) {
-        const opt = document.createElement('option');
-        opt.value = cs.id;
-        opt.textContent = `${cs.name} (${cs.colors.length})`;
-        if (cs.id === state.activeColorSetId) opt.selected = true;
-        setSelect.appendChild(opt);
-      }
-
-      const curSet =
-        state.colorSets.find((s) => s.id === state.activeColorSetId) ?? state.colorSets[0];
-      setGrid.innerHTML = '';
-      if (curSet) {
-        curSet.colors.forEach((c, idx) => {
-          const chip = document.createElement('div');
-          chip.className = 'csp-history-chip';
-          chip.style.backgroundColor = c;
-          chip.title = `${c.toUpperCase()} (Clic para elegir, Shift+clic para borrar)`;
-          chip.classList.toggle('active', c.toLowerCase() === currentActiveColor.toLowerCase());
-          chip.addEventListener('click', (e) => {
-            if (e.shiftKey) {
-              removeColorFromActiveSet(idx);
-            } else {
-              if (state.activeColorSlot === 'primary') setPrimaryColor(c);
-              else setSecondaryColor(c);
-            }
-          });
-          setGrid.appendChild(chip);
-        });
-      }
-    } else if (state.colorTab === 'harmony') {
-      tabPanelsContainer.appendChild(harmonyPanel);
-      harmonyPanel.innerHTML = '';
-
-      const harmonies = computeColorHarmonies(currentActiveColor);
-      for (const group of harmonies) {
-        const grpEl = document.createElement('div');
-        grpEl.className = 'csp-harmony-group';
-
-        const grpTitle = document.createElement('span');
-        grpTitle.className = 'csp-harmony-title';
-        grpTitle.textContent = group.label;
-        grpEl.appendChild(grpTitle);
-
-        const swatchesRow = document.createElement('div');
-        swatchesRow.className = 'csp-harmony-swatches';
-
-        for (const item of group.colors) {
-          const sbtn = document.createElement('button');
-          sbtn.className = 'csp-harmony-swatch-btn';
-          sbtn.style.backgroundColor = item.hex;
-          sbtn.title = `${item.tag}: ${item.hex.toUpperCase()}`;
-          sbtn.innerHTML = `<span class="csp-harmony-swatch-tag">${item.tag}</span>`;
-          sbtn.addEventListener('click', () => {
-            if (state.activeColorSlot === 'primary') setPrimaryColor(item.hex);
-            else setSecondaryColor(item.hex);
-          });
-          swatchesRow.appendChild(sbtn);
-        }
-
-        grpEl.appendChild(swatchesRow);
-        harmonyPanel.appendChild(grpEl);
-      }
-    }
-
-    // 8. Render Color History Swatches
-    historyGrid.innerHTML = '';
-    for (const c of state.colorHistory) {
-      const chip = document.createElement('div');
-      chip.className = 'csp-history-chip';
-      chip.style.backgroundColor = c;
-      chip.title = c.toUpperCase();
-      chip.classList.toggle('active', c.toLowerCase() === currentActiveColor.toLowerCase());
-      chip.addEventListener('click', () => {
-        if (state.activeColorSlot === 'primary') {
-          setPrimaryColor(c);
-        } else {
-          setSecondaryColor(c);
-        }
-      });
-      historyGrid.appendChild(chip);
-    }
+    colorPickerComp.sync(state);
 
     // Update scrollbars after content changes
     requestAnimationFrame(() => {
       subtoolScroll.update();
       propScroll.update();
-      colorScroll.update();
+      colorPickerComp.scroll.update();
     });
   };
 

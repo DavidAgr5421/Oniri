@@ -1,0 +1,11 @@
+# Private research notes
+#docs/
+
+# Dependencies & build output
+node_modules/
+dist/
+
+# Editor / tooling
+.codegraph-wsl/
+.DS_Store
+*.local
