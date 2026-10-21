@@ -324,3 +324,384 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
   targetCtx.putImageData(targetImg, 0, 0);
   return true;
 }
+
+/**
+ * Helper to render reference/boundary layers for a bounding box region [rx, ry, rw, rh].
+ */
+function getBoundaryDataForRect(
+  referMode: 'editing' | 'reference' | 'all',
+  activeLayer: LayerNode,
+  allLayers: LayerNode[],
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number
+): Uint8ClampedArray {
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = rw;
+  tempCanvas.height = rh;
+  const tCtx = tempCanvas.getContext('2d')!;
+  tCtx.translate(-rx, -ry);
+
+  if (referMode === 'reference') {
+    const refLayers = allLayers.filter((l) => l.isReference && l.visible && l.canvas && !l.isPaper);
+    const toDraw = refLayers.length > 0 ? refLayers : [activeLayer];
+    for (const rl of toDraw) {
+      if (rl.canvas) {
+        tCtx.globalAlpha = rl.opacity;
+        tCtx.drawImage(rl.canvas, 0, 0);
+      }
+    }
+  } else if (referMode === 'all') {
+    for (const l of allLayers) {
+      if (l.visible && l.canvas && !l.isPaper) {
+        tCtx.globalAlpha = l.opacity;
+        tCtx.drawImage(l.canvas, 0, 0);
+      }
+    }
+  } else {
+    if (activeLayer.canvas) {
+      tCtx.drawImage(activeLayer.canvas, 0, 0);
+    }
+  }
+
+  return tCtx.getImageData(0, 0, rw, rh).data;
+}
+
+export interface EncloseAndFillConfig {
+  polygon: { x: number; y: number }[];
+  fillColorHex: string;
+  tolerance: number;
+  closeGap: number;
+  areaScaling: number;
+  referMode: 'editing' | 'reference' | 'all';
+  activeLayer: LayerNode;
+  allLayers: LayerNode[];
+  selectionMaskCanvas?: HTMLCanvasElement | null;
+  docW: number;
+  docH: number;
+}
+
+/**
+ * Clip Studio Paint "Cerrar y Rellenar" (Enclose and Fill / 囲んで塗る).
+ * The user draws a freehand lasso around a drawing. Interior enclosed regions
+ * are detected and filled, while exterior transparent space is completely ignored.
+ */
+export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
+  const {
+    polygon,
+    fillColorHex,
+    closeGap,
+    areaScaling,
+    referMode,
+    activeLayer,
+    allLayers,
+    selectionMaskCanvas,
+    docW,
+    docH,
+  } = config;
+
+  if (polygon.length < 3 || !activeLayer.context || activeLayer.locked || activeLayer.isPaper) {
+    return false;
+  }
+
+  // 1. Compute bounding box of lasso polygon
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const pt of polygon) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+
+  const margin = Math.max(8, closeGap * 2 + 8);
+  const rx = Math.max(0, Math.floor(minX - margin));
+  const ry = Math.max(0, Math.floor(minY - margin));
+  const rw = Math.min(docW - rx, Math.ceil(maxX + margin) - rx);
+  const rh = Math.min(docH - ry, Math.ceil(maxY + margin) - ry);
+  if (rw <= 2 || rh <= 2) return false;
+
+  // 2. Rasterize lasso polygon inside local bounding box
+  const lassoCanvas = document.createElement('canvas');
+  lassoCanvas.width = rw;
+  lassoCanvas.height = rh;
+  const lCtx = lassoCanvas.getContext('2d')!;
+  lCtx.beginPath();
+  lCtx.moveTo(polygon[0].x - rx, polygon[0].y - ry);
+  for (let i = 1; i < polygon.length; i++) {
+    lCtx.lineTo(polygon[i].x - rx, polygon[i].y - ry);
+  }
+  lCtx.closePath();
+  lCtx.fillStyle = '#ffffff';
+  lCtx.fill();
+  const lassoImgData = lCtx.getImageData(0, 0, rw, rh).data;
+
+  // 3. Extract boundary obstacles for this box
+  const boundaryData = getBoundaryDataForRect(referMode, activeLayer, allLayers, rx, ry, rw, rh);
+  const total = rw * rh;
+  const obstacleMask = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    if (boundaryData[i * 4 + 3] > 30) {
+      obstacleMask[i] = 1;
+    }
+  }
+
+  // 4. Close Gaps (morphological dilation of obstacles)
+  const effectiveObstacles = closeGap > 0 ? dilateBinaryMask(obstacleMask, rw, rh, closeGap) : obstacleMask;
+
+  // 5. Exterior flood fill: start from all outer edges of the bounding box
+  const outsideVisited = new Uint8Array(total);
+  const queue: number[] = [];
+
+  for (let x = 0; x < rw; x++) {
+    const topIdx = x;
+    if (effectiveObstacles[topIdx] === 0 && outsideVisited[topIdx] === 0) {
+      outsideVisited[topIdx] = 1;
+      queue.push(topIdx);
+    }
+    const botIdx = (rh - 1) * rw + x;
+    if (effectiveObstacles[botIdx] === 0 && outsideVisited[botIdx] === 0) {
+      outsideVisited[botIdx] = 1;
+      queue.push(botIdx);
+    }
+  }
+  for (let y = 0; y < rh; y++) {
+    const leftIdx = y * rw;
+    if (effectiveObstacles[leftIdx] === 0 && outsideVisited[leftIdx] === 0) {
+      outsideVisited[leftIdx] = 1;
+      queue.push(leftIdx);
+    }
+    const rightIdx = y * rw + (rw - 1);
+    if (effectiveObstacles[rightIdx] === 0 && outsideVisited[rightIdx] === 0) {
+      outsideVisited[rightIdx] = 1;
+      queue.push(rightIdx);
+    }
+  }
+
+  let head = 0;
+  while (head < queue.length) {
+    const curr = queue[head++];
+    const cx = curr % rw;
+    const cy = Math.floor(curr / rw);
+
+    if (cx > 0) {
+      const left = curr - 1;
+      if (effectiveObstacles[left] === 0 && outsideVisited[left] === 0) {
+        outsideVisited[left] = 1;
+        queue.push(left);
+      }
+    }
+    if (cx < rw - 1) {
+      const right = curr + 1;
+      if (effectiveObstacles[right] === 0 && outsideVisited[right] === 0) {
+        outsideVisited[right] = 1;
+        queue.push(right);
+      }
+    }
+    if (cy > 0) {
+      const top = curr - rw;
+      if (effectiveObstacles[top] === 0 && outsideVisited[top] === 0) {
+        outsideVisited[top] = 1;
+        queue.push(top);
+      }
+    }
+    if (cy < rh - 1) {
+      const bot = curr + rw;
+      if (effectiveObstacles[bot] === 0 && outsideVisited[bot] === 0) {
+        outsideVisited[bot] = 1;
+        queue.push(bot);
+      }
+    }
+  }
+
+  // 6. Identify enclosed interior regions (Inside lasso, NOT outside, NOT lineart)
+  const targetImg = activeLayer.context.getImageData(rx, ry, rw, rh);
+  const targetData = targetImg.data;
+  const fillMask = new Uint8Array(total);
+
+  let filledCount = 0;
+  for (let i = 0; i < total; i++) {
+    const isInsideLasso = lassoImgData[i * 4 + 3] > 64;
+    const isOutsideDrawing = outsideVisited[i] === 1;
+    const isInkLine = obstacleMask[i] === 1;
+
+    if (isInsideLasso && !isOutsideDrawing && !isInkLine) {
+      // Only fill unpainted or transparent pixels (CSP CloseFillReferColorType = 7)
+      if (targetData[i * 4 + 3] < 60) {
+        fillMask[i] = 1;
+        filledCount++;
+      }
+    }
+  }
+
+  if (filledCount === 0) {
+    return false;
+  }
+
+  // 7. Area Scaling (expand to tuck underneath lineart)
+  const finalFillMask = areaScaling > 0 ? dilateBinaryMask(fillMask, rw, rh, areaScaling) : fillMask;
+  const [fillR, fillG, fillB, fillA] = hexToRgba(fillColorHex);
+
+  // Optional Selection Mask clipping
+  let selectionData: Uint8ClampedArray | null = null;
+  if (selectionMaskCanvas) {
+    const sCtx = selectionMaskCanvas.getContext('2d');
+    if (sCtx) {
+      selectionData = sCtx.getImageData(rx, ry, rw, rh).data;
+    }
+  }
+
+  const lockAlpha = !!activeLayer.lockAlpha;
+
+  for (let i = 0; i < total; i++) {
+    if (finalFillMask[i] === 1) {
+      if (selectionData && selectionData[i * 4 + 3] === 0) {
+        continue;
+      }
+      const p = i * 4;
+      if (lockAlpha && targetData[p + 3] === 0) {
+        continue;
+      }
+      targetData[p] = fillR;
+      targetData[p + 1] = fillG;
+      targetData[p + 2] = fillB;
+      targetData[p + 3] = fillA;
+    }
+  }
+
+  activeLayer.context.putImageData(targetImg, rx, ry);
+  return true;
+}
+
+export interface PaintUnfilledAreaConfig {
+  points: { x: number; y: number }[];
+  radius: number;
+  fillColorHex: string;
+  tolerance: number;
+  closeGap: number;
+  areaScaling: number;
+  referMode: 'editing' | 'reference' | 'all';
+  activeLayer: LayerNode;
+  allLayers: LayerNode[];
+  selectionMaskCanvas?: HTMLCanvasElement | null;
+  docW: number;
+  docH: number;
+}
+
+/**
+ * Clip Studio Paint "Pintar área no rellenada" (Fill Unfilled Area Brush / 塗り残し部分を塗る).
+ * A touch-up brush that fills only unpainted crevices trapped by lineart under the brush footprint.
+ */
+export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boolean {
+  const {
+    points,
+    radius,
+    fillColorHex,
+    closeGap,
+    areaScaling,
+    referMode,
+    activeLayer,
+    allLayers,
+    selectionMaskCanvas,
+    docW,
+    docH,
+  } = config;
+
+  if (points.length === 0 || !activeLayer.context || activeLayer.locked || activeLayer.isPaper) {
+    return false;
+  }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const pt of points) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+
+  const rad = Math.max(4, Math.round(radius));
+  const margin = rad + Math.max(4, closeGap * 2 + 4);
+  const rx = Math.max(0, Math.floor(minX - margin));
+  const ry = Math.max(0, Math.floor(minY - margin));
+  const rw = Math.min(docW - rx, Math.ceil(maxX + margin) - rx);
+  const rh = Math.min(docH - ry, Math.ceil(maxY + margin) - ry);
+  if (rw <= 2 || rh <= 2) return false;
+
+  // Rasterize stroke footprint
+  const strokeCanvas = document.createElement('canvas');
+  strokeCanvas.width = rw;
+  strokeCanvas.height = rh;
+  const sCtx = strokeCanvas.getContext('2d')!;
+  sCtx.lineCap = 'round';
+  sCtx.lineJoin = 'round';
+  sCtx.lineWidth = rad * 2;
+  sCtx.strokeStyle = '#ffffff';
+  sCtx.fillStyle = '#ffffff';
+
+  if (points.length === 1) {
+    sCtx.beginPath();
+    sCtx.arc(points[0].x - rx, points[0].y - ry, rad, 0, Math.PI * 2);
+    sCtx.fill();
+  } else {
+    sCtx.beginPath();
+    sCtx.moveTo(points[0].x - rx, points[0].y - ry);
+    for (let i = 1; i < points.length; i++) {
+      sCtx.lineTo(points[i].x - rx, points[i].y - ry);
+    }
+    sCtx.stroke();
+  }
+
+  const strokeData = sCtx.getImageData(0, 0, rw, rh).data;
+  const boundaryData = getBoundaryDataForRect(referMode, activeLayer, allLayers, rx, ry, rw, rh);
+  const total = rw * rh;
+  const obstacleMask = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    if (boundaryData[i * 4 + 3] > 30) obstacleMask[i] = 1;
+  }
+
+  const targetImg = activeLayer.context.getImageData(rx, ry, rw, rh);
+  const targetData = targetImg.data;
+  const fillMask = new Uint8Array(total);
+
+  let filledCount = 0;
+  for (let i = 0; i < total; i++) {
+    if (strokeData[i * 4 + 3] > 64 && obstacleMask[i] === 0) {
+      if (targetData[i * 4 + 3] < 60) {
+        fillMask[i] = 1;
+        filledCount++;
+      }
+    }
+  }
+
+  if (filledCount === 0) {
+    return false;
+  }
+
+  const finalMask = areaScaling > 0 ? dilateBinaryMask(fillMask, rw, rh, areaScaling) : fillMask;
+  const [fillR, fillG, fillB, fillA] = hexToRgba(fillColorHex);
+
+  let selectionData: Uint8ClampedArray | null = null;
+  if (selectionMaskCanvas) {
+    const sCtx = selectionMaskCanvas.getContext('2d');
+    if (sCtx) {
+      selectionData = sCtx.getImageData(rx, ry, rw, rh).data;
+    }
+  }
+
+  const lockAlpha = !!activeLayer.lockAlpha;
+
+  for (let i = 0; i < total; i++) {
+    if (finalMask[i] === 1) {
+      if (selectionData && selectionData[i * 4 + 3] === 0) continue;
+      const p = i * 4;
+      if (lockAlpha && targetData[p + 3] === 0) continue;
+      targetData[p] = fillR;
+      targetData[p + 1] = fillG;
+      targetData[p + 2] = fillB;
+      targetData[p + 3] = fillA;
+    }
+  }
+
+  activeLayer.context.putImageData(targetImg, rx, ry);
+  return true;
+}

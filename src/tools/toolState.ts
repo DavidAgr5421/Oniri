@@ -1,4 +1,4 @@
-export type ToolId = 'pen' | 'brush' | 'effect' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand' | 'select';
+export type ToolId = 'pen' | 'brush' | 'effect' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand' | 'rotate' | 'select';
 export type BoneToolMode = 'rig' | 'pose_fk' | 'pose_ik';
 export type SelectionCombineMode = 'replace' | 'add' | 'subtract';
 export type ShapeType = 'line' | 'rectangle' | 'ellipse';
@@ -8,6 +8,7 @@ export type AntiAliasingLevel = 'none' | 'weak' | 'medium' | 'strong';
 export type InkMode = 'uniform' | 'accumulate';
 
 export type TipTextureId = 'default' | 'flat-square' | 'gasagasa' | 'brush02' | 'star02' | 'star04';
+export type TipCycleMode = 'random' | 'sequential';
 export type PaperTextureId = 'none' | 'oil-paint' | 'pencil-paper';
 
 export type { PressureCurveMode, PressureCurveSettings } from '../brush/pressureResponse';
@@ -49,6 +50,8 @@ export interface BrushSettings {
   shapeFill: ShapeFillMode;
   color: string;
   tipTexture?: TipTextureId;
+  tipTextures?: TipTextureId[];
+  tipCycleMode?: TipCycleMode;
   paperTexture?: PaperTextureId;
   textureDensity?: number;
   textureScale?: number;
@@ -60,6 +63,13 @@ export interface BrushSettings {
   sprayDensity?: number;
   compositeMode?: 'source-over' | 'lighter' | 'screen' | 'destination-out';
   subColorMix?: boolean;
+  closeGap?: number;
+  areaScaling?: number;
+  referMode?: 'editing' | 'reference' | 'all';
+  velocitySize?: boolean;
+  velocityMinRatio?: number;
+  velocityCurve?: number;
+  velocityFlow?: boolean;
 }
 
 export { type SubTool, SUBTOOLS } from './subtoolPresets';
@@ -74,6 +84,7 @@ export type BrushPropKey =
   | 'hardness'
   | 'stabilization'
   | 'pressureSize'
+  | 'velocitySize'
   | 'taper'
   | 'tipShape'
   | 'antiAliasing'
@@ -155,6 +166,8 @@ export const DEFAULT_BRUSH: BrushSettings = {
   shapeFill: 'stroke',
   color: '#000000',
   tipTexture: 'default',
+  tipTextures: [],
+  tipCycleMode: 'random',
   paperTexture: 'none',
   textureDensity: 0.0,
   textureScale: 1.0,
@@ -166,6 +179,13 @@ export const DEFAULT_BRUSH: BrushSettings = {
   sprayDensity: 3,
   compositeMode: 'source-over',
   subColorMix: false,
+  closeGap: 0,
+  areaScaling: 1,
+  referMode: 'all',
+  velocitySize: true,
+  velocityMinRatio: 0.35,
+  velocityCurve: 1.0,
+  velocityFlow: false,
 };
 
 export const DEFAULT_VISIBLE_PROPS: BrushPropKey[] = [
@@ -173,6 +193,8 @@ export const DEFAULT_VISIBLE_PROPS: BrushPropKey[] = [
   'opacity',
   'hardness',
   'stabilization',
+  'pressureSize',
+  'velocitySize',
   'colorMix',
   'paperTexture',
 ];

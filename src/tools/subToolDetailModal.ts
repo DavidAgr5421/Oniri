@@ -4,6 +4,8 @@ import type {
   PaperTextureId,
   SubTool,
   TipShape,
+  TipTextureId,
+  TipCycleMode,
 } from './toolState';
 import {
   getToolState,
@@ -11,6 +13,7 @@ import {
   setBrushSettings,
   toggleVisibleProperty,
 } from './toolState';
+import { openPressureCalibrationModal } from './pressureCalibrationModal';
 
 export const TIP_SHAPES: { id: TipShape; label: string }[] = [
   { id: 'circle', label: 'Círculo' },
@@ -29,6 +32,14 @@ export const PAPER_TEXTURES: { id: PaperTextureId; label: string }[] = [
   { id: 'none', label: 'Ninguno' },
   { id: 'oil-paint', label: 'Óleo' },
   { id: 'pencil-paper', label: 'Lápiz' },
+];
+
+export const AVAILABLE_TIP_TEXTURES: { id: TipTextureId; label: string }[] = [
+  { id: 'gasagasa', label: 'Gasa-Gasa (Áspero)' },
+  { id: 'brush02', label: 'Pincel (Cerdas)' },
+  { id: 'flat-square', label: 'Plana (Espátula)' },
+  { id: 'star02', label: 'Estrella 02' },
+  { id: 'star04', label: 'Estrella 04' },
 ];
 
 let activeDetailModal: HTMLElement | null = null;
@@ -188,9 +199,64 @@ export function openSubToolDetailModal(subTool: SubTool): void {
         const valNode = main2.querySelector('#dt-psize-val');
         if (valNode) valNode.textContent = `${slider2.value}%`;
       });
-      main2.append(chkWrap, slider2);
+      const calibBtn = document.createElement('button');
+      calibBtn.className = 'csp-calib-btn-subtle';
+      calibBtn.style.marginTop = '4px';
+      calibBtn.style.alignSelf = 'flex-start';
+      calibBtn.innerHTML = `🖋 Ajustar nivel de detección de presión del lápiz...`;
+      calibBtn.addEventListener('click', () => {
+        openPressureCalibrationModal();
+      });
+
+      main2.append(chkWrap, slider2, calibBtn);
       row2.append(eye2, main2);
       contentCol.appendChild(row2);
+
+      // 3. Velocity Dynamics Box (CSP 速度によるサイズ影響)
+      const row3 = document.createElement('div');
+      row3.className = 'csp-detail-prop-row';
+      const eye3 = makeEyeButton('velocitySize');
+      const main3 = document.createElement('div');
+      main3.className = 'csp-detail-prop-main';
+      main3.innerHTML = `
+        <div class="prop-row-header">
+          <span class="prop-label">Dinámica por velocidad (Trazos rápidos finos)</span>
+          <span class="prop-value" id="dt-vsize-val">${Math.round((b.velocityMinRatio ?? 0.35) * 100)}%</span>
+        </div>
+      `;
+      const chkVWrap = document.createElement('div');
+      chkVWrap.className = 'csp-toggle-row';
+      const chkV = document.createElement('input');
+      chkV.type = 'checkbox';
+      chkV.className = 'csp-checkbox';
+      chkV.id = 'dt-vsize-chk';
+      chkV.checked = !!b.velocitySize;
+      const chkVLbl = document.createElement('label');
+      chkVLbl.className = 'csp-check-label';
+      chkVLbl.htmlFor = 'dt-vsize-chk';
+      chkVLbl.textContent = 'Afinar línea con la rapidez del trazo';
+      chkVWrap.append(chkV, chkVLbl);
+
+      const sliderV = document.createElement('input');
+      sliderV.type = 'range';
+      sliderV.className = 'csp-slider';
+      sliderV.min = '5';
+      sliderV.max = '100';
+      sliderV.value = String(Math.round((b.velocityMinRatio ?? 0.35) * 100));
+      sliderV.disabled = !b.velocitySize;
+
+      chkV.addEventListener('change', () => {
+        setBrushSettings({ velocitySize: chkV.checked });
+        sliderV.disabled = !chkV.checked;
+      });
+      sliderV.addEventListener('input', () => {
+        setBrushSettings({ velocityMinRatio: Number(sliderV.value) / 100 });
+        const valNode = main3.querySelector('#dt-vsize-val');
+        if (valNode) valNode.textContent = `${sliderV.value}%`;
+      });
+      main3.append(chkVWrap, sliderV);
+      row3.append(eye3, main3);
+      contentCol.appendChild(row3);
     } else if (cat === 'ink') {
       const row1 = document.createElement('div');
       row1.className = 'csp-detail-prop-row';
@@ -257,7 +323,23 @@ export function openSubToolDetailModal(subTool: SubTool): void {
         setBrushSettings({ pressureFlow: chk2.checked });
       });
 
-      main2.append(slider2, chkWrap2);
+      const chkVWrapFlow = document.createElement('div');
+      chkVWrapFlow.className = 'csp-toggle-row';
+      const chkVFlow = document.createElement('input');
+      chkVFlow.type = 'checkbox';
+      chkVFlow.className = 'csp-checkbox';
+      chkVFlow.id = 'dt-vflow-chk';
+      chkVFlow.checked = !!b.velocityFlow;
+      const chkVFlowLbl = document.createElement('label');
+      chkVFlowLbl.className = 'csp-check-label';
+      chkVFlowLbl.htmlFor = 'dt-vflow-chk';
+      chkVFlowLbl.textContent = 'Aclarar densidad en trazos rápidos';
+      chkVWrapFlow.append(chkVFlow, chkVFlowLbl);
+      chkVFlow.addEventListener('change', () => {
+        setBrushSettings({ velocityFlow: chkVFlow.checked });
+      });
+
+      main2.append(slider2, chkWrap2, chkVWrapFlow);
       row2.append(eye2, main2);
       contentCol.appendChild(row2);
 
@@ -356,6 +438,75 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       main1.appendChild(tipGroup);
       row1.append(eye1, main1);
       contentCol.appendChild(row1);
+
+      // Puntas múltiples combinadas (Materiales)
+      const rowMaterials = document.createElement('div');
+      rowMaterials.className = 'csp-detail-prop-row';
+      const eyeMat = makeEyeButton('tipShape');
+      const mainMat = document.createElement('div');
+      mainMat.className = 'csp-detail-prop-main';
+      mainMat.innerHTML = `<span class="prop-label">Puntas múltiples combinadas (Materiales de punta)</span>`;
+      const matGroup = document.createElement('div');
+      matGroup.className = 'csp-seg-group';
+      matGroup.style.flexWrap = 'wrap';
+      matGroup.style.gap = '4px';
+
+      const currentList = (b.tipTextures && b.tipTextures.length > 0)
+        ? [...b.tipTextures]
+        : (b.tipTexture && b.tipTexture !== 'default' ? [b.tipTexture] : []);
+
+      for (const tex of AVAILABLE_TIP_TEXTURES) {
+        const btn = document.createElement('button');
+        const isActive = currentList.includes(tex.id);
+        btn.className = `csp-seg-btn${isActive ? ' active' : ''}`;
+        btn.textContent = tex.label;
+        btn.addEventListener('click', () => {
+          let updated: TipTextureId[];
+          if (isActive) {
+            updated = currentList.filter((id) => id !== tex.id);
+          } else {
+            updated = [...currentList, tex.id];
+          }
+          setBrushSettings({
+            tipTextures: updated,
+            tipTexture: updated.length > 0 ? updated[0] : 'default',
+          });
+          renderCategory('tip');
+        });
+        matGroup.appendChild(btn);
+      }
+      mainMat.appendChild(matGroup);
+      rowMaterials.append(eyeMat, mainMat);
+      contentCol.appendChild(rowMaterials);
+
+      if (currentList.length > 1) {
+        const rowCycle = document.createElement('div');
+        rowCycle.className = 'csp-detail-prop-row';
+        const eyeCyc = makeEyeButton('tipShape');
+        const mainCyc = document.createElement('div');
+        mainCyc.className = 'csp-detail-prop-main';
+        mainCyc.innerHTML = `<span class="prop-label">Método de alternancia de puntas</span>`;
+        const cycGroup = document.createElement('div');
+        cycGroup.className = 'csp-seg-group';
+
+        const modes: { id: TipCycleMode; label: string }[] = [
+          { id: 'random', label: 'Aleatorio (Random)' },
+          { id: 'sequential', label: 'Secuencial (En orden)' },
+        ];
+        for (const m of modes) {
+          const btn = document.createElement('button');
+          btn.className = `csp-seg-btn${(b.tipCycleMode ?? 'random') === m.id ? ' active' : ''}`;
+          btn.textContent = m.label;
+          btn.addEventListener('click', () => {
+            setBrushSettings({ tipCycleMode: m.id });
+            renderCategory('tip');
+          });
+          cycGroup.appendChild(btn);
+        }
+        mainCyc.appendChild(cycGroup);
+        rowCycle.append(eyeCyc, mainCyc);
+        contentCol.appendChild(rowCycle);
+      }
 
       const row2 = document.createElement('div');
       row2.className = 'csp-detail-prop-row';

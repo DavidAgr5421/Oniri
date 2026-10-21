@@ -229,6 +229,43 @@ export class SelectionModel {
   }
 
   /**
+   * CSP Expand Selection (selectexpand): morphological dilation by radius in pixels.
+   */
+  public expandSelection(radiusPx: number): void {
+    if (!this._hasSelection || radiusPx <= 0) return;
+    this.endMoveMask();
+    const r = Math.min(64, Math.max(1, Math.round(radiusPx)));
+    const tmp = document.createElement('canvas');
+    tmp.width = DOC_W;
+    tmp.height = DOC_H;
+    const tctx = tmp.getContext('2d')!;
+    tctx.drawImage(this.maskCanvas, 0, 0);
+
+    this.maskCtx.save();
+    this.maskCtx.globalCompositeOperation = 'source-over';
+    const step = r > 8 ? 2 : 1;
+    for (let dy = -r; dy <= r; dy += step) {
+      for (let dx = -r; dx <= r; dx += step) {
+        if (dx * dx + dy * dy <= r * r) {
+          this.maskCtx.drawImage(tmp, dx, dy);
+        }
+      }
+    }
+    this.maskCtx.restore();
+    this.updateBounds();
+  }
+
+  /**
+   * CSP Contract / Reduce Selection (selectreduce): morphological erosion by radius in pixels.
+   */
+  public contractSelection(radiusPx: number): void {
+    if (!this._hasSelection || radiusPx <= 0) return;
+    this.invertSelection();
+    this.expandSelection(radiusPx);
+    this.invertSelection();
+  }
+
+  /**
    * Internal helper to apply a temporary shape canvas to the mask canvas using combineMode.
    */
   private applyShapeCanvas(tempCanvas: HTMLCanvasElement, mode: SelectionCombineMode): void {

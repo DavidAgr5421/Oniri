@@ -109,6 +109,12 @@ const TOOLS: ToolDef[] = [
     shortcut: 'H',
     icon: '<path d="M18 11V6a2 2 0 0 0-4 0v4M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8M6 14v1a7 7 0 0 0 14 0v-5a2 2 0 0 0-4 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   },
+  {
+    id: 'rotate',
+    label: 'Rotar Lienzo',
+    shortcut: 'R',
+    icon: '<path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><polygon points="21 3 21 8 16 8" fill="currentColor"/>',
+  },
 ];
 
 import {
@@ -117,6 +123,7 @@ import {
   AA_LEVELS,
   PAPER_TEXTURES,
 } from './subToolDetailModal';
+import { openPressureCalibrationModal } from './pressureCalibrationModal';
 
 const QUICK_SIZES = [3, 5, 8, 12, 18, 28, 45, 70];
 
@@ -427,13 +434,25 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       </svg>
       <span class="prop-section-title">Propiedad de herramienta</span>
     </div>
-    <button class="csp-subtool-action-btn" id="csp-header-wrench" title="Ajustes de subherramienta" style="display:flex;align-items:center;justify-content:center;width:24px;height:22px;padding:0;">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-      </svg>
-    </button>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <button class="csp-subtool-action-btn" id="csp-header-tablet" title="Ajustar nivel de detección de presión del lápiz (Tableta)" style="display:flex;align-items:center;justify-content:center;width:24px;height:22px;padding:0;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
+          <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+          <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+          <path d="M2 2l7.586 7.586"/>
+        </svg>
+      </button>
+      <button class="csp-subtool-action-btn" id="csp-header-wrench" title="Ajustes de subherramienta" style="display:flex;align-items:center;justify-content:center;width:24px;height:22px;padding:0;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
   `;
+  propHeaderEl.querySelector('#csp-header-tablet')?.addEventListener('click', () => {
+    openPressureCalibrationModal();
+  });
   propHeaderEl.querySelector('#csp-header-wrench')?.addEventListener('click', () => {
     const activeSub = getActiveSubTool();
     if (activeSub) openSubToolDetailModal(activeSub);
@@ -659,6 +678,23 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(psizeBox);
   inkPropertyBoxes.set('pressureSize', psizeBox);
 
+  // 6b. Velocity Size Box (CSP 速度によるサイズ影響)
+  const vsizeBox = document.createElement('div');
+  vsizeBox.className = 'prop-row-box';
+  const vsizeHeader = makePropHeader('Afinado por velocidad', '35%');
+  const vsize = makeCheckbox('vsize-check', 'Afinar por velocidad');
+  const vsizeRow = document.createElement('div');
+  vsizeRow.className = 'csp-toggle-row';
+  vsizeRow.append(vsize.box, vsize.label);
+  const vsizeSlider = makeSlider('5', '100', '1');
+  vsize.box.addEventListener('change', () => setBrushSettings({ velocitySize: vsize.box.checked }));
+  vsizeSlider.addEventListener('input', () => {
+    setBrushSettings({ velocityMinRatio: Number(vsizeSlider.value) / 100 });
+  });
+  vsizeBox.append(vsizeHeader.header, vsizeRow, vsizeSlider);
+  propBody.appendChild(vsizeBox);
+  inkPropertyBoxes.set('velocitySize', vsizeBox);
+
   // 7. Taper Box
   const taperBox = document.createElement('div');
   taperBox.className = 'prop-row-box';
@@ -831,6 +867,73 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   });
   tolBox.append(tolHeader, tolSlider);
   propBody.appendChild(tolBox);
+
+  // Bucket: Cerrar Hueco (Close Gap)
+  const closeGapBox = document.createElement('div');
+  closeGapBox.className = 'prop-row-box bucket-only';
+  const closeGapHeader = document.createElement('div');
+  closeGapHeader.className = 'prop-row-header';
+  closeGapHeader.innerHTML = `
+    <span class="prop-label">Cerrar hueco (Close Gap)</span>
+    <span class="prop-value" id="gap-val">2 px</span>
+  `;
+  const closeGapSlider = document.createElement('input');
+  closeGapSlider.type = 'range';
+  closeGapSlider.className = 'csp-slider';
+  closeGapSlider.min = '0';
+  closeGapSlider.max = '10';
+  closeGapSlider.addEventListener('input', () => {
+    setBrushSettings({ closeGap: Number(closeGapSlider.value) });
+  });
+  closeGapBox.append(closeGapHeader, closeGapSlider);
+  propBody.appendChild(closeGapBox);
+
+  // Bucket: Escalado de Área (Area Scaling / Expand under lineart)
+  const areaScaleBox = document.createElement('div');
+  areaScaleBox.className = 'prop-row-box bucket-only';
+  const areaScaleHeader = document.createElement('div');
+  areaScaleHeader.className = 'prop-row-header';
+  areaScaleHeader.innerHTML = `
+    <span class="prop-label">Escalado de área (Expandir)</span>
+    <span class="prop-value" id="scale-val">2 px</span>
+  `;
+  const areaScaleSlider = document.createElement('input');
+  areaScaleSlider.type = 'range';
+  areaScaleSlider.className = 'csp-slider';
+  areaScaleSlider.min = '0';
+  areaScaleSlider.max = '10';
+  areaScaleSlider.addEventListener('input', () => {
+    setBrushSettings({ areaScaling: Number(areaScaleSlider.value) });
+  });
+  areaScaleBox.append(areaScaleHeader, areaScaleSlider);
+  propBody.appendChild(areaScaleBox);
+
+  // Bucket: Modo de Referencia (Refer Mode)
+  const referBox = document.createElement('div');
+  referBox.className = 'prop-row-box bucket-only';
+  const referLabel = document.createElement('span');
+  referLabel.className = 'prop-label';
+  referLabel.textContent = 'Capa de referencia';
+  referBox.appendChild(referLabel);
+
+  const referSegGroup = document.createElement('div');
+  referSegGroup.className = 'csp-seg-group';
+  const referModes: { id: 'reference' | 'all' | 'editing'; label: string }[] = [
+    { id: 'reference', label: 'Faro (Ref)' },
+    { id: 'all', label: 'Todas' },
+    { id: 'editing', label: 'Editada' },
+  ];
+  const referBtns = new Map<'reference' | 'all' | 'editing', HTMLButtonElement>();
+  for (const rm of referModes) {
+    const rbtn = document.createElement('button');
+    rbtn.className = 'csp-seg-btn';
+    rbtn.textContent = rm.label;
+    rbtn.addEventListener('click', () => setBrushSettings({ referMode: rm.id }));
+    referSegGroup.appendChild(rbtn);
+    referBtns.set(rm.id, rbtn);
+  }
+  referBox.appendChild(referSegGroup);
+  propBody.appendChild(referBox);
 
   // Non-ink tools: Shape controls
   const shapeBox = document.createElement('div');
@@ -1270,10 +1373,27 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     psizeSlider.disabled = !state.brush.pressureSize;
     psizeHeader.value.textContent = `${Math.round(state.brush.minSizeRatio * 100)}%`;
 
+    vsize.box.checked = !!state.brush.velocitySize;
+    vsizeSlider.value = String(Math.round((state.brush.velocityMinRatio ?? 0.35) * 100));
+    vsizeSlider.disabled = !state.brush.velocitySize;
+    vsizeHeader.value.textContent = `${Math.round((state.brush.velocityMinRatio ?? 0.35) * 100)}%`;
+
     taperStartSlider.value = String(Math.round(state.brush.taperStart));
     taperStartHeader.value.textContent = `${Math.round(state.brush.taperStart)} px`;
     taperEndSlider.value = String(Math.round(state.brush.taperEnd));
     taperEndHeader.value.textContent = `${Math.round(state.brush.taperEnd)} px`;
+
+    const activeTipsCount = (state.brush.tipTextures && state.brush.tipTextures.length > 0)
+      ? state.brush.tipTextures.length
+      : (state.brush.tipTexture && state.brush.tipTexture !== 'default' ? 1 : 0);
+
+    if (activeTipsCount > 1) {
+      tipLabel.textContent = `Forma de punta (${activeTipsCount} materiales)`;
+    } else if (activeTipsCount === 1) {
+      tipLabel.textContent = `Forma de punta (Material)`;
+    } else {
+      tipLabel.textContent = 'Forma de punta';
+    }
 
     for (const [id, btn] of tipSeg.buttons) {
       btn.classList.toggle('active', state.brush.tipShape === id);
@@ -1311,10 +1431,27 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       tiltHeader.value.textContent = `${Math.round(tablet.tiltAmount * 100)}%`;
     }
 
-    tolBox.style.display = state.tool === 'bucket' ? 'block' : 'none';
+    const isBucket = state.tool === 'bucket';
+    tolBox.style.display = isBucket ? 'block' : 'none';
     tolSlider.value = String(Math.round(state.brush.tolerance));
     const tolValNode = propBody.querySelector('#tol-val');
     if (tolValNode) tolValNode.textContent = `${Math.round(state.brush.tolerance)}%`;
+
+    closeGapBox.style.display = isBucket ? 'block' : 'none';
+    closeGapSlider.value = String(state.brush.closeGap ?? 0);
+    const gapValNode = propBody.querySelector('#gap-val');
+    if (gapValNode) gapValNode.textContent = `${state.brush.closeGap ?? 0} px`;
+
+    areaScaleBox.style.display = isBucket ? 'block' : 'none';
+    areaScaleSlider.value = String(state.brush.areaScaling ?? 0);
+    const scaleValNode = propBody.querySelector('#scale-val');
+    if (scaleValNode) scaleValNode.textContent = `${state.brush.areaScaling ?? 0} px`;
+
+    referBox.style.display = isBucket ? 'block' : 'none';
+    const currentReferMode = state.brush.referMode ?? 'reference';
+    for (const [id, btn] of referBtns) {
+      btn.classList.toggle('active', currentReferMode === id);
+    }
 
     shapeBox.style.display = state.tool === 'shape' ? 'block' : 'none';
     for (const [id, btn] of shapeBtns) {

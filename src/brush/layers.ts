@@ -17,6 +17,8 @@ export interface LayerNode {
   locked?: boolean; // CSP Lock layer (padlock)
   lockAlpha?: boolean; // CSP Lock transparent pixels (checkerboard lock)
   isReference?: boolean; // CSP Reference layer (lighthouse beacon for smart fill)
+  useLayerColor?: boolean; // CSP Layer Color effect (sketch blue/cyan)
+  layerColor?: string; // Hex color (default '#00a0e9')
   boundBoneId?: string | null; // Rigid cutout binding to a Bone2D
   meshSkinningEnabled?: boolean; // Automatic multi-bone LBS mesh deformation
 }
@@ -33,6 +35,8 @@ export interface LayerManager {
   toggleLayerLock(id?: string): void;
   toggleLayerLockAlpha(id?: string): void;
   toggleLayerReference(id?: string): void;
+  toggleLayerColor(id?: string, color?: string): void;
+  setLayerColor(id: string, color: string): void;
   getReferenceLayers(): LayerNode[];
   deleteLayer(id: string): boolean;
   renameLayer(id: string, newName: string): void;
@@ -48,6 +52,7 @@ export interface LayerManager {
   setLayerBlendMode(id: string, mode: GlobalCompositeOperation): void;
   moveLayer(fromIndex: number, toIndex: number): void;
   moveLayerBranch(layerId: string, direction: 'up' | 'down'): boolean;
+  loadLayers(newLayers: LayerNode[], newActiveId?: string): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -257,6 +262,8 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
           clipped: target.clipped,
           locked: false,
           lockAlpha: target.lockAlpha,
+          useLayerColor: target.useLayerColor,
+          layerColor: target.layerColor,
           boundBoneId: target.boundBoneId,
           meshSkinningEnabled: target.meshSkinningEnabled,
         };
@@ -344,6 +351,24 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const target = layers.find((l) => l.id === targetId);
       if (!target || target.isPaper) return;
       target.isReference = !target.isReference;
+      notify();
+    },
+    toggleLayerColor(id, color) {
+      const targetId = id || activeId;
+      const target = layers.find((l) => l.id === targetId);
+      if (!target || target.isPaper) return;
+      target.useLayerColor = !target.useLayerColor;
+      if (color) {
+        target.layerColor = color;
+      } else if (!target.layerColor) {
+        target.layerColor = '#00a0e9'; // CSP standard sketch cyan
+      }
+      notify();
+    },
+    setLayerColor(id, color) {
+      const target = layers.find((l) => l.id === id);
+      if (!target || target.isPaper) return;
+      target.layerColor = color;
       notify();
     },
     getReferenceLayers() {
@@ -553,6 +578,17 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
 
       notify();
       return true;
+    },
+    loadLayers(newLayers: LayerNode[], newActiveId?: string): void {
+      layers.length = 0;
+      layers.push(...newLayers);
+      if (newActiveId) {
+        activeId = newActiveId;
+      } else {
+        const drawable = layers.slice().reverse().find((l) => l.type === 'raster' && !l.isPaper);
+        activeId = drawable ? drawable.id : (layers.length > 0 ? layers[0].id : '');
+      }
+      notify();
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);

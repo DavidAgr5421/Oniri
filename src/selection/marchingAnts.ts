@@ -48,6 +48,10 @@ export class MarchingAntsRenderer {
     this.activeDragPreview = preview;
   }
 
+  public markDirty(): void {
+    this.boundaryDirty = true;
+  }
+
   /**
    * Recalculates the 1-pixel boundary of the current selection mask.
    * Uses 4-way dilation followed by destination-out subtraction.

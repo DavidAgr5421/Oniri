@@ -166,6 +166,17 @@ export interface TimelineManager {
   isLayerVisibleAtFrame(layer: LayerNode, frame: number): boolean;
   getLayerTransformAtFrame(layer: LayerNode, frame: number): EvaluatedTransform | null;
 
+  // State loading & Project persistence
+  loadTimelineState(state: {
+    settings?: Partial<TimelineSettings>;
+    tracks?: AnimationTrack[];
+    scenes?: AnimationScene[];
+    activeSceneId?: string;
+    bones?: Bone2D[];
+    boneKeyframes?: Map<number, SkeletonKeyframe>;
+    onionSkin?: Partial<OnionSkinSettings>;
+  }): void;
+
   // Subscriptions
   subscribe(listener: () => void): () => void;
 }
@@ -2127,6 +2138,39 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     getLightTableRegistrations(): LightTableRegistration[] {
       return onionSkin.customReferences;
+    },
+
+    loadTimelineState(state): void {
+      if (state.scenes && state.scenes.length > 0) {
+        scenes.length = 0;
+        scenes.push(...state.scenes);
+        activeSceneId = state.activeSceneId || scenes[0].id;
+      }
+      const scene = getActiveScene();
+      if (state.settings) {
+        Object.assign(scene.settings, state.settings);
+      }
+      if (state.tracks) {
+        scene.tracks.length = 0;
+        scene.tracks.push(...state.tracks);
+        for (const tr of scene.tracks) {
+          syncTrackFlatExposures(tr);
+        }
+      }
+      if (state.bones) {
+        scene.bones.length = 0;
+        scene.bones.push(...state.bones);
+      }
+      if (state.boneKeyframes) {
+        scene.boneKeyframes.clear();
+        for (const [f, kf] of state.boneKeyframes) {
+          scene.boneKeyframes.set(f, kf);
+        }
+      }
+      if (state.onionSkin) {
+        Object.assign(onionSkin, state.onionSkin);
+      }
+      notify();
     },
 
     subscribe(listener: () => void): () => void {

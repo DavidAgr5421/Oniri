@@ -10,6 +10,9 @@ import { marchingAnts } from './selection/marchingAnts';
 import { transformManager } from './selection/transformGizmo';
 import { mountSelectionLauncher } from './selection/selectionLauncher';
 import { mountTransformToolbar } from './selection/transformToolbar';
+import { mountFileMenu } from './storage/fileMenu';
+import { viewportNav } from './canvas/viewportNavigation';
+import { mountNavigatorPalette } from './canvas/navigatorView';
 
 // --- Viewport & Three.js Setup ---
 const viewport = document.getElementById('viewport') ?? document.body;
@@ -95,6 +98,20 @@ const selectionMesh = new THREE.Mesh(canvasGeo, selectionMat);
 selectionMesh.position.set(0, 0, 0.005);
 scene.add(selectionMesh);
 
+// Initialize Viewport Navigation System (Pan, Zoom, 2D Rotation, Display Mirroring)
+viewportNav.init({
+  camera,
+  canvas,
+  meshes: [canvasMesh, borderMesh, selectionMesh],
+});
+
+// Mount CSP Navigator Palette
+const appEl = document.getElementById('app') ?? document.body;
+const navPalette = mountNavigatorPalette(appEl, {
+  engine,
+});
+navPalette.hide(); // Hidden by default, toggled via top bar or shortcut
+
 // Attach Pointer Input
 attachStrokeInput({
   canvas,
@@ -107,6 +124,20 @@ attachStrokeInput({
     setBrushSettings({ color: hex });
   },
 });
+
+// Mount Top Command Bar (File, Save, Open, Export, Undo, Redo, Navigation, Drop listener)
+const topBarContainer = document.getElementById('top-bar-container');
+if (topBarContainer) {
+  mountFileMenu(topBarContainer, {
+    engine,
+    timeline,
+    onUndo: () => engine.undo(),
+    onRedo: () => engine.redo(),
+    onToggleNavigator: () => navPalette.toggle(),
+    isNavigatorVisible: () => navPalette.element.style.display !== 'none',
+    onFlipView: () => viewportNav.toggleFlipHorizontal(),
+  });
+}
 
 // Mount Lateral Toolbar and Popup
 const toolsContainer = document.getElementById('tools-container');
@@ -136,7 +167,7 @@ if (layersContainer) {
 // Mount Timeline Palette (CSP Style)
 const timelineContainer = document.getElementById('timeline-container');
 if (timelineContainer) {
-  mountTimelineView(timelineContainer, timeline, engine.layerManager);
+  mountTimelineView(timelineContainer, timeline, engine.layerManager, engine);
   mountTransformToolbar({ camera, canvas });
 }
 
@@ -161,4 +192,4 @@ function animate(): void {
 }
 animate();
 
-console.log('AnimacionApp: Lateral Toolbar, Layers Panel, Timeline and Brush Engine mounted.');
+console.log('Oniri Studio Paint: Command Bar, Lateral Toolbar, Layers Panel, Timeline and Brush Engine mounted.');

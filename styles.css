@@ -81,7 +81,7 @@ body {
 /* Lateral Toolbar (Docked Left Strip - CSP Style) */
 .lateral-toolbar {
   position: absolute;
-  top: 0;
+  top: 26px;
   left: 0;
   bottom: 0;
   width: 48px;
@@ -247,7 +247,7 @@ body {
    ========================================================================== */
 .csp-sidebar-dock {
   position: absolute;
-  top: 0;
+  top: 26px;
   left: 48px;
   bottom: 0;
   width: var(--left-dock-inner-width, 240px);
@@ -731,6 +731,18 @@ body {
 .layer-action-btn:hover {
   background: var(--bg-button-hover);
   color: var(--text-main);
+}
+
+.layer-action-btn.active {
+  background: rgba(0, 160, 233, 0.2);
+  border-color: rgba(0, 160, 233, 0.5);
+  color: #38bdf8;
+}
+
+.layer-action-btn.layer-color-btn.active {
+  background: rgba(0, 160, 233, 0.25);
+  border-color: #00a0e9;
+  color: #00a0e9;
 }
 
 .layers-list {
@@ -1738,4 +1750,1056 @@ body[data-transform-modal='on'] #viewport canvas {
 
 .csp-sel-launcher .csp-trans-btn:hover {
   border-color: rgba(255, 200, 60, 0.55);
+}
+
+/* ==========================================================================
+   Clip Studio Paint - Pen Pressure Calibration Modal (筆圧検知レベルの調節)
+   ========================================================================== */
+.csp-calibration-window {
+  width: 680px;
+  max-width: 95vw;
+  background: #1e2024;
+  border: 1px solid #3e4452;
+  border-radius: 8px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #e2e8f0;
+  font-family: var(--font-family);
+}
+
+.csp-calibration-header {
+  height: 38px;
+  background: #16181b;
+  border-bottom: 1px solid #2d3139;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.csp-calibration-banner {
+  padding: 8px 14px;
+  background: #172033;
+  border-left: 3px solid #38bdf8;
+  font-size: 11px;
+  color: #93c5fd;
+  line-height: 1.45;
+}
+
+.csp-calibration-body {
+  padding: 12px 14px;
+  display: flex;
+  gap: 14px;
+  background: #1a1c20;
+}
+
+.csp-calibration-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.csp-calibration-right {
+  width: 290px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.csp-calib-sec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.csp-calib-btn-subtle {
+  background: transparent;
+  border: 1px solid #3b4252;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.csp-calib-btn-subtle:hover {
+  background: #2b303c;
+  color: #f8fafc;
+  border-color: #64748b;
+}
+
+.csp-test-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 290px;
+  background: #f8fafc;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: crosshair;
+}
+
+.csp-test-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.csp-test-canvas-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #94a3b8;
+  font-size: 12px;
+  pointer-events: none;
+  text-align: center;
+  font-weight: 500;
+}
+
+.csp-graph-canvas-wrap {
+  width: 100%;
+  height: 160px;
+  background: #141619;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.csp-graph-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.csp-calib-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  background: #141619;
+  border: 1px solid #29303d;
+  border-radius: 5px;
+  padding: 6px;
+}
+
+.csp-calib-metrics .metric-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.csp-calib-metrics .m-label {
+  font-size: 9px;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.csp-calib-metrics .m-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: #38bdf8;
+}
+
+.csp-calib-presets-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.csp-calib-presets-row .presets-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+.preset-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.csp-preset-btn {
+  background: #232730;
+  border: 1px solid #3b4252;
+  border-radius: 4px;
+  color: #cbd5e1;
+  font-size: 11px;
+  padding: 5px 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+
+.csp-preset-btn:hover {
+  background: #2f3542;
+  color: #ffffff;
+  border-color: #64748b;
+}
+
+.csp-preset-btn.active {
+  background: #0284c7;
+  color: #ffffff;
+  border-color: #38bdf8;
+  font-weight: 600;
+}
+
+.csp-preset-btn.highlight {
+  border-color: #38bdf8;
+  color: #38bdf8;
+  background: #172554;
+  grid-column: span 2;
+}
+
+.csp-preset-btn.highlight:hover {
+  background: #1e3a8a;
+  color: #ffffff;
+}
+
+.csp-calib-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.csp-calibration-footer {
+  height: 48px;
+  background: #16181b;
+  border-top: 1px solid #2d3139;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.csp-btn-primary {
+  background: #0284c7;
+  color: #ffffff;
+  border: 1px solid #38bdf8;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.csp-btn-primary:hover {
+  background: #0369a1;
+}
+
+.csp-btn-secondary {
+  background: #262930;
+  color: #cbd5e1;
+  border: 1px solid #3e4452;
+  border-radius: 5px;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.csp-btn-secondary:hover {
+  background: #323742;
+  color: #ffffff;
+}
+
+/* ==========================================================================
+   CSP-Style Top Command Bar & File Management (2-Tier Header)
+   ========================================================================== */
+
+#top-bar-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 0;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.csp-top-header {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: rgba(22, 24, 27, 0.98);
+  border-bottom: 1px solid #30353f;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  user-select: none;
+}
+
+/* Tier 1: Main Menu Bar (Archivo, Edición, Animación, Capa...) */
+.csp-top-menubar-row {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  background: #181b20;
+  border-bottom: 1px solid #282c35;
+  padding: 0 12px 0 10px;
+  width: 100%;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+.csp-top-menubar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 2px;
+}
+
+.csp-menu-top-item {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.csp-menu-top-btn {
+  background: transparent;
+  border: none;
+  color: #cbd5e1;
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.csp-menu-top-btn:hover {
+  background: #2a2f3a;
+  color: #ffffff;
+}
+
+.csp-menu-top-btn.active {
+  background: #0284c7;
+  color: #ffffff;
+}
+
+/* Dropdown Menu Overlay */
+.csp-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  background: rgba(24, 27, 32, 0.98);
+  border: 1px solid #3c424f;
+  border-radius: 5px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  padding: 4px 0;
+  z-index: 2500;
+  display: flex;
+  flex-direction: column;
+  animation: cspMenuFade 0.1s ease-out;
+}
+
+@keyframes cspMenuFade {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.csp-menu-row {
+  display: flex;
+  align-items: center;
+  height: 25px;
+  padding: 0 12px 0 6px;
+  color: #d1d5db;
+  font-size: 12px;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.1s ease;
+}
+
+.csp-menu-row:hover {
+  background: #0284c7;
+  color: #ffffff;
+}
+
+.csp-menu-row.disabled {
+  color: #64748b;
+  cursor: default;
+  pointer-events: none;
+}
+
+.csp-menu-check {
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #38bdf8;
+  font-weight: bold;
+}
+
+.csp-menu-row:hover .csp-menu-check {
+  color: #ffffff;
+}
+
+.csp-menu-icon {
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+}
+
+.csp-menu-label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.csp-menu-shortcut {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-left: 20px;
+  white-space: nowrap;
+}
+
+.csp-menu-row:hover .csp-menu-shortcut {
+  color: #e2e8f0;
+}
+
+.csp-menu-arrow {
+  font-size: 14px;
+  color: #94a3b8;
+  margin-left: 10px;
+}
+
+.csp-menu-divider {
+  height: 1px;
+  background: #333842;
+  margin: 4px 0;
+}
+
+.csp-submenu {
+  top: -4px;
+  left: 100%;
+}
+
+.csp-top-spacer {
+  flex: 1;
+}
+
+.csp-project-title-badge {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+  background: #131518;
+  border: 1px solid #282c35;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+/* Tier 2: Command Bar / Quick Access Strip */
+.csp-top-commandbar-row {
+  position: absolute;
+  top: 26px;
+  left: var(--left-dock-width, 288px);
+  right: var(--right-dock-width, 250px);
+  height: 30px;
+  background: rgba(26, 29, 34, 0.95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid #282c35;
+  border-left: 1px solid #282c35;
+  border-right: 1px solid #282c35;
+  border-bottom-left-radius: 4px;
+  border-bottom-right-radius: 4px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  z-index: 20;
+  pointer-events: auto;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  transition: left 0.12s ease, right 0.12s ease;
+  box-sizing: border-box;
+}
+
+.csp-top-commandbar-row::-webkit-scrollbar {
+  display: none;
+}
+
+.csp-cmd-brand {
+  display: flex;
+  align-items: center;
+  margin-right: 12px;
+}
+
+.csp-app-logo {
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  font-size: 12.5px;
+  background: linear-gradient(135deg, #38bdf8, #818cf8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.csp-cmd-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.csp-cmd-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  background: #262930;
+  border: 1px solid #373c47;
+  border-radius: 3px;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+
+.csp-cmd-btn:hover {
+  background: #333842;
+  border-color: #4b5260;
+  color: #ffffff;
+}
+
+.csp-cmd-btn.highlight {
+  background: #0284c7;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.csp-cmd-btn.highlight:hover {
+  background: #0369a1;
+}
+
+.csp-cmd-btn.icon-only {
+  padding: 0 5px;
+}
+
+.csp-cmd-sep {
+  width: 1px;
+  height: 16px;
+  background: #373c47;
+  margin: 0 3px;
+}
+
+/* Toast Notification */
+.csp-notification-toast {
+  position: fixed;
+  top: 68px;
+  right: 260px;
+  background: #1e293b;
+  border: 1px solid #38bdf8;
+  border-radius: 6px;
+  padding: 10px 16px;
+  color: #f8fafc;
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  z-index: 1000;
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.csp-notification-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Drag & Drop Overlay */
+.csp-drop-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.csp-drop-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.csp-drop-card {
+  background: #1e293b;
+  border: 2px dashed #38bdf8;
+  border-radius: 12px;
+  padding: 36px 48px;
+  text-align: center;
+  color: #f1f5f9;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6);
+  transform: scale(0.95);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.csp-drop-overlay.visible .csp-drop-card {
+  transform: scale(1);
+}
+
+.csp-drop-card svg {
+  color: #38bdf8;
+  margin-bottom: 12px;
+}
+
+.csp-drop-card h3 {
+  margin: 0 0 6px 0;
+  font-size: 18px;
+}
+
+.csp-drop-card p {
+  margin: 0;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+/* ==========================================================================
+   CSP Navigator Palette (Paleta Navegador)
+   ========================================================================== */
+.csp-navigator-palette {
+  position: absolute;
+  top: 68px;
+  right: calc(var(--right-dock-width, 250px) + 12px);
+  width: 270px;
+  background: rgba(28, 28, 28, 0.95);
+  border: 1px solid var(--bg-panel-border, #383838);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  z-index: 120;
+  overflow: hidden;
+  user-select: none;
+  pointer-events: auto;
+  font-family: var(--font-family);
+  animation: cspFadeIn 0.15s ease-out;
+}
+
+@keyframes cspFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.csp-navigator-header {
+  height: 32px;
+  background: #222222;
+  border-bottom: 1px solid #333333;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+}
+
+.csp-nav-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main, #e0e0e0);
+}
+
+.csp-nav-title svg {
+  color: var(--accent, #007acc);
+}
+
+.csp-nav-close-btn {
+  background: transparent;
+  border: none;
+  color: #888888;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.csp-nav-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.csp-nav-preview-container {
+  padding: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #141414;
+}
+
+.csp-nav-preview-canvas {
+  width: 248px;
+  height: 139.5px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  cursor: crosshair;
+  background-color: #1a1a1a;
+  background-image: linear-gradient(45deg, #222 25%, transparent 25%),
+                    linear-gradient(-45deg, #222 25%, transparent 25%),
+                    linear-gradient(45deg, transparent 75%, #222 75%),
+                    linear-gradient(-45deg, transparent 75%, #222 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+}
+
+.csp-nav-controls {
+  padding: 8px 10px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #1c1c1c;
+}
+
+.csp-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.csp-nav-row.flip-row {
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+.csp-nav-icon-btn {
+  width: 24px;
+  height: 24px;
+  background: #2a2a2a;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #cccccc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.csp-nav-icon-btn:hover {
+  background: #383838;
+  color: #ffffff;
+  border-color: #555555;
+}
+
+.csp-nav-icon-btn:active {
+  background: #007acc;
+  color: #ffffff;
+}
+
+.csp-nav-text-btn {
+  padding: 0 6px;
+  height: 24px;
+  background: #2a2a2a;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.csp-nav-text-btn:hover {
+  background: #383838;
+  color: #ffffff;
+}
+
+.csp-nav-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+.csp-nav-input {
+  width: 48px;
+  height: 24px;
+  background: #161616;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  text-align: center;
+  padding: 0 4px;
+  outline: none;
+  font-family: inherit;
+}
+
+.csp-nav-input:focus {
+  border-color: #007acc;
+}
+
+.csp-nav-toggle-btn {
+  flex: 1;
+  height: 26px;
+  background: #262626;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 11px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.csp-nav-toggle-btn:hover {
+  background: #333333;
+  color: #ffffff;
+}
+
+.csp-nav-toggle-btn.active {
+  background: #007acc;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+/* ==========================================================================
+   CSP Interactive Ergonomic Overlays (Brush Size Drag & Eyedropper Loupe)
+   ========================================================================== */
+.csp-brush-size-overlay {
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.csp-brush-size-svg {
+  width: 1px;
+  height: 1px;
+}
+
+.csp-brush-size-badge {
+  position: absolute;
+  left: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(18, 20, 24, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 12px;
+  padding: 3px 9px;
+  color: #f1f5f9;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+
+.csp-eyedropper-loupe {
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.csp-loupe-ring {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  position: relative;
+  background: #222222;
+}
+
+.csp-loupe-top {
+  height: 50%;
+  width: 100%;
+}
+
+.csp-loupe-bottom {
+  height: 50%;
+  width: 100%;
+  border-top: 1px solid rgba(0, 0, 0, 0.4);
+}
+
+.csp-loupe-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px solid #ffffff;
+  box-shadow: 0 0 2px #000000;
+  pointer-events: none;
+}
+
+.csp-loupe-hex {
+  background: rgba(18, 20, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+
+/* ==========================================================================
+   CSP Selection Launcher Popover & Settings Modal
+   ========================================================================== */
+.csp-launcher-popover {
+  position: fixed;
+  z-index: 10001;
+  width: 210px;
+  background: #1e2024;
+  border: 1px solid #3e4452;
+  border-radius: 6px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 200, 60, 0.25);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #e2e8f0;
+  font-family: var(--font-family);
+  user-select: none;
+}
+
+.csp-popover-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #38bdf8;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.csp-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.csp-popover-input {
+  width: 55px;
+  background: #141619;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  color: #ffffff;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  outline: none;
+}
+
+.csp-popover-input:focus {
+  border-color: #38bdf8;
+}
+
+.csp-popover-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.csp-chip {
+  background: #232730;
+  border: 1px solid #3b4252;
+  border-radius: 3px;
+  color: #cbd5e1;
+  font-size: 10px;
+  padding: 2px 5px;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.csp-chip:hover {
+  background: #2f3542;
+  color: #ffffff;
+  border-color: #64748b;
+}
+
+.csp-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.csp-btn-cancel,
+.csp-btn-apply {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.csp-btn-cancel {
+  background: transparent;
+  color: #94a3b8;
+  border-color: #3b4252;
+}
+
+.csp-btn-cancel:hover {
+  background: #2b303c;
+  color: #ffffff;
+}
+
+.csp-btn-apply {
+  background: #0284c7;
+  color: #ffffff;
+  font-weight: 600;
+  border-color: #38bdf8;
+}
+
+.csp-btn-apply:hover {
+  background: #0369a1;
+}
+
+.csp-launcher-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10002;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }

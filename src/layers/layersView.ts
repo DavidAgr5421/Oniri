@@ -67,12 +67,12 @@ export function mountLayersView(
 ): void {
   container.innerHTML = '';
   container.style.position = 'absolute';
-  container.style.top = '0';
+  container.style.top = '26px';
   container.style.right = '0';
   container.style.bottom = '0';
   container.style.width = 'var(--right-dock-width, 250px)';
   container.style.pointerEvents = 'auto';
-  container.style.zIndex = '100';
+  container.style.zIndex = '15';
   container.style.display = 'block';
 
   const panel = document.createElement('aside');
@@ -261,6 +261,41 @@ export function mountLayersView(
     layerManager.toggleLayerClipping(layerManager.activeLayerId);
   });
 
+  // 1b. Layer Color (Color de capa - Azul de boceto / Sketch Cyan)
+  const layerColorBtn = document.createElement('button');
+  layerColorBtn.className = 'layer-action-btn layer-color-btn';
+  layerColorBtn.title = 'Color de capa (Azul de boceto CSP: colorea temporalmente el dibujo para entintar encima. Clic derecho para cambiar color)';
+  layerColorBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <rect x="3" y="3" width="18" height="18" rx="3"/>
+      <path d="M3 15l6-6 4 4 8-8"/>
+      <circle cx="16" cy="16" r="3" fill="currentColor"/>
+    </svg>
+  `;
+  layerColorBtn.addEventListener('click', () => {
+    layerManager.toggleLayerColor(layerManager.activeLayerId);
+    if (engine) {
+      engine.compositeDirty = true;
+      engine.updateComposite();
+    }
+  });
+  layerColorBtn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const active = layerManager.getActiveLayer();
+    if (!active || active.isPaper) return;
+    const picker = document.createElement('input');
+    picker.type = 'color';
+    picker.value = active.layerColor || '#00a0e9';
+    picker.addEventListener('input', () => {
+      layerManager.setLayerColor(active.id, picker.value);
+      if (engine) {
+        engine.compositeDirty = true;
+        engine.updateComposite();
+      }
+    });
+    picker.click();
+  });
+
   // 2. Lock Transparent Pixels (Bloquear píxeles transparentes - Alpha Lock)
   const lockAlphaBtn = document.createElement('button');
   lockAlphaBtn.className = 'layer-action-btn lock-alpha-btn';
@@ -290,6 +325,22 @@ export function mountLayersView(
   `;
   lockLayerBtn.addEventListener('click', () => {
     layerManager.toggleLayerLock(layerManager.activeLayerId);
+  });
+
+  // 3b. Reference Layer (Faro - Capa de Referencia CSP para Bote Inteligente)
+  const refLayerBtn = document.createElement('button');
+  refLayerBtn.className = 'layer-action-btn ref-layer-btn';
+  refLayerBtn.title = 'Establecer como capa de referencia (Faro: guía para el Bote de pintura inteligente)';
+  refLayerBtn.innerHTML = `
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+      <path d="M12 2l2 4h-4l2-4z"/>
+      <path d="M9 6h6l1 14H8L9 6z"/>
+      <line x1="8" y1="11" x2="16" y2="11"/>
+      <line x1="6" y1="20" x2="18" y2="20"/>
+    </svg>
+  `;
+  refLayerBtn.addEventListener('click', () => {
+    layerManager.toggleLayerReference(layerManager.activeLayerId);
   });
 
   // 4. New Raster Layer (+)
@@ -429,8 +480,10 @@ export function mountLayersView(
 
   actionsBar.append(
     clipLayerBtn,
+    layerColorBtn,
     lockAlphaBtn,
     lockLayerBtn,
+    refLayerBtn,
     addLayerBtn,
     addFolderBtn,
     addAnimFolderBtn,
@@ -461,14 +514,24 @@ export function mountLayersView(
       opacitySlider.value = String(opacityPct);
       opacityLabel.textContent = `${opacityPct}%`;
       clipLayerBtn.classList.toggle('active', !!active.clipped);
+      layerColorBtn.classList.toggle('active', !!active.useLayerColor);
       lockAlphaBtn.classList.toggle('active', !!active.lockAlpha);
       lockLayerBtn.classList.toggle('active', !!active.locked);
+      refLayerBtn.classList.toggle('active', !!active.isReference);
+
+      if (active.useLayerColor) {
+        layerColorBtn.style.color = active.layerColor || '#00a0e9';
+      } else {
+        layerColorBtn.style.color = '';
+      }
 
       // Disable buttons when layer is paper
       const isPaper = !!active.isPaper;
       clipLayerBtn.disabled = isPaper;
+      layerColorBtn.disabled = isPaper;
       lockAlphaBtn.disabled = isPaper || active.type !== 'raster';
       lockLayerBtn.disabled = isPaper;
+      refLayerBtn.disabled = isPaper;
       clearLayerBtn.disabled = isPaper || !!active.locked;
       deleteLayerBtn.disabled = isPaper;
       mergeBelowBtn.disabled = isPaper || !!active.locked || active.type !== 'raster';
@@ -600,6 +663,13 @@ export function mountLayersView(
           thumbCtx.fillStyle = '#262626';
           thumbCtx.fillRect(0, 0, 36, 22);
           thumbCtx.drawImage(node.canvas, 0, 0, 36, 22);
+          if (node.useLayerColor) {
+            thumbCtx.save();
+            thumbCtx.globalCompositeOperation = 'source-in';
+            thumbCtx.fillStyle = node.layerColor || '#00a0e9';
+            thumbCtx.fillRect(0, 0, 36, 22);
+            thumbCtx.restore();
+          }
         }
         item.appendChild(thumbCanvas);
       }
@@ -638,7 +708,37 @@ export function mountLayersView(
       });
       item.appendChild(nameText);
 
-      // 5b. Alpha Lock Badge (CSP checkerboard lock)
+      // 5b. Reference Layer Badge (Faro CSP)
+      if (node.isReference) {
+        const refBadge = document.createElement('span');
+        refBadge.className = 'layer-badge';
+        refBadge.style.color = '#38bdf8';
+        refBadge.title = 'Capa de Referencia (Lineart de referencia para el Bote Inteligente)';
+        refBadge.innerHTML = `
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2l2 4h-4l2-4z"/>
+            <path d="M9 6h6l1 14H8L9 6z"/>
+            <line x1="8" y1="11" x2="16" y2="11"/>
+          </svg>
+        `;
+        item.appendChild(refBadge);
+      }
+
+      // 5b2. Layer Color Badge (CSP sketch cyan indicator)
+      if (node.useLayerColor) {
+        const colorBadge = document.createElement('span');
+        colorBadge.className = 'layer-badge layer-color-badge';
+        colorBadge.style.color = node.layerColor || '#00a0e9';
+        colorBadge.title = `Color de capa activo (${node.layerColor || '#00a0e9'})`;
+        colorBadge.innerHTML = `
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="12" r="7"/>
+          </svg>
+        `;
+        item.appendChild(colorBadge);
+      }
+
+      // 5c. Alpha Lock Badge (CSP checkerboard lock)
       if (node.lockAlpha) {
         const alphaBadge = document.createElement('span');
         alphaBadge.className = 'layer-badge alpha-lock-badge';

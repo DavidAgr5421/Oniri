@@ -5,9 +5,10 @@ import {
   renderSkinnedLayerMesh,
 } from '../animation/boneModel';
 import type { TimelineManager } from '../animation/timelineManager';
-import type { BrushSettings } from '../tools/toolState';
+import type { BrushSettings, TipTextureId } from '../tools/toolState';
 import { getToolState, subscribeTools, hexToRgb, rgbToHex } from '../tools/toolState';
 import { floodFill } from './floodFill';
+import { executeSmartFill, executeEncloseAndFill, executePaintUnfilledArea } from './smartFill';
 import { createHistoryManager, HistoryManager } from './history';
 import { createLayerManager, getRenderOrder, LayerManager, LayerNode } from './layers';
 import { drawShape } from './shapeDrawer';
@@ -43,10 +44,18 @@ export interface BrushEngine {
   continueErase(x: number, y: number, pressure: number): void;
   /** Nib footprint for the next stamps, driven by the pen tilt (null = upright). */
   setStrokeTilt(tilt: TiltFootprint | null): void;
+  /** Instantaneous stroke speed in doc px per sample, drives velocity dynamics. */
+  setStrokeSpeed(speed: number): void;
+  /** Temporary predicted stroke points for zero-latency live drawing. */
+  renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void;
+  /** Clears the live prediction overlay canvas. */
+  clearPredictedStroke(): void;
   beginShape(x: number, y: number): void;
   updateShape(currentX: number, currentY: number): void;
   endStroke(tail?: StrokeTail): void;
   fill(x: number, y: number, colorHex: string, tolerance: number): void;
+  encloseAndFill(polygon: { x: number; y: number }[], colorHex: string, tolerance: number): boolean;
+  paintUnfilledArea(points: { x: number; y: number }[], radius: number, colorHex: string, tolerance: number): boolean;
   fillSelection(colorHex?: string): void;
   clearActiveLayer(): boolean;
   pushUndoRecord(layerId: string, data: ImageData): void;
@@ -62,11 +71,16 @@ function clamp01(v: number): number {
 }
 
 /**
- * Diameter in px for a stamp given pressure and the distance walked along the
- * stroke. Combines the pressure curve, the minimum size ratio and the starting
- * taper (smoothstep), so strokes begin as a needle instead of a fat dot.
+ * Diameter in px for a stamp given pressure, distance walked along stroke, and
+ * speed. Combines the pressure curve, the minimum size ratio, the starting
+ * taper (smoothstep), and the CSP-style velocity dynamics (tapering when moving fast).
  */
-export function brushDiameterAt(s: BrushSettings, pressure: number, distance: number): number {
+export function brushDiameterAt(
+  s: BrushSettings,
+  pressure: number,
+  distance: number,
+  speed = 0,
+): number {
   const p = clamp01(pressure);
   const curvedP = s.pressureSize ? Math.pow(p, Math.max(0.1, s.pressureCurve)) : 1;
   let smoothStart = 1;
@@ -74,7 +88,18 @@ export function brushDiameterAt(s: BrushSettings, pressure: number, distance: nu
     const t = Math.min(1, distance / s.taperStart);
     smoothStart = t * t * (3 - 2 * t);
   }
-  const factor = s.minSizeRatio + (1 - s.minSizeRatio) * curvedP * smoothStart;
+
+  // Velocity dynamic factor (CSP 速度によるサイズ影響: quick flicks taper down)
+  let speedFactor = 1.0;
+  if (s.velocitySize && speed > 1.0) {
+    const minRatio = Math.max(0.05, Math.min(1.0, s.velocityMinRatio ?? 0.35));
+    const curve = Math.max(0.2, s.velocityCurve ?? 1.0);
+    const normalizedSpeed = Math.min(1.0, (speed - 1.0) / 40.0);
+    const vFactor = Math.pow(normalizedSpeed, curve);
+    speedFactor = 1.0 - (1.0 - minRatio) * vFactor;
+  }
+
+  const factor = s.minSizeRatio + (1 - s.minSizeRatio) * curvedP * smoothStart * speedFactor;
   return Math.max(MIN_STAMP_DIAMETER, s.size * factor);
 }
 
@@ -82,11 +107,17 @@ export function brushDiameterAt(s: BrushSettings, pressure: number, distance: nu
  * Alpha for a single stamp. 'uniform' pens without pressure on density stay
  * fully solid (no overlapping-scale artifacts). Accumulated ink scales the raw
  * flow by the stamp spacing so dense spacing converges smoothly instead of
- * saturating or leaving visible steps.
+ * saturating or leaving visible steps. Also supports CSP velocity flow dynamics.
  */
-export function brushStampAlpha(s: BrushSettings, pressure: number): number {
+export function brushStampAlpha(s: BrushSettings, pressure: number, speed = 0): number {
   const p = clamp01(pressure);
-  const flow = s.pressureFlow ? s.flow * Math.pow(p, 1.2) : s.flow;
+  let flow = s.pressureFlow ? s.flow * Math.pow(p, 1.2) : s.flow;
+
+  if (s.velocityFlow && speed > 2.0) {
+    const norm = Math.min(1.0, (speed - 2.0) / 45.0);
+    flow *= 1.0 - norm * 0.30;
+  }
+
   const raw = clamp01(flow);
 
   if (s.inkMode === 'uniform') {
@@ -106,7 +137,8 @@ export function brushStampAlpha(s: BrushSettings, pressure: number): number {
 }
 
 function tipAngleRad(s: BrushSettings, dx: number, dy: number): number {
-  const followsStroke = s.followDirection && s.tipShape !== 'calligraphic';
+  const isCustomTip = !!(s.tipTexture && s.tipTexture !== 'default');
+  const followsStroke = (s.followDirection || isCustomTip) && s.tipShape !== 'calligraphic';
   let dirDeg = 0;
   if (followsStroke && (dx !== 0 || dy !== 0)) {
     dirDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
@@ -149,6 +181,8 @@ export function createBrushEngine(): BrushEngine {
   const onionCanvas = makeCanvas(DOC_W, DOC_H);
   const lockAlphaCanvas = makeCanvas(DOC_W, DOC_H);
   const liveMaskCanvas = makeCanvas(DOC_W, DOC_H);
+  const predictedCanvas = makeCanvas(DOC_W, DOC_H);
+  const layerColorCanvas = makeCanvas(DOC_W, DOC_H);
 
   const strokeContext = strokeCanvas.getContext('2d')!;
   const compositeContext = compositeCanvas.getContext('2d')!;
@@ -157,6 +191,9 @@ export function createBrushEngine(): BrushEngine {
   const onionContext = onionCanvas.getContext('2d')!;
   const lockAlphaContext = lockAlphaCanvas.getContext('2d')!;
   const liveMaskContext = liveMaskCanvas.getContext('2d')!;
+  const predictedContext = predictedCanvas.getContext('2d')!;
+  const layerColorContext = layerColorCanvas.getContext('2d')!;
+  let hasPredictions = false;
 
   const history: HistoryManager = createHistoryManager(30);
 
@@ -166,9 +203,6 @@ export function createBrushEngine(): BrushEngine {
   let lastX = 0;
   let lastY = 0;
   let lastPressure = 1;
-  let rawLastX = 0;
-  let rawLastY = 0;
-  let rawLastPressure = 1;
   let lastAngleRad = 0;
   let strokeTilt: TiltFootprint | null = null;
   let distanceSinceStamp = 0;
@@ -178,6 +212,8 @@ export function createBrushEngine(): BrushEngine {
   let preStrokeSnapshot: ImageData | null = null;
   let preStrokeLayerId = '';
   let strokePickedColor: [number, number, number, number] | null = null;
+  let currentStrokeSpeed = 0;
+  let strokeStampIndex = 0;
 
   function samplePreStrokeColor(x: number, y: number): [number, number, number, number] | null {
     if (!preStrokeSnapshot) return null;
@@ -203,8 +239,10 @@ export function createBrushEngine(): BrushEngine {
     diameter: number,
     pressure: number,
     angleRad: number,
+    tipTextureOverride?: TipTextureId,
   ): void {
     const s = strokeSettings;
+    const effectiveTip = tipTextureOverride !== undefined ? tipTextureOverride : s.tipTexture;
     let stampColor = erase ? '#000000' : currentColorHex;
 
     // 1. Dual Color / Sub Color Mix (CSP サブカラーの混合)
@@ -267,31 +305,22 @@ export function createBrushEngine(): BrushEngine {
       }
     }
 
-    let alpha = brushStampAlpha(s, pressure);
+    let alpha = brushStampAlpha(s, pressure, currentStrokeSpeed);
 
     if (strokePickedColor && s.smudge && s.smudge > 0) {
       alpha *= strokePickedColor[3];
     }
 
-    // 3. Paper tooth threshold (Authentic CSP & analog paper tooth bite)
+    // 3. Paper tooth modulation (Authentic CSP & analog paper tooth bite)
     if (!erase && s.paperTexture && s.paperTexture !== 'none' && (s.textureDensity ?? 0) > 0) {
       const density = clamp01(s.textureDensity ?? 0.85);
       const grain = samplePaperGrain(s.paperTexture, x, y, s.textureScale ?? 0.35);
-      // Tooth threshold: peaks catch ink, valleys resist ink.
-      // Firm pressure pushes nib deeper into grooves, lowering the threshold.
-      const thresh = density * (0.85 - clamp01(pressure) * 0.45);
-      if (grain < thresh) {
-        const margin = 0.12;
-        if (grain < thresh - margin) {
-          return; // Deep paper pore untouched by ink!
-        } else {
-          const t = (grain - (thresh - margin)) / margin;
-          alpha *= t * t * (1 - density * 0.9);
-        }
-      } else {
-        const t = (grain - thresh) / Math.max(0.01, 1 - thresh);
-        alpha *= (0.45 + 0.55 * t);
-      }
+      // Peaks catch ink, valleys resist ink.
+      // Firm pressure pushes nib deeper into grooves, increasing tooth bite.
+      const press = clamp01(pressure);
+      const bite = Math.pow(grain, (1.8 - press * 1.1) * (0.5 + density * 1.5));
+      const modulation = (1 - density * 0.85) + density * 0.85 * bite;
+      alpha *= Math.max(0.02, Math.min(1.0, modulation));
     }
 
     if (alpha <= 0.005) return;
@@ -315,12 +344,12 @@ export function createBrushEngine(): BrushEngine {
       antiAliasing: s.antiAliasing,
       tipShape: s.tipShape,
       tipRoundness: roundness,
-      tipTexture: s.tipTexture,
+      tipTexture: effectiveTip,
     });
 
     const w = stampCanvas.width;
     const h = stampCanvas.height;
-    const symmetric = s.tipShape !== 'square' && roundness >= 0.999 && (!s.tipTexture || s.tipTexture === 'default');
+    const symmetric = s.tipShape !== 'square' && roundness >= 0.999 && (!effectiveTip || effectiveTip === 'default');
 
     ctx.save();
     if (erase) {
@@ -360,6 +389,10 @@ export function createBrushEngine(): BrushEngine {
     const angleRad = tipAngleRad(s, dx, dy);
     lastAngleRad = angleRad;
 
+    const tipsList: TipTextureId[] = (s.tipTextures && s.tipTextures.length > 0)
+      ? s.tipTextures
+      : (s.tipTexture && s.tipTexture !== 'default' ? [s.tipTexture] : []);
+
     let pos = 0;
     let since = distanceSinceStamp;
     let guard = 0;
@@ -370,7 +403,7 @@ export function createBrushEngine(): BrushEngine {
       const pAt = p0 + (p1 - p0) * u;
       // Adaptive step: as the tip narrows the stamps get closer together and
       // the needle stays continuous instead of turning into loose dots.
-      const step = Math.max(MIN_STAMP_STEP, brushDiameterAt(s, pAt, strokeDistance + pos) * spacing);
+      const step = Math.max(MIN_STAMP_STEP, brushDiameterAt(s, pAt, strokeDistance + pos, currentStrokeSpeed) * spacing);
       let need = step - since;
       if (need < 0) need = 0;
       if (pos + need > segment) {
@@ -382,27 +415,42 @@ export function createBrushEngine(): BrushEngine {
       const u2 = pos / segment;
       const p2 = p0 + (p1 - p0) * u2;
 
+      let activeTip: TipTextureId | undefined = undefined;
+      if (tipsList.length > 1) {
+        if (s.tipCycleMode === 'sequential') {
+          activeTip = tipsList[strokeStampIndex % tipsList.length];
+        } else {
+          activeTip = tipsList[Math.floor(Math.random() * tipsList.length)];
+        }
+      } else if (tipsList.length === 1) {
+        activeTip = tipsList[0];
+      }
+      strokeStampIndex++;
+
       if (s.spray) {
         const count = Math.max(1, Math.round(s.sprayDensity ?? 5));
-        const radius = s.sprayRadius ?? Math.max(12, brushDiameterAt(s, p2, strokeDistance + pos) * 1.5);
+        const radius = s.sprayRadius ?? Math.max(12, brushDiameterAt(s, p2, strokeDistance + pos, currentStrokeSpeed) * 1.5);
         for (let k = 0; k < count; k++) {
           const r = radius * Math.sqrt(Math.random());
           const th = Math.random() * Math.PI * 2;
           const sx = x0 + dx * u2 + r * Math.cos(th);
           const sy = y0 + dy * u2 + r * Math.sin(th);
-          const pSize = Math.max(MIN_STAMP_DIAMETER, brushDiameterAt(s, p2, strokeDistance + pos) * (0.35 + Math.random() * 0.85));
+          const pSize = Math.max(MIN_STAMP_DIAMETER, brushDiameterAt(s, p2, strokeDistance + pos, currentStrokeSpeed) * (0.35 + Math.random() * 0.85));
           const pAngle = Math.random() * Math.PI * 2;
-          stampAt(ctx, erase, sx, sy, pSize, p2, pAngle);
+          stampAt(ctx, erase, sx, sy, pSize, p2, pAngle, activeTip);
         }
       } else {
+        const isCustomTip = !!(activeTip && activeTip !== 'default') || !!(s.tipTexture && s.tipTexture !== 'default');
+        const stampAngle = isCustomTip ? angleRad + (Math.sin(pos * 0.7 + strokeStampIndex) * 0.08) : angleRad;
         stampAt(
           ctx,
           erase,
           x0 + dx * u2,
           y0 + dy * u2,
-          brushDiameterAt(s, p2, strokeDistance + pos),
+          brushDiameterAt(s, p2, strokeDistance + pos, currentStrokeSpeed),
           p2,
-          angleRad,
+          stampAngle,
+          activeTip,
         );
       }
     }
@@ -417,7 +465,9 @@ export function createBrushEngine(): BrushEngine {
 
   function drawTail(tail: StrokeTail): void {
     const s = strokeSettings;
-    if (s.taperEnd <= 0 || s.spray) return;
+    // Stylus pen lifting naturally tapers pressure in strokeInput.ts.
+    // drawTail is only intended for mouse strokes where there is no physical pressure sensor.
+    if (!tail.isMouse || s.taperEnd <= 0 || s.spray) return;
     const speed = Math.hypot(tail.vx, tail.vy);
     if (speed <= 0.5) return;
 
@@ -429,12 +479,15 @@ export function createBrushEngine(): BrushEngine {
 
     const ux = tail.vx / speed;
     const uy = tail.vy / speed;
-    // Mouse has no pressure: use the full configured taper. With a pen the
-    // flick of the stroke decides how long the tail is.
-    const tailLength = Math.max(1, tail.isMouse ? s.taperEnd : Math.min(s.taperEnd, speed * 2.5));
+    const tailLength = Math.max(1, Math.min(s.taperEnd, speed * 2.0));
     const spacing = Math.min(0.5, Math.max(0.03, s.spacing));
     const baseD = brushDiameterAt(s, lastPressure, strokeDistance);
     const angleRad = lastAngleRad;
+
+    const tipsList: TipTextureId[] = (s.tipTextures && s.tipTextures.length > 0)
+      ? s.tipTextures
+      : (s.tipTexture && s.tipTexture !== 'default' ? [s.tipTexture] : []);
+    const tailTip = tipsList.length > 0 ? tipsList[0] : undefined;
 
     let walked = 0;
     let guard = 0;
@@ -449,23 +502,55 @@ export function createBrushEngine(): BrushEngine {
         diameter,
         lastPressure * f,
         angleRad,
+        tailTip,
       );
       walked += Math.max(MIN_STAMP_STEP, diameter * spacing);
+    }
+    lastX += ux * walked;
+    lastY += uy * walked;
+    lastPressure = 0;
+  }
+
+  function renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void {
+    if (!mode || mode === 'shape' || points.length === 0) return;
+    predictedContext.clearRect(0, 0, DOC_W, DOC_H);
+    hasPredictions = true;
+
+    let prevX = lastX;
+    let prevY = lastY;
+    let prevP = lastPressure;
+
+    const erase = mode === 'erase';
+    const eraseToStroke = erase && selectionModel.hasSelection();
+    const isEraseOp = erase && !eraseToStroke;
+
+    const savedDist = strokeDistance;
+    const savedSince = distanceSinceStamp;
+
+    for (const pt of points) {
+      stampAlong(predictedContext, isEraseOp, prevX, prevY, prevP, pt.x, pt.y, pt.pressure);
+      prevX = pt.x;
+      prevY = pt.y;
+      prevP = pt.pressure;
+    }
+
+    strokeDistance = savedDist;
+    distanceSinceStamp = savedSince;
+    engine.compositeDirty = true;
+  }
+
+  function clearPredictedStroke(): void {
+    if (hasPredictions) {
+      predictedContext.clearRect(0, 0, DOC_W, DOC_H);
+      hasPredictions = false;
+      engine.compositeDirty = true;
     }
   }
 
   function finishStroke(): void {
+    clearPredictedStroke();
     if (!mode) return;
     const active = layerManager.getActiveDrawableLayer();
-
-    if (mode === 'paint') {
-      if (Math.hypot(rawLastX - lastX, rawLastY - lastY) > 0.5) {
-        stampAlong(strokeContext, false, lastX, lastY, lastPressure, rawLastX, rawLastY, rawLastPressure);
-        lastX = rawLastX;
-        lastY = rawLastY;
-        lastPressure = rawLastPressure;
-      }
-    }
 
     if (mode === 'paint' || mode === 'shape') {
       if (active.context) {
@@ -674,6 +759,7 @@ export function createBrushEngine(): BrushEngine {
 
       const isLivePainting = layer.id === activeDrawable.id && (mode === 'paint' || mode === 'shape');
       let sourceCanvasToDraw = layer.canvas;
+      let liveStrokeDrawnInTint = false;
 
       if (isLivePainting && layer.lockAlpha) {
         lockAlphaContext.clearRect(0, 0, DOC_W, DOC_H);
@@ -682,8 +768,52 @@ export function createBrushEngine(): BrushEngine {
         lockAlphaContext.globalCompositeOperation = 'source-atop';
         lockAlphaContext.globalAlpha = getToolState().brush.opacity;
         lockAlphaContext.drawImage(strokeCanvas, 0, 0);
+        if (hasPredictions) {
+          lockAlphaContext.drawImage(predictedCanvas, 0, 0);
+        }
         lockAlphaContext.restore();
         sourceCanvasToDraw = lockAlphaCanvas;
+      }
+
+      // CSP Layer Color Effect (Azul de boceto / Sketch cyan non-destructive tint)
+      if (layer.useLayerColor && !layer.isPaper) {
+        layerColorContext.clearRect(0, 0, DOC_W, DOC_H);
+        layerColorContext.drawImage(sourceCanvasToDraw, 0, 0);
+
+        if (isLivePainting && !layer.lockAlpha) {
+          layerColorContext.save();
+          layerColorContext.globalAlpha = getToolState().brush.opacity;
+          if (strokeSettings.compositeMode === 'lighter') {
+            layerColorContext.globalCompositeOperation = 'lighter';
+          }
+          if (selectionModel.hasSelection()) {
+            liveMaskContext.clearRect(0, 0, DOC_W, DOC_H);
+            liveMaskContext.drawImage(strokeCanvas, 0, 0);
+            if (hasPredictions) {
+              liveMaskContext.drawImage(predictedCanvas, 0, 0);
+            }
+            liveMaskContext.save();
+            liveMaskContext.globalCompositeOperation = 'destination-in';
+            liveMaskContext.drawImage(selectionModel.maskCanvas, 0, 0);
+            liveMaskContext.restore();
+            layerColorContext.drawImage(liveMaskCanvas, 0, 0);
+          } else {
+            layerColorContext.drawImage(strokeCanvas, 0, 0);
+            if (hasPredictions) {
+              layerColorContext.drawImage(predictedCanvas, 0, 0);
+            }
+          }
+          layerColorContext.restore();
+          liveStrokeDrawnInTint = true;
+        }
+
+        layerColorContext.save();
+        layerColorContext.globalCompositeOperation = 'source-in';
+        layerColorContext.fillStyle = layer.layerColor || '#00a0e9';
+        layerColorContext.fillRect(0, 0, DOC_W, DOC_H);
+        layerColorContext.restore();
+
+        sourceCanvasToDraw = layerColorCanvas;
       }
 
       if (useMeshSkin && timelineManager && evaluatedBones) {
@@ -708,7 +838,7 @@ export function createBrushEngine(): BrushEngine {
         targetCtx.drawImage(sourceCanvasToDraw, 0, 0);
       }
 
-      if (isLivePainting && !layer.lockAlpha) {
+      if (isLivePainting && !layer.lockAlpha && !liveStrokeDrawnInTint) {
         targetCtx.globalAlpha = Math.max(0, Math.min(1, effectiveAlpha * getToolState().brush.opacity));
         if (strokeSettings.compositeMode === 'lighter') {
           targetCtx.globalCompositeOperation = 'lighter';
@@ -716,6 +846,9 @@ export function createBrushEngine(): BrushEngine {
         if (selectionModel.hasSelection()) {
           liveMaskContext.clearRect(0, 0, DOC_W, DOC_H);
           liveMaskContext.drawImage(strokeCanvas, 0, 0);
+          if (hasPredictions) {
+            liveMaskContext.drawImage(predictedCanvas, 0, 0);
+          }
           liveMaskContext.save();
           liveMaskContext.globalCompositeOperation = 'destination-in';
           liveMaskContext.drawImage(selectionModel.maskCanvas, 0, 0);
@@ -730,6 +863,9 @@ export function createBrushEngine(): BrushEngine {
           }
         } else {
           targetCtx.drawImage(strokeCanvas, 0, 0);
+          if (hasPredictions) {
+            targetCtx.drawImage(predictedCanvas, 0, 0);
+          }
         }
       }
       targetCtx.restore();
@@ -882,14 +1018,17 @@ export function createBrushEngine(): BrushEngine {
     lastX = x;
     lastY = y;
     lastPressure = pressure;
-    rawLastX = x;
-    rawLastY = y;
-    rawLastPressure = pressure;
     lastAngleRad = tipAngleRad(strokeSettings, 0, 0);
     distanceSinceStamp = 0;
     strokeDistance = 0;
+    strokeStampIndex = 0;
 
     strokePickedColor = null;
+
+    const tipsList: TipTextureId[] = (strokeSettings.tipTextures && strokeSettings.tipTextures.length > 0)
+      ? strokeSettings.tipTextures
+      : (strokeSettings.tipTexture && strokeSettings.tipTexture !== 'default' ? [strokeSettings.tipTexture] : []);
+    const firstTip = tipsList.length > 0 ? tipsList[0] : undefined;
 
     // First stamp sits at distance 0, so a starting taper begins as a needle.
     const eraseToStroke = erase && selectionModel.hasSelection();
@@ -906,7 +1045,7 @@ export function createBrushEngine(): BrushEngine {
         const sy = y + r * Math.sin(th);
         const pSize = Math.max(MIN_STAMP_DIAMETER, brushDiameterAt(strokeSettings, pressure, 0) * (0.35 + Math.random() * 0.85));
         const pAngle = Math.random() * Math.PI * 2;
-        stampAt(targetCtx, isEraseOp, sx, sy, pSize, pressure, pAngle);
+        stampAt(targetCtx, isEraseOp, sx, sy, pSize, pressure, pAngle, firstTip);
       }
     } else {
       stampAt(
@@ -917,6 +1056,7 @@ export function createBrushEngine(): BrushEngine {
         brushDiameterAt(strokeSettings, pressure, 0),
         pressure,
         lastAngleRad,
+        firstTip,
       );
     }
     engine.compositeDirty = true;
@@ -946,36 +1086,33 @@ export function createBrushEngine(): BrushEngine {
       return timelineManager;
     },
     beginStroke(x, y, pressure) {
+      currentStrokeSpeed = 0;
       finishStroke();
       beginInkStroke(x, y, pressure, false);
     },
     setStrokeTilt(tilt) {
       strokeTilt = tilt;
     },
+    setStrokeSpeed(speed) {
+      currentStrokeSpeed = Math.max(0, speed);
+    },
+    renderPredictedStroke(points) {
+      renderPredictedStroke(points);
+    },
+    clearPredictedStroke() {
+      clearPredictedStroke();
+    },
     continueStroke(x, y, pressure) {
       if (mode !== 'paint') return;
-      rawLastX = x;
-      rawLastY = y;
-      rawLastPressure = pressure;
 
-      const stab = Math.min(20, Math.max(0, strokeSettings.stabilization));
-      let targetX = x;
-      let targetY = y;
-      let targetP = pressure;
-      if (stab > 0) {
-        const weight = 1 / (1 + stab * 0.4);
-        targetX = lastX + (x - lastX) * weight;
-        targetY = lastY + (y - lastY) * weight;
-        targetP = lastPressure + (pressure - lastPressure) * weight;
-      }
-
-      stampAlong(strokeContext, false, lastX, lastY, lastPressure, targetX, targetY, targetP);
-      lastX = targetX;
-      lastY = targetY;
-      lastPressure = targetP;
+      stampAlong(strokeContext, false, lastX, lastY, lastPressure, x, y, pressure);
+      lastX = x;
+      lastY = y;
+      lastPressure = pressure;
       engine.compositeDirty = true;
     },
     beginErase(x, y, pressure) {
+      currentStrokeSpeed = 0;
       finishStroke();
       beginInkStroke(x, y, pressure, true);
     },
@@ -983,27 +1120,13 @@ export function createBrushEngine(): BrushEngine {
       if (mode !== 'erase') return;
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper || active.lockAlpha) return;
-      rawLastX = x;
-      rawLastY = y;
-      rawLastPressure = pressure;
-
-      const stab = Math.min(20, Math.max(0, strokeSettings.stabilization));
-      let targetX = x;
-      let targetY = y;
-      let targetP = pressure;
-      if (stab > 0) {
-        const weight = 1 / (1 + stab * 0.4);
-        targetX = lastX + (x - lastX) * weight;
-        targetY = lastY + (y - lastY) * weight;
-        targetP = lastPressure + (pressure - lastPressure) * weight;
-      }
 
       const eraseToStroke = selectionModel.hasSelection();
       const targetCtx = eraseToStroke ? strokeContext : active.context;
-      stampAlong(targetCtx, !eraseToStroke, lastX, lastY, lastPressure, targetX, targetY, targetP);
-      lastX = targetX;
-      lastY = targetY;
-      lastPressure = targetP;
+      stampAlong(targetCtx, !eraseToStroke, lastX, lastY, lastPressure, x, y, pressure);
+      lastX = x;
+      lastY = y;
+      lastPressure = pressure;
       engine.compositeDirty = true;
     },
     beginShape(x, y) {
@@ -1031,6 +1154,7 @@ export function createBrushEngine(): BrushEngine {
       }
       finishStroke();
       strokeTilt = null;
+      currentStrokeSpeed = 0;
     },
     fill(x, y, colorHex, tolerance) {
       if (mode) finishStroke();
@@ -1041,23 +1165,99 @@ export function createBrushEngine(): BrushEngine {
       }
       const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
       history.push(active.id, current);
-      floodFill(active.context, x, y, colorHex, tolerance);
-      if (selectionModel.hasSelection()) {
-        // If selection is active, restore pixels outside selection using pre-fill snapshot
-        const newImg = active.context.getImageData(0, 0, DOC_W, DOC_H);
-        const maskData = selectionModel.maskCtx.getImageData(0, 0, DOC_W, DOC_H).data;
-        for (let i = 0; i < current.data.length; i += 4) {
-          if (maskData[i + 3] === 0) {
-            newImg.data[i] = current.data[i];
-            newImg.data[i + 1] = current.data[i + 1];
-            newImg.data[i + 2] = current.data[i + 2];
-            newImg.data[i + 3] = current.data[i + 3];
+
+      const bSettings = getToolState().brush;
+      const handled = executeSmartFill({
+        seedX: x,
+        seedY: y,
+        fillColorHex: colorHex,
+        tolerance,
+        closeGap: bSettings.closeGap ?? 0,
+        areaScaling: bSettings.areaScaling ?? 1,
+        referMode: bSettings.referMode ?? 'all',
+        activeLayer: active,
+        allLayers: layerManager.layers,
+        selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
+        docW: DOC_W,
+        docH: DOC_H,
+      });
+
+      if (!handled) {
+        floodFill(active.context, x, y, colorHex, tolerance);
+        if (selectionModel.hasSelection()) {
+          // If selection is active, restore pixels outside selection using pre-fill snapshot
+          const newImg = active.context.getImageData(0, 0, DOC_W, DOC_H);
+          const maskData = selectionModel.maskCtx.getImageData(0, 0, DOC_W, DOC_H).data;
+          for (let i = 0; i < current.data.length; i += 4) {
+            if (maskData[i + 3] === 0) {
+              newImg.data[i] = current.data[i];
+              newImg.data[i + 1] = current.data[i + 1];
+              newImg.data[i + 2] = current.data[i + 2];
+              newImg.data[i + 3] = current.data[i + 3];
+            }
           }
+          active.context.putImageData(newImg, 0, 0);
         }
-        active.context.putImageData(newImg, 0, 0);
       }
       meshCache.delete(active.id);
       engine.compositeDirty = true;
+    },
+    encloseAndFill(polygon, colorHex, tolerance): boolean {
+      if (mode) finishStroke();
+      const active = layerManager.getActiveDrawableLayer();
+      if (!active.context || active.locked || active.isPaper) return false;
+      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const bSettings = getToolState().brush;
+
+      const ok = executeEncloseAndFill({
+        polygon,
+        fillColorHex: colorHex,
+        tolerance,
+        closeGap: bSettings.closeGap ?? 2,
+        areaScaling: bSettings.areaScaling ?? 1,
+        referMode: bSettings.referMode ?? 'reference',
+        activeLayer: active,
+        allLayers: layerManager.layers,
+        selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
+        docW: DOC_W,
+        docH: DOC_H,
+      });
+
+      if (ok) {
+        history.push(active.id, current);
+        meshCache.delete(active.id);
+        engine.compositeDirty = true;
+      }
+      return ok;
+    },
+    paintUnfilledArea(points, radius, colorHex, tolerance): boolean {
+      if (mode) finishStroke();
+      const active = layerManager.getActiveDrawableLayer();
+      if (!active.context || active.locked || active.isPaper) return false;
+      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const bSettings = getToolState().brush;
+
+      const ok = executePaintUnfilledArea({
+        points,
+        radius,
+        fillColorHex: colorHex,
+        tolerance,
+        closeGap: bSettings.closeGap ?? 1,
+        areaScaling: bSettings.areaScaling ?? 1,
+        referMode: bSettings.referMode ?? 'reference',
+        activeLayer: active,
+        allLayers: layerManager.layers,
+        selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
+        docW: DOC_W,
+        docH: DOC_H,
+      });
+
+      if (ok) {
+        history.push(active.id, current);
+        meshCache.delete(active.id);
+        engine.compositeDirty = true;
+      }
+      return ok;
     },
     fillSelection(colorHex?: string): void {
       if (mode) finishStroke();
@@ -1118,6 +1318,9 @@ export function createBrushEngine(): BrushEngine {
       if (targetLayer && targetLayer.context) {
         targetLayer.context.putImageData(record.data, 0, 0);
         meshCache.delete(targetLayer.id);
+        if (layerManager.activeLayerId !== targetLayer.id) {
+          layerManager.setActiveLayer(targetLayer.id);
+        }
         engine.compositeDirty = true;
         return true;
       }
@@ -1135,6 +1338,9 @@ export function createBrushEngine(): BrushEngine {
       if (targetLayer && targetLayer.context) {
         targetLayer.context.putImageData(record.data, 0, 0);
         meshCache.delete(targetLayer.id);
+        if (layerManager.activeLayerId !== targetLayer.id) {
+          layerManager.setActiveLayer(targetLayer.id);
+        }
         engine.compositeDirty = true;
         return true;
       }

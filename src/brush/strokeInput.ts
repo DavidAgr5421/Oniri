@@ -4,6 +4,7 @@ import {
   activeTool,
   getTabletSettings,
   getToolState,
+  setBrushSettings,
   setTool,
   subscribeTools,
   swapColors,
@@ -14,6 +15,8 @@ import { selectionModel } from '../selection/selectionModel';
 import { marchingAnts } from '../selection/marchingAnts';
 import { transformManager } from '../selection/transformGizmo';
 import { isTransformModalLocked, warnTransformModalBlocked } from '../selection/transformModal';
+import { viewportNav } from '../canvas/viewportNavigation';
+import { brushSizeOverlay, eyedropperLoupeOverlay } from '../ui/canvasOverlays';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
@@ -58,20 +61,37 @@ function coalescedSamples(event: PointerEvent): PointerEvent[] {
   }
 }
 
+function predictedSamples(event: PointerEvent): PointerEvent[] {
+  const fn = (event as PointerEvent & { getPredictedEvents?: () => PointerEvent[] }).getPredictedEvents;
+  if (typeof fn !== 'function') return [];
+  try {
+    const list = fn.call(event);
+    return list && list.length > 0 ? list : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * W3C Pointer Events: a pressed mouse always reports pressure 0.5. Forcing
  * that onto every mouse stroke made stamps semi-transparent (visible circles
  * on every tick), so the mouse gets full pressure and the starting/ending
  * tapers handle the finesse instead.
  *
- * The pen reads its analog value and passes it through the device response
- * curve (CSP Preferences > Tablet, REA study 5.3): the raw sample is never
- * fed raw to the brush.
+ * For a physical pen stylus, we read the analog value (0.0 to 1.0) and pass
+ * it through the device response curve (CSP Preferences > Tablet, REA study 5.3).
+ * When the stylus is lifting or hovering, event.pressure drops naturally to 0.0,
+ * which produces the authentic razor-sharp tapered ending ("抜き" - Nuki).
  */
-function pressureOf(event: PointerLike): number {
+function pressureOf(event: PointerLike, isStart = false): number {
   if (event.pointerType === 'pen') {
-    const raw = event.pressure > 0 ? event.pressure : 0.5;
-    return evaluatePressure(raw, getTabletSettings().pressure);
+    let raw = typeof event.pressure === 'number' ? event.pressure : 0;
+    // On pointerdown, if the stylus driver reports 0 on initial touch, give it a subtle starting touch (0.08)
+    // instead of jumping to 0.5, so it starts as a sharp needle rather than a blunt dot.
+    if (isStart && raw <= 0) {
+      raw = 0.08;
+    }
+    return evaluatePressure(Math.max(0, Math.min(1, raw)), getTabletSettings().pressure);
   }
   return 1.0;
 }
@@ -81,9 +101,21 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   const raycaster = new THREE.Raycaster();
   const pointerVec = new THREE.Vector2();
 
-  let activeStroke: 'brush' | 'eraser' | 'shape' | 'bone' | 'select' | 'mask-move' | 'transform' | null = null;
+  let activeStroke:
+    | 'brush'
+    | 'eraser'
+    | 'shape'
+    | 'bone'
+    | 'select'
+    | 'mask-move'
+    | 'transform'
+    | 'bucket-enclose'
+    | 'bucket-unfilled'
+    | null = null;
   let activePointerId: number | null = null;
   let lastPointerType = 'mouse';
+  let encloseLassoPoints: { x: number; y: number }[] = [];
+  let unfilledBrushPoints: { x: number; y: number }[] = [];
 
   // Selection drag state
   let selectionDragState: {
@@ -113,11 +145,25 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     startDY: number;
   } | null = null;
 
-  // Pan / Navigation state
+  // Pan & Rotate Navigation state
   let isSpacePressed = false;
+  let isRPressed = false;
   let activePan = false;
+  let activeRotate = false;
   let lastPanX = 0;
   let lastPanY = 0;
+  let rotStartAngle = 0;
+  let rotStartCanvasAngle = 0;
+
+  // CSP Ergonomic Modifier States (Ctrl+Alt+Drag Brush Resize & Alt Eyedropper)
+  let isCtrlAltPressed = false;
+  let isAltPressed = false;
+  let isResizingBrush = false;
+  let isSamplingEyedropper = false;
+  let resizeStartX = 0;
+  let resizeStartY = 0;
+  let resizeStartSize = 20;
+  let initialSampledColor = '#000000';
 
   // Smoothing state
   let smoothedX = 0;
@@ -127,7 +173,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
   // Stroke shaping state (quadratic Bezier smoothing + ending tail)
   let smoothHist: SmoothPoint[] = [];
-  let curveEmitted: SmoothPoint | null = null;
   let velX = 0;
   let velY = 0;
   let lastSamplePressure = 1;
@@ -135,10 +180,14 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   function updateCursor(): void {
     if (activePan) {
       canvas.style.cursor = 'grabbing';
+    } else if (activeRotate || isRPressed || activeTool() === 'rotate') {
+      canvas.style.cursor = 'ew-resize';
+    } else if (isResizingBrush || isCtrlAltPressed) {
+      canvas.style.cursor = 'crosshair';
+    } else if (isSamplingEyedropper || isAltPressed || activeTool() === 'eyedropper') {
+      canvas.style.cursor = 'cell';
     } else if (isSpacePressed || activeTool() === 'hand') {
       canvas.style.cursor = 'grab';
-    } else if (activeTool() === 'eyedropper') {
-      canvas.style.cursor = 'cell';
     } else if (activeTool() === 'bone') {
       canvas.style.cursor = 'pointer';
     } else {
@@ -195,7 +244,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const pt: SmoothPoint = { x, y, p };
     if (smoothHist.length === 0) {
       smoothHist.push(pt);
-      curveEmitted = pt;
       return;
     }
 
@@ -217,7 +265,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       emitTo(qx, qy, qp);
     }
 
-    curveEmitted = { x: m2x, y: m2y, p: m2p };
     smoothHist.push(pt);
     if (smoothHist.length > 3) smoothHist.shift();
   };
@@ -235,6 +282,9 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     rawLastY = doc.y;
     lastSamplePressure = pressure;
 
+    const speed = Math.hypot(velX, velY);
+    engine.setStrokeSpeed(speed);
+
     const stab = getToolState().brush.stabilization;
     if (stab <= 0) {
       smoothedX = doc.x;
@@ -250,6 +300,47 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const finish = (pointerId?: number): void => {
+    if (activeStroke === 'bucket-enclose') {
+      activeStroke = null;
+      marchingAnts.overlayCtx.clearRect(0, 0, docW, docH);
+      marchingAnts.markDirty();
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        try {
+          canvas.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      if (encloseLassoPoints.length >= 3) {
+        const { color, tolerance } = getToolState().brush;
+        engine.encloseAndFill(encloseLassoPoints, color, tolerance);
+      }
+      encloseLassoPoints = [];
+      return;
+    }
+
+    if (activeStroke === 'bucket-unfilled') {
+      activeStroke = null;
+      marchingAnts.overlayCtx.clearRect(0, 0, docW, docH);
+      marchingAnts.markDirty();
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        try {
+          canvas.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      if (unfilledBrushPoints.length > 0) {
+        const { color, tolerance, size } = getToolState().brush;
+        const rad = Math.max(6, (size || 28) / 2);
+        engine.paintUnfilledArea(unfilledBrushPoints, rad, color, tolerance);
+      }
+      unfilledBrushPoints = [];
+      return;
+    }
+
     if (activeStroke === 'transform') {
       transformManager.handlePointerUp();
       activeStroke = null;
@@ -337,30 +428,35 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
     const wasBone = activeStroke === 'bone';
     if (activeStroke === 'brush' || activeStroke === 'eraser') {
-      // Stabilizer catch-up: pull the smoothed curve toward the raw release
-      // point so the stroke doesn't stop short of the cursor, then close it
-      // at the real release pressure (never at a hardcoded 0.5).
+      // Stabilizer catch-up: smoothly pull the smoothed curve toward the raw release
+      // point so the stroke doesn't stop short of the cursor, tapering pressure
+      // naturally for stylus pen lifts ("抜き" - Nuki, sharp ending).
       const stab = getToolState().brush.stabilization;
       if (stab > 0) {
-        const alpha = 1 / (1 + stab * 0.35);
-        for (let i = 0; i < 3; i++) {
-          smoothedX += (rawLastX - smoothedX) * alpha;
-          smoothedY += (rawLastY - smoothedY) * alpha;
+        const steps = 3;
+        const startX = smoothedX;
+        const startY = smoothedY;
+        const startP = lastSamplePressure;
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          const cx = startX + (rawLastX - startX) * t;
+          const cy = startY + (rawLastY - startY) * t;
+          const cp = lastPointerType === 'pen' ? startP * Math.pow(1 - t, 1.5) : startP;
+          pushSmoothed(cx, cy, cp);
         }
+        smoothedX = rawLastX;
+        smoothedY = rawLastY;
       } else {
         smoothedX = rawLastX;
         smoothedY = rawLastY;
-      }
-
-      pushSmoothed(smoothedX, smoothedY, lastSamplePressure);
-      if (curveEmitted) {
-        emitTo(smoothedX, smoothedY, lastSamplePressure);
-        curveEmitted = { x: smoothedX, y: smoothedY, p: lastSamplePressure };
+        const cp = lastPointerType === 'pen' ? 0 : lastSamplePressure;
+        pushSmoothed(smoothedX, smoothedY, cp);
       }
     }
 
     activeStroke = null;
     boneDragState = null;
+    engine.clearPredictedStroke();
     if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
       try {
         canvas.releasePointerCapture(pointerId);
@@ -375,6 +471,72 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const onPointerDown = (event: PointerEvent): void => {
+    // 0a. Dynamic Brush Sizing (Ctrl+Alt+Drag)
+    if ((event.ctrlKey || event.metaKey) && event.altKey) {
+      isResizingBrush = true;
+      activePointerId = event.pointerId;
+      resizeStartX = event.clientX;
+      resizeStartY = event.clientY;
+      resizeStartSize = getToolState().brush.size || 20;
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // ignore
+      }
+
+      const viewHeight = (camera.top - camera.bottom) / camera.zoom;
+      const unitsPerPixel = viewHeight / window.innerHeight;
+      const docToScreenScale = (9.0 / docH) / unitsPerPixel;
+      const screenRadius = (resizeStartSize / 2) * docToScreenScale;
+      brushSizeOverlay.show(resizeStartX, resizeStartY, screenRadius, resizeStartSize);
+      updateCursor();
+      return;
+    }
+
+    // 0b. Temporary Eyedropper (Hold Alt)
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      isSamplingEyedropper = true;
+      activePointerId = event.pointerId;
+      initialSampledColor = getToolState().brush.color;
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // ignore
+      }
+
+      const doc = pointerToDoc(event);
+      if (doc) {
+        const compCtx = engine.compositeCanvas.getContext('2d')!;
+        const px = Math.max(0, Math.min(docW - 1, Math.floor(doc.x)));
+        const py = Math.max(0, Math.min(docH - 1, Math.floor(doc.y)));
+        const [r, g, b] = compCtx.getImageData(px, py, 1, 1).data;
+        const hex = '#' + [r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('');
+        setBrushSettings({ color: hex });
+        onPickColor?.(hex);
+        eyedropperLoupeOverlay.show(event.clientX, event.clientY, hex, initialSampledColor);
+      }
+      updateCursor();
+      return;
+    }
+
+    // 0c. Rotate Tool / Holding R / Space + Shift
+    if (activeTool() === 'rotate' || isRPressed || (isSpacePressed && event.shiftKey)) {
+      activeRotate = true;
+      activePointerId = event.pointerId;
+      const rect = canvas.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      rotStartAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
+      rotStartCanvasAngle = viewportNav.getState().rotation;
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignored
+      }
+      updateCursor();
+      return;
+    }
+
     // 1. Hand Tool / Spacebar Pan / Middle Click
     if (isSpacePressed || activeTool() === 'hand' || event.button === 1) {
       activePan = true;
@@ -423,7 +585,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       } catch {
         // Ignored
       }
-      const erasePressure = pressureOf(event);
+      const erasePressure = pressureOf(event, true);
       smoothedX = doc.x;
       smoothedY = doc.y;
       rawLastX = doc.x;
@@ -432,7 +594,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       velX = 0;
       velY = 0;
       smoothHist = [{ x: doc.x, y: doc.y, p: erasePressure }];
-      curveEmitted = smoothHist[0];
       activeStroke = 'eraser';
       applyTiltFrom(event);
       engine.beginErase(doc.x, doc.y, erasePressure);
@@ -453,6 +614,33 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     if (tool === 'bucket') {
+      const subId = getToolState().activeSubToolId;
+      if (subId === 'bucket-enclose') {
+        activePointerId = event.pointerId;
+        lastPointerType = event.pointerType || 'mouse';
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+        activeStroke = 'bucket-enclose';
+        encloseLassoPoints = [{ x: doc.x, y: doc.y }];
+        return;
+      }
+
+      if (subId === 'bucket-unfilled') {
+        activePointerId = event.pointerId;
+        lastPointerType = event.pointerType || 'mouse';
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+        activeStroke = 'bucket-unfilled';
+        unfilledBrushPoints = [{ x: doc.x, y: doc.y }];
+        return;
+      }
+
       const { color, tolerance } = getToolState().brush;
       engine.fill(Math.floor(doc.x), Math.floor(doc.y), color, tolerance);
       return;
@@ -684,7 +872,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
-    const pressure = pressureOf(event);
+    const pressure = pressureOf(event, true);
     smoothedX = doc.x;
     smoothedY = doc.y;
     rawLastX = doc.x;
@@ -693,7 +881,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     velX = 0;
     velY = 0;
     smoothHist = [{ x: doc.x, y: doc.y, p: pressure }];
-    curveEmitted = smoothHist[0];
 
     const isErase = tool === 'eraser' || getToolState().isTransparentColor;
     activeStroke = isErase ? 'eraser' : 'brush';
@@ -706,6 +893,56 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    // Dynamic brush resize movement (Ctrl+Alt+Drag)
+    if (isResizingBrush) {
+      const dx = event.clientX - resizeStartX;
+      const step = resizeStartSize < 20 ? 0.35 : 0.8;
+      const newSize = Math.max(0.5, Math.min(500, Math.round((resizeStartSize + dx * step) * 2) / 2));
+      setBrushSettings({ size: newSize });
+
+      const viewHeight = (camera.top - camera.bottom) / camera.zoom;
+      const unitsPerPixel = viewHeight / window.innerHeight;
+      const docToScreenScale = (9.0 / docH) / unitsPerPixel;
+      const screenRadius = (newSize / 2) * docToScreenScale;
+      brushSizeOverlay.show(resizeStartX, resizeStartY, screenRadius, newSize);
+      return;
+    }
+
+    // Dynamic eyedropper sampling movement (Hold Alt)
+    if (isSamplingEyedropper) {
+      const doc = pointerToDoc(event);
+      if (doc) {
+        const compCtx = engine.compositeCanvas.getContext('2d')!;
+        const px = Math.max(0, Math.min(docW - 1, Math.floor(doc.x)));
+        const py = Math.max(0, Math.min(docH - 1, Math.floor(doc.y)));
+        const [r, g, b] = compCtx.getImageData(px, py, 1, 1).data;
+        const hex = '#' + [r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('');
+        setBrushSettings({ color: hex });
+        onPickColor?.(hex);
+        eyedropperLoupeOverlay.show(event.clientX, event.clientY, hex, initialSampledColor);
+      }
+      return;
+    }
+
+    // Rotate movement
+    if (activeRotate) {
+      const rect = canvas.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const currentAngle = Math.atan2(event.clientY - centerY, event.clientX - centerX);
+      const angleDelta = currentAngle - rotStartAngle;
+      let targetAngle = rotStartCanvasAngle + angleDelta;
+
+      if (event.shiftKey) {
+        // Snap to nearest 15 degrees
+        const deg = (targetAngle * 180) / Math.PI;
+        const snappedDeg = Math.round(deg / 15) * 15;
+        targetAngle = (snappedDeg * Math.PI) / 180;
+      }
+      viewportNav.setRotation(targetAngle);
+      return;
+    }
+
     // Pan movement
     if (activePan) {
       const dx = event.clientX - lastPanX;
@@ -713,11 +950,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       lastPanX = event.clientX;
       lastPanY = event.clientY;
 
-      const viewHeight = (camera.top - camera.bottom) / camera.zoom;
-      const unitsPerPixel = viewHeight / window.innerHeight;
-
-      camera.position.x -= dx * unitsPerPixel;
-      camera.position.y += dy * unitsPerPixel;
+      viewportNav.panByScreenDelta(dx, dy);
       return;
     }
 
@@ -752,6 +985,55 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
         });
       } else if (boneDragState.kind === 'pose_ik') {
         tm.applyTwoBoneIKAtFrame(tm.settings.currentFrame, boneDragState.boneId, doc.x, doc.y);
+      }
+      return;
+    }
+
+    if (activeStroke === 'bucket-enclose') {
+      const doc = pointerToDoc(event);
+      if (doc) {
+        encloseLassoPoints.push({ x: doc.x, y: doc.y });
+        const ctx = marchingAnts.overlayCtx;
+        ctx.clearRect(0, 0, docW, docH);
+        ctx.save();
+        ctx.strokeStyle = '#00e5ff';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([5, 5]);
+        ctx.fillStyle = 'rgba(0, 229, 255, 0.14)';
+        ctx.beginPath();
+        ctx.moveTo(encloseLassoPoints[0].x, encloseLassoPoints[0].y);
+        for (let i = 1; i < encloseLassoPoints.length; i++) {
+          ctx.lineTo(encloseLassoPoints[i].x, encloseLassoPoints[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        marchingAnts.markDirty();
+      }
+      return;
+    }
+
+    if (activeStroke === 'bucket-unfilled') {
+      const doc = pointerToDoc(event);
+      if (doc) {
+        unfilledBrushPoints.push({ x: doc.x, y: doc.y });
+        const rad = Math.max(6, (getToolState().brush.size || 28) / 2);
+        const ctx = marchingAnts.overlayCtx;
+        ctx.clearRect(0, 0, docW, docH);
+        ctx.save();
+        ctx.strokeStyle = '#22c55e';
+        ctx.lineWidth = rad * 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(unfilledBrushPoints[0].x, unfilledBrushPoints[0].y);
+        for (let i = 1; i < unfilledBrushPoints.length; i++) {
+          ctx.lineTo(unfilledBrushPoints[i].x, unfilledBrushPoints[i].y);
+        }
+        ctx.stroke();
+        ctx.restore();
+        marchingAnts.markDirty();
       }
       return;
     }
@@ -801,9 +1083,81 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       if (!doc) continue;
       handleStrokePoint(doc, pressureOf(sample));
     }
+
+    // Zero-latency prediction (W3C getPredictedEvents + velocity projection):
+    // Renders the predicted next 1-2 points right under the physical pen nib
+    // on a live overlay without altering the permanent stroke buffer.
+    if (activeStroke === 'brush' || activeStroke === 'eraser') {
+      const pred = predictedSamples(event);
+      const predictedPoints: { x: number; y: number; pressure: number }[] = [];
+      if (pred.length > 0) {
+        for (const p of pred) {
+          const pdoc = pointerToDoc(p);
+          if (pdoc) {
+            predictedPoints.push({ x: pdoc.x, y: pdoc.y, pressure: pressureOf(p) });
+          }
+        }
+      } else if (Math.hypot(velX, velY) > 1.5) {
+        // Micro-prediction along velocity vector (1 step) for mouse and standard styluses
+        predictedPoints.push({
+          x: rawLastX + velX * 0.5,
+          y: rawLastY + velY * 0.5,
+          pressure: lastSamplePressure,
+        });
+      }
+      if (predictedPoints.length > 0) {
+        engine.renderPredictedStroke(predictedPoints);
+      } else {
+        engine.clearPredictedStroke();
+      }
+    }
   };
 
   const onPointerEnd = (event: PointerEvent): void => {
+    if (isResizingBrush) {
+      isResizingBrush = false;
+      brushSizeOverlay.hide();
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        try {
+          canvas.releasePointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      updateCursor();
+      return;
+    }
+
+    if (isSamplingEyedropper) {
+      isSamplingEyedropper = false;
+      eyedropperLoupeOverlay.hide();
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        try {
+          canvas.releasePointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      updateCursor();
+      return;
+    }
+
+    if (activeRotate) {
+      activeRotate = false;
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        try {
+          canvas.releasePointerCapture(event.pointerId);
+        } catch {
+          // Ignored
+        }
+      }
+      activePointerId = null;
+      updateCursor();
+      return;
+    }
+
     if (activePan) {
       activePan = false;
       if (canvas.hasPointerCapture(event.pointerId)) {
@@ -822,12 +1176,12 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     finish(event.pointerId);
   };
 
-  // Wheel Zoom
+  // Wheel Zoom (Focal Zoom at cursor)
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
-    const zoomFactor = event.deltaY < 0 ? 1.12 : 0.88;
-    camera.zoom = Math.max(0.1, Math.min(25, camera.zoom * zoomFactor));
-    camera.updateProjectionMatrix();
+    const zoomFactor = event.deltaY < 0 ? 1.15 : 0.85;
+    const currentZoom = viewportNav.getState().zoom;
+    viewportNav.setZoom(currentZoom * zoomFactor, event.clientX, event.clientY);
   };
 
   // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Space, B, E, I, G, U, H, J, Ctrl+0)
@@ -842,6 +1196,35 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       updateCursor();
       return;
     }
+
+    // Bracket keys [ and ] for discrete brush size steps (CSP standard)
+    if (event.key === '[' || event.key === ']') {
+      event.preventDefault();
+      const SIZES = [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 100, 120, 150, 200, 250, 300, 400, 500];
+      const curSize = getToolState().brush.size || 20;
+      let targetSize = curSize;
+      if (event.key === '[') {
+        targetSize = SIZES.slice().reverse().find((s) => s < curSize) ?? SIZES[0];
+      } else {
+        targetSize = SIZES.find((s) => s > curSize) ?? SIZES[SIZES.length - 1];
+      }
+      setBrushSettings({ size: targetSize });
+      viewportNav.showHUD(`Pincel: ${targetSize} px`);
+      return;
+    }
+
+    // Dynamic modifier tracking (Alt for Eyedropper, Ctrl+Alt for Brush sizing)
+    if (event.key === 'Alt') {
+      event.preventDefault(); // Prevents Windows browser from unfocusing to window bar
+      isAltPressed = true;
+      isCtrlAltPressed = event.ctrlKey || event.metaKey;
+      updateCursor();
+    } else if (event.key === 'Control') {
+      isCtrlAltPressed = event.altKey;
+      updateCursor();
+    }
+
+    if (event.defaultPrevented) return;
 
     const isCtrl = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
@@ -868,49 +1251,10 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
-    if (isCtrl && key === 'z' && !event.shiftKey) {
-      event.preventDefault();
-      engine.undo();
-      return;
-    }
-
-    if (isCtrl && (key === 'y' || (event.shiftKey && key === 'z'))) {
-      event.preventDefault();
-      engine.redo();
-      return;
-    }
-
-    // Reset View
-    if (isCtrl && key === '0') {
-      event.preventDefault();
-      camera.position.set(0, 0, 10);
-      camera.zoom = 1;
-      camera.updateProjectionMatrix();
-      return;
-    }
-
-    // Layer Shortcuts (Clip Studio Paint standard: Ctrl+J duplicate, Ctrl+E merge below, Delete clear)
-    if (isCtrl && key === 'j') {
-      event.preventDefault();
-      engine.layerManager.duplicateLayer();
-      return;
-    }
-
-    if (isCtrl && key === 'e') {
-      event.preventDefault();
-      engine.layerManager.mergeLayerBelow();
-      return;
-    }
-
-    // Free Transform (Ctrl+T, Enter commit, Esc cancel)
-    if (isCtrl && key === 't') {
-      event.preventDefault();
-      if (transformManager.isTransforming()) {
-        transformManager.commitTransform();
-      } else {
-        transformManager.startTransform(engine);
-      }
-      return;
+    // Temporary hold R for rotating
+    if (key === 'r' && !isCtrl && !event.altKey && !event.repeat) {
+      isRPressed = true;
+      updateCursor();
     }
 
     if (event.key === 'Enter' && transformManager.isTransforming()) {
@@ -922,37 +1266,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     if (event.key === 'Escape' && transformManager.isTransforming()) {
       event.preventDefault();
       transformManager.cancelTransform();
-      return;
-    }
-
-    // Selection Shortcuts (Clip Studio Paint / Photoshop standard)
-    if (isCtrl && key === 'd') {
-      event.preventDefault();
-      selectionModel.clearSelection();
-      return;
-    }
-
-    if (isCtrl && key === 'a') {
-      event.preventDefault();
-      selectionModel.selectAll();
-      return;
-    }
-
-    if (isCtrl && event.shiftKey && key === 'i') {
-      event.preventDefault();
-      selectionModel.invertSelection();
-      return;
-    }
-
-    if (event.altKey && (event.key === 'Delete' || event.key === 'Backspace')) {
-      event.preventDefault();
-      engine.fillSelection();
-      return;
-    }
-
-    if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault();
-      engine.clearActiveLayer();
       return;
     }
 
@@ -987,6 +1300,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       else if (key === 'u') setTool('shape');
       else if (key === 'j') setTool('bone');
       else if (key === 'h') setTool('hand');
+      else if (key === 'r') setTool('rotate');
       else if (key === 'x') swapColors();
       else if (key === 'c') toggleTransparentColor();
     }
@@ -997,12 +1311,41 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       isSpacePressed = false;
       updateCursor();
     }
+    if (event.code === 'KeyR' || event.key.toLowerCase() === 'r') {
+      isRPressed = false;
+      updateCursor();
+    }
+    if (event.key === 'Alt') {
+      isAltPressed = false;
+      isCtrlAltPressed = false;
+      if (isSamplingEyedropper) {
+        isSamplingEyedropper = false;
+        eyedropperLoupeOverlay.hide();
+      }
+      updateCursor();
+    }
+    if (event.key === 'Control') {
+      isCtrlAltPressed = false;
+      if (isResizingBrush) {
+        isResizingBrush = false;
+        brushSizeOverlay.hide();
+      }
+      updateCursor();
+    }
   };
 
   const onDblClick = (): void => {
     // CSP: double click on the canvas commits an active transform
     if (transformManager.isTransforming()) {
       transformManager.commitTransform();
+      return;
+    }
+    if (activeTool() === 'rotate' || isRPressed) {
+      viewportNav.resetRotation();
+      return;
+    }
+    if (activeTool() === 'hand' || isSpacePressed) {
+      viewportNav.resetView();
       return;
     }
     if (selectionDragState && selectionDragState.type === 'poly') {

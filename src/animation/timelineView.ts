@@ -1,8 +1,10 @@
 import type { LayerManager } from '../brush/layers';
+import type { BrushEngine } from '../brush/brushEngine';
 import { isTransformModalLocked } from '../selection/transformModal';
 import './timeline.css';
 import type { TimelineManager } from './timelineManager';
 import type { AnimationTrack, InterpolationType, TimeDisplayFormat } from './timelineModel';
+import { openExportAnimationModal } from './exportAnimation';
 
 let cellWidth = 24;
 const MIN_CELL_WIDTH = 10;
@@ -26,7 +28,8 @@ function formatRulerTime(frame: number, fps: number, format: TimeDisplayFormat =
 export function mountTimelineView(
   container: HTMLElement,
   timeline: TimelineManager,
-  layerManager: LayerManager
+  layerManager: LayerManager,
+  engine?: BrushEngine
 ): void {
   container.innerHTML = '';
 
@@ -296,6 +299,24 @@ export function mountTimelineView(
     openTimelineSettingsModal(timeline);
   });
   transportGroup.appendChild(timelineEditBtn);
+
+  if (engine) {
+    const exportAnimBtn = document.createElement('button');
+    exportAnimBtn.className = 'timeline-btn icon-only';
+    exportAnimBtn.title = 'Exportar Animación (GIF animado, Película MP4/WebM o Secuencia PNG)';
+    exportAnimBtn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2">
+        <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+        <line x1="7" y1="2" x2="7" y2="22"/>
+        <line x1="17" y1="2" x2="17" y2="22"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+      </svg>
+    `;
+    exportAnimBtn.addEventListener('click', () => {
+      openExportAnimationModal(engine, timeline);
+    });
+    transportGroup.appendChild(exportAnimBtn);
+  }
 
   header.appendChild(transportGroup);
 

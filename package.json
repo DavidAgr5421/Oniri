@@ -28,6 +28,9 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@types/sql.js": "^1.4.11",
+    "fflate": "^0.8.3",
+    "sql.js": "^1.15.1",
     "three": "^0.160.1"
   }
 }
