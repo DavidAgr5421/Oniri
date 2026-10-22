@@ -36,6 +36,13 @@ export class SelectionModel {
     this.maskCtx.imageSmoothingEnabled = false;
   }
 
+  public resize(w: number, h: number): void {
+    this.maskCanvas.width = w;
+    this.maskCanvas.height = h;
+    this.maskCtx.imageSmoothingEnabled = false;
+    this.clearSelection();
+  }
+
   public hasSelection(): boolean {
     return this._hasSelection;
   }
@@ -79,7 +86,7 @@ export class SelectionModel {
 
   public beginMoveMask(): boolean {
     if (!this._hasSelection || !this._bounds || this.moveSnapshot) return false;
-    this.moveSnapshot = this.maskCtx.getImageData(0, 0, DOC_W, DOC_H);
+    this.moveSnapshot = this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height);
     this.moveBaseBounds = { ...this._bounds };
     this.moveOffsetX = 0;
     this.moveOffsetY = 0;
@@ -90,7 +97,7 @@ export class SelectionModel {
     if (!this.moveSnapshot || !this.moveBaseBounds) return;
     this.moveOffsetX = Math.round(dx);
     this.moveOffsetY = Math.round(dy);
-    this.maskCtx.clearRect(0, 0, DOC_W, DOC_H);
+    this.maskCtx.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
     this.maskCtx.putImageData(this.moveSnapshot, this.moveOffsetX, this.moveOffsetY);
 
     // Bounds are recomputed analytically: a full pixel scan per pointer move
@@ -102,8 +109,8 @@ export class SelectionModel {
     const maxY = b.maxY + this.moveOffsetY;
     const cx0 = Math.max(0, minX);
     const cy0 = Math.max(0, minY);
-    const cx1 = Math.min(DOC_W - 1, maxX);
-    const cy1 = Math.min(DOC_H - 1, maxY);
+    const cx1 = Math.min(this.maskCanvas.width - 1, maxX);
+    const cy1 = Math.min(this.maskCanvas.height - 1, maxY);
 
     if (cx1 < cx0 || cy1 < cy0) {
       this._hasSelection = false;
@@ -145,18 +152,18 @@ export class SelectionModel {
    * Recalculates bounding box and whether any pixel is selected.
    */
   public updateBounds(): void {
-    const imgData = this.maskCtx.getImageData(0, 0, DOC_W, DOC_H);
+    const imgData = this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height);
     const data = imgData.data;
-    let minX = DOC_W;
-    let minY = DOC_H;
+    let minX = this.maskCanvas.width;
+    let minY = this.maskCanvas.height;
     let maxX = -1;
     let maxY = -1;
     let found = false;
 
     // Scan for alpha > 0
-    for (let y = 0; y < DOC_H; y++) {
-      const rowOffset = y * DOC_W * 4;
-      for (let x = 0; x < DOC_W; x++) {
+    for (let y = 0; y < this.maskCanvas.height; y++) {
+      const rowOffset = y * this.maskCanvas.width * 4;
+      for (let x = 0; x < this.maskCanvas.width; x++) {
         const a = data[rowOffset + x * 4 + 3];
         if (a > 0) {
           found = true;
@@ -190,7 +197,7 @@ export class SelectionModel {
    */
   public clearSelection(): void {
     this.endMoveMask();
-    this.maskCtx.clearRect(0, 0, DOC_W, DOC_H);
+    this.maskCtx.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
     this._hasSelection = false;
     this._bounds = null;
     this.notify();
@@ -202,15 +209,15 @@ export class SelectionModel {
   public selectAll(): void {
     this.endMoveMask();
     this.maskCtx.fillStyle = '#ffffff';
-    this.maskCtx.fillRect(0, 0, DOC_W, DOC_H);
+    this.maskCtx.fillRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
     this._hasSelection = true;
     this._bounds = {
       minX: 0,
       minY: 0,
-      maxX: DOC_W - 1,
-      maxY: DOC_H - 1,
-      width: DOC_W,
-      height: DOC_H,
+      maxX: this.maskCanvas.width - 1,
+      maxY: this.maskCanvas.height - 1,
+      width: this.maskCanvas.width,
+      height: this.maskCanvas.height,
     };
     this.notify();
   }
@@ -223,7 +230,7 @@ export class SelectionModel {
     this.maskCtx.save();
     this.maskCtx.globalCompositeOperation = 'difference';
     this.maskCtx.fillStyle = '#ffffff';
-    this.maskCtx.fillRect(0, 0, DOC_W, DOC_H);
+    this.maskCtx.fillRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
     this.maskCtx.restore();
     this.updateBounds();
   }
@@ -236,8 +243,8 @@ export class SelectionModel {
     this.endMoveMask();
     const r = Math.min(64, Math.max(1, Math.round(radiusPx)));
     const tmp = document.createElement('canvas');
-    tmp.width = DOC_W;
-    tmp.height = DOC_H;
+    tmp.width = this.maskCanvas.width;
+    tmp.height = this.maskCanvas.height;
     const tctx = tmp.getContext('2d')!;
     tctx.drawImage(this.maskCanvas, 0, 0);
 
@@ -272,7 +279,7 @@ export class SelectionModel {
     this.endMoveMask();
     this.maskCtx.save();
     if (mode === 'replace') {
-      this.maskCtx.clearRect(0, 0, DOC_W, DOC_H);
+      this.maskCtx.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
       this.maskCtx.drawImage(tempCanvas, 0, 0);
     } else if (mode === 'add') {
       this.maskCtx.globalCompositeOperation = 'source-over';
@@ -303,8 +310,8 @@ export class SelectionModel {
     if (rw < 1 || rh < 1) return;
 
     const temp = document.createElement('canvas');
-    temp.width = DOC_W;
-    temp.height = DOC_H;
+    temp.width = this.maskCanvas.width;
+    temp.height = this.maskCanvas.height;
     const tctx = temp.getContext('2d');
     if (!tctx) return;
 
@@ -329,8 +336,8 @@ export class SelectionModel {
     if (arx < 1 || ary < 1) return;
 
     const temp = document.createElement('canvas');
-    temp.width = DOC_W;
-    temp.height = DOC_H;
+    temp.width = this.maskCanvas.width;
+    temp.height = this.maskCanvas.height;
     const tctx = temp.getContext('2d');
     if (!tctx) return;
 
@@ -352,8 +359,8 @@ export class SelectionModel {
     if (points.length < 3) return;
 
     const temp = document.createElement('canvas');
-    temp.width = DOC_W;
-    temp.height = DOC_H;
+    temp.width = this.maskCanvas.width;
+    temp.height = this.maskCanvas.height;
     const tctx = temp.getContext('2d');
     if (!tctx) return;
 
@@ -374,7 +381,7 @@ export class SelectionModel {
    */
   public isPixelSelected(x: number, y: number): boolean {
     if (!this._hasSelection) return true; // If no selection, all pixels are active
-    if (x < 0 || x >= DOC_W || y < 0 || y >= DOC_H) return false;
+    if (x < 0 || x >= this.maskCanvas.width || y < 0 || y >= this.maskCanvas.height) return false;
     const pixel = this.maskCtx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
     return pixel[3] > 128;
   }

@@ -10,7 +10,10 @@ import {
 } from '../selection/selectionLauncher';
 import { openPressureCalibrationModal } from '../tools/pressureCalibrationModal';
 import { openExportAnimationModal } from '../animation/exportAnimation';
+import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { saveOniriToFile } from '../storage/oniriPackage';
+import { saveClipToFile } from '../storage/clipImporter';
+import { getActiveProjectName } from '../storage/fileMenu';
 import { commandDispatcher } from './commandDispatcher';
 import type { TopMenuCategory } from './topMenuBar';
 
@@ -47,10 +50,22 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
   });
   commandDispatcher.register({
     id: 'file.save',
-    label: 'Guardar .oniri',
+    label: 'Guardar',
     category: 'file',
     shortcut: 'Ctrl+S',
-    execute: () => saveOniriToFile(engine, timeline),
+    execute: () => {
+      if (getActiveProjectName().toLowerCase().endsWith('.clip')) {
+        saveClipToFile(engine, timeline);
+      } else {
+        saveOniriToFile(engine, timeline);
+      }
+    },
+  });
+  commandDispatcher.register({
+    id: 'file.saveClip',
+    label: 'Guardar .clip (Clip Studio Paint)',
+    category: 'file',
+    execute: () => saveClipToFile(engine, timeline),
   });
   commandDispatcher.register({
     id: 'file.exportPng',
@@ -461,6 +476,35 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     category: 'view',
     execute: () => openSelectionLauncherSettingsModal(),
   });
+  commandDispatcher.register({
+    id: 'view.cameraFrame',
+    label: 'Cuadro de cámara (Marco de salida)',
+    category: 'view',
+    shortcut: 'Shift+F',
+    isChecked: () => cameraFrameManager.getState().showFrame && cameraFrameManager.getState().enabled,
+    execute: () => {
+      const s = cameraFrameManager.getState();
+      if (!s.enabled) {
+        cameraFrameManager.configure({ enabled: true, showFrame: true });
+      } else {
+        cameraFrameManager.toggleFrame();
+      }
+    },
+  });
+  commandDispatcher.register({
+    id: 'view.cameraMask',
+    label: 'Máscara de cámara (Sobreexploración)',
+    category: 'view',
+    isChecked: () => cameraFrameManager.getState().showMask && cameraFrameManager.getState().enabled,
+    execute: () => cameraFrameManager.toggleMask(),
+  });
+  commandDispatcher.register({
+    id: 'view.safeMargin',
+    label: 'Márgenes de seguridad (90% / 80%)',
+    category: 'view',
+    isChecked: () => cameraFrameManager.getState().showSafeMargin && cameraFrameManager.getState().enabled,
+    execute: () => cameraFrameManager.toggleSafeMargin(),
+  });
 
   // 7. Filtro (Filter)
   commandDispatcher.register({
@@ -539,6 +583,7 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
         { id: 'file.new', label: 'Nuevo...', shortcut: 'Ctrl+N' },
         { id: 'file.open', label: 'Abrir...', shortcut: 'Ctrl+O' },
         { id: 'file.save', label: 'Guardar .oniri', shortcut: 'Ctrl+S' },
+        { id: 'file.saveClip', label: 'Guardar .clip (Clip Studio Paint)' },
         { divider: true },
         { id: 'file.exportPng', label: 'Exportar imagen (PNG)...' },
         { id: 'file.exportAnimation', label: 'Exportar animación (GIF/Video/PNGs)...' },

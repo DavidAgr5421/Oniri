@@ -3,6 +3,7 @@ import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from './timelineManager';
 import { encodeGif, type GifFrameInput } from './gifEncoder';
 import { DOC_H, DOC_W } from '../brush/docConstants';
+import { cameraFrameManager } from '../canvas/cameraFrameManager';
 
 export type ExportAnimationFormat = 'gif' | 'video' | 'png_sequence';
 
@@ -45,7 +46,14 @@ async function renderFramesToCanvases(
       const fctx = frameCanvas.getContext('2d')!;
       fctx.imageSmoothingEnabled = true;
       fctx.imageSmoothingQuality = 'high';
-      fctx.drawImage(engine.compositeCanvas, 0, 0, width, height);
+
+      const cfState = cameraFrameManager.getState();
+      if (cfState.enabled) {
+        const crop = cameraFrameManager.getEffectiveCropRect(engine.docW, engine.docH);
+        fctx.drawImage(engine.compositeCanvas, crop.x, crop.y, crop.w, crop.h, 0, 0, width, height);
+      } else {
+        fctx.drawImage(engine.compositeCanvas, 0, 0, width, height);
+      }
 
       frames.push(frameCanvas);
       // Brief yield so the UI progress bar can update
@@ -205,6 +213,10 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
   const defaultEnd = tlSettings.endFrame;
   const defaultFps = tlSettings.fps;
 
+  const cfState = cameraFrameManager.getState();
+  const baseW = cfState.enabled ? cfState.outputWidth : engine.docW;
+  const baseH = cfState.enabled ? cfState.outputHeight : engine.docH;
+
   modal.innerHTML = `
     <div class="csp-detail-window" style="width: 520px; max-width: 92vw;">
       <div class="csp-detail-header">
@@ -251,9 +263,9 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
         <div style="background: #1e2229; border: 1px solid #323844; border-radius: 6px; padding: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <label style="font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 700;">
-              Resolución y Escala de Salida
+              Resolución y Escala de Salida ${cfState.enabled ? '(Cuadro de cámara)' : ''}
             </label>
-            <span id="exp-res-indicator" style="font-size: 11px; color: #38bdf8; font-weight: 600;">${DOC_W} × ${DOC_H} px</span>
+            <span id="exp-res-indicator" style="font-size: 11px; color: #38bdf8; font-weight: 600;">${baseW} × ${baseH} px</span>
           </div>
 
           <div class="csp-seg-group" style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; margin-bottom: 10px;">
@@ -266,12 +278,12 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
           <div style="display: flex; gap: 8px; align-items: center;">
             <div style="flex: 1;">
               <span style="font-size: 11px; color: #94a3b8;">Ancho (px):</span>
-              <input type="number" id="exp-w" class="csp-num-input" style="width: 100%; margin-top: 4px;" value="${DOC_W}" />
+              <input type="number" id="exp-w" class="csp-num-input" style="width: 100%; margin-top: 4px;" value="${baseW}" />
             </div>
             <span style="margin-top: 18px; color: #64748b;">×</span>
             <div style="flex: 1;">
               <span style="font-size: 11px; color: #94a3b8;">Alto (px):</span>
-              <input type="number" id="exp-h" class="csp-num-input" style="width: 100%; margin-top: 4px;" value="${DOC_H}" />
+              <input type="number" id="exp-h" class="csp-num-input" style="width: 100%; margin-top: 4px;" value="${baseH}" />
             </div>
           </div>
         </div>
@@ -343,8 +355,8 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
       scaleBtns.forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       activeScale = Number(btn.dataset.scale);
-      const nw = Math.round(DOC_W * activeScale);
-      const nh = Math.round(DOC_H * activeScale);
+      const nw = Math.round(baseW * activeScale);
+      const nh = Math.round(baseH * activeScale);
       wInput.value = String(nw);
       hInput.value = String(nh);
       resIndicator.textContent = `${nw} × ${nh} px`;

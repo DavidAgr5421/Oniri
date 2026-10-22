@@ -44,6 +44,14 @@ export class MarchingAntsRenderer {
     });
   }
 
+  public resize(w: number, h: number): void {
+    this.overlayCanvas.width = w;
+    this.overlayCanvas.height = h;
+    this.boundaryCanvas.width = w;
+    this.boundaryCanvas.height = h;
+    this.boundaryDirty = true;
+  }
+
   public setDragPreview(preview: SelectionDragPreview | null): void {
     this.activeDragPreview = preview;
   }
@@ -58,7 +66,7 @@ export class MarchingAntsRenderer {
    */
   private updateBoundary(): void {
     this.boundaryDirty = false;
-    this.boundaryCtx.clearRect(0, 0, DOC_W, DOC_H);
+    this.boundaryCtx.clearRect(0, 0, this.boundaryCanvas.width, this.boundaryCanvas.height);
 
     if (!selectionModel.hasSelection()) return;
 
@@ -88,7 +96,7 @@ export class MarchingAntsRenderer {
 
     if (!hasSelection && !hasPreview && !isTransforming) {
       if (this.dashOffset !== 0) {
-        this.overlayCtx.clearRect(0, 0, DOC_W, DOC_H);
+        this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
         this.dashOffset = 0;
         return true;
       }
@@ -107,7 +115,7 @@ export class MarchingAntsRenderer {
       this.updateBoundary();
     }
 
-    this.overlayCtx.clearRect(0, 0, DOC_W, DOC_H);
+    this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
 
     // 1. Draw marching ants boundary if selection is active (hidden while transforming)
     if (hasSelection && !isTransforming) {
@@ -145,8 +153,8 @@ export class MarchingAntsRenderer {
     const bounds = selectionModel.getBounds();
     const minX = bounds ? Math.max(0, bounds.minX - 2) : 0;
     const minY = bounds ? Math.max(0, bounds.minY - 2) : 0;
-    const maxX = bounds ? Math.min(DOC_W, bounds.maxX + 3) : DOC_W;
-    const maxY = bounds ? Math.min(DOC_H, bounds.maxY + 3) : DOC_H;
+    const maxX = bounds ? Math.min(this.overlayCanvas.width, bounds.maxX + 3) : this.overlayCanvas.width;
+    const maxY = bounds ? Math.min(this.overlayCanvas.height, bounds.maxY + 3) : this.overlayCanvas.height;
 
     ctx.fillStyle = '#000000';
     ctx.fillRect(minX, minY, maxX - minX, maxY - minY);

@@ -790,7 +790,16 @@ export function mountLayersView(
     }
   }
 
-  layerManager.subscribe(render);
-  timeline?.subscribe(render);
+  let renderRaf = 0;
+  function scheduleRender(): void {
+    if (renderRaf) return;
+    renderRaf = requestAnimationFrame(() => {
+      renderRaf = 0;
+      render();
+    });
+  }
+
+  layerManager.subscribe(scheduleRender);
+  timeline?.subscribe(scheduleRender);
   render();
 }

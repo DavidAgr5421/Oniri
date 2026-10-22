@@ -53,6 +53,7 @@ export interface LayerManager {
   moveLayer(fromIndex: number, toIndex: number): void;
   moveLayerBranch(layerId: string, direction: 'up' | 'down'): boolean;
   loadLayers(newLayers: LayerNode[], newActiveId?: string): void;
+  resize(w: number, h: number): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -85,6 +86,8 @@ function makeCanvas(width: number, height: number): HTMLCanvasElement {
 }
 
 export function createLayerManager(docW: number, docH: number): LayerManager {
+  let currentDocW = docW;
+  let currentDocH = docH;
   let counter = 1;
   const layers: LayerNode[] = [];
   const listeners = new Set<() => void>();
@@ -95,7 +98,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
 
   // 1. Initial Paper Layer (Bottom white background)
   const paperCanvas = makeCanvas(docW, docH);
-  const paperCtx = paperCanvas.getContext('2d')!;
+  const paperCtx = paperCanvas.getContext('2d', { willReadFrequently: true })!;
   paperCtx.fillStyle = '#ffffff';
   paperCtx.fillRect(0, 0, docW, docH);
 
@@ -118,7 +121,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
 
   // 2. Initial Drawing Layer
   const initCanvas = makeCanvas(docW, docH);
-  const initCtx = initCanvas.getContext('2d')!;
+  const initCtx = initCanvas.getContext('2d', { willReadFrequently: true })!;
   const firstLayer: LayerNode = {
     id: `layer-${counter}`,
     type: 'raster',
@@ -153,11 +156,11 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     },
     createLayer(name, parentId, isPaper = false, fillColor) {
       counter++;
-      const canvas = makeCanvas(docW, docH);
-      const ctx = canvas.getContext('2d')!;
+      const canvas = makeCanvas(currentDocW, currentDocH);
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
       if (fillColor) {
         ctx.fillStyle = fillColor;
-        ctx.fillRect(0, 0, docW, docH);
+        ctx.fillRect(0, 0, currentDocW, currentDocH);
       }
 
       // Determine parent folder
@@ -241,8 +244,8 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const targetIdx = layers.findIndex((l) => l.id === target.id);
 
       if (target.type === 'raster') {
-        const copyCanvas = makeCanvas(docW, docH);
-        const copyCtx = copyCanvas.getContext('2d')!;
+        const copyCanvas = makeCanvas(currentDocW, currentDocH);
+        const copyCtx = copyCanvas.getContext('2d', { willReadFrequently: true })!;
         if (target.canvas) {
           copyCtx.drawImage(target.canvas, 0, 0);
         }
@@ -328,7 +331,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const targetId = id || activeId;
       const target = layers.find((l) => l.id === targetId);
       if (!target || target.isPaper || target.locked || !target.context) return false;
-      target.context.clearRect(0, 0, docW, docH);
+      target.context.clearRect(0, 0, currentDocW, currentDocH);
       notify();
       return true;
     },
@@ -589,6 +592,10 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
         activeId = drawable ? drawable.id : (layers.length > 0 ? layers[0].id : '');
       }
       notify();
+    },
+    resize(w: number, h: number): void {
+      currentDocW = w;
+      currentDocH = h;
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);

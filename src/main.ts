@@ -13,6 +13,7 @@ import { mountTransformToolbar } from './selection/transformToolbar';
 import { mountFileMenu } from './storage/fileMenu';
 import { viewportNav } from './canvas/viewportNavigation';
 import { mountNavigatorPalette } from './canvas/navigatorView';
+import { cameraFrameOverlay } from './canvas/cameraFrameOverlay';
 
 // --- Viewport & Three.js Setup ---
 const viewport = document.getElementById('viewport') ?? document.body;
@@ -72,7 +73,7 @@ if (timeline.tracks.length === 0) {
   timeline.createTrack('Animation 1');
 }
 
-const canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
+let canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
 canvasTexture.minFilter = THREE.LinearFilter;
 canvasTexture.magFilter = THREE.LinearFilter;
 canvasTexture.generateMipmaps = false;
@@ -83,7 +84,7 @@ const canvasMesh = new THREE.Mesh(canvasGeo, canvasMat);
 scene.add(canvasMesh);
 
 // Selection Overlay (Marching Ants)
-const selectionTexture = new THREE.CanvasTexture(marchingAnts.overlayCanvas);
+let selectionTexture = new THREE.CanvasTexture(marchingAnts.overlayCanvas);
 selectionTexture.minFilter = THREE.LinearFilter;
 selectionTexture.magFilter = THREE.LinearFilter;
 selectionTexture.generateMipmaps = false;
@@ -98,11 +99,27 @@ const selectionMesh = new THREE.Mesh(canvasGeo, selectionMat);
 selectionMesh.position.set(0, 0, 0.005);
 scene.add(selectionMesh);
 
+// Camera Frame & Overscan Mask Overlay (Clip Studio Paint style)
+let cameraFrameTexture = new THREE.CanvasTexture(cameraFrameOverlay.canvas);
+cameraFrameTexture.minFilter = THREE.LinearFilter;
+cameraFrameTexture.magFilter = THREE.LinearFilter;
+cameraFrameTexture.generateMipmaps = false;
+
+const cameraFrameMat = new THREE.MeshBasicMaterial({
+  map: cameraFrameTexture,
+  transparent: true,
+  depthTest: false,
+  side: THREE.DoubleSide,
+});
+const cameraFrameMesh = new THREE.Mesh(canvasGeo, cameraFrameMat);
+cameraFrameMesh.position.set(0, 0, 0.007);
+scene.add(cameraFrameMesh);
+
 // Initialize Viewport Navigation System (Pan, Zoom, 2D Rotation, Display Mirroring)
 viewportNav.init({
   camera,
   canvas,
-  meshes: [canvasMesh, borderMesh, selectionMesh],
+  meshes: [canvasMesh, borderMesh, selectionMesh, cameraFrameMesh],
 });
 
 // Mount CSP Navigator Palette
@@ -113,7 +130,7 @@ const navPalette = mountNavigatorPalette(appEl, {
 navPalette.hide(); // Hidden by default, toggled via top bar or shortcut
 
 // Attach Pointer Input
-attachStrokeInput({
+const strokeInputHandle = attachStrokeInput({
   canvas,
   camera,
   plane: canvasMesh,
@@ -124,6 +141,60 @@ attachStrokeInput({
     setBrushSettings({ color: hex });
   },
 });
+
+engine.onDocumentResize = (w: number, h: number) => {
+  strokeInputHandle.setDocDimensions(w, h);
+  marchingAnts.resize(w, h);
+  cameraFrameOverlay.resize(w, h);
+
+  const aspect = w / h;
+  let planeW = 16;
+  let planeH = 9;
+  if (aspect >= 1) {
+    planeW = 16;
+    planeH = 16 / aspect;
+  } else {
+    planeH = 12;
+    planeW = 12 * aspect;
+  }
+
+  canvasMesh.geometry.dispose();
+  const newCanvasGeo = new THREE.PlaneGeometry(planeW, planeH);
+  canvasMesh.geometry = newCanvasGeo;
+  selectionMesh.geometry = newCanvasGeo;
+  cameraFrameMesh.geometry = newCanvasGeo;
+
+  borderMesh.geometry.dispose();
+  borderMesh.geometry = new THREE.PlaneGeometry(planeW + 0.08, planeH + 0.08);
+
+  // Critical WebGL fix: When canvas dimensions change, Three.js textures MUST be disposed and recreated
+  // so the GPU allocates fresh textures matching the new dimensions, preventing GL_INVALID_VALUE / glTexSubImage2D overflow.
+  canvasTexture.dispose();
+  canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
+  canvasTexture.minFilter = THREE.LinearFilter;
+  canvasTexture.magFilter = THREE.LinearFilter;
+  canvasTexture.generateMipmaps = false;
+  canvasMat.map = canvasTexture;
+  canvasMat.needsUpdate = true;
+
+  selectionTexture.dispose();
+  selectionTexture = new THREE.CanvasTexture(marchingAnts.overlayCanvas);
+  selectionTexture.minFilter = THREE.LinearFilter;
+  selectionTexture.magFilter = THREE.LinearFilter;
+  selectionTexture.generateMipmaps = false;
+  selectionMat.map = selectionTexture;
+  selectionMat.needsUpdate = true;
+
+  cameraFrameTexture.dispose();
+  cameraFrameTexture = new THREE.CanvasTexture(cameraFrameOverlay.canvas);
+  cameraFrameTexture.minFilter = THREE.LinearFilter;
+  cameraFrameTexture.magFilter = THREE.LinearFilter;
+  cameraFrameTexture.generateMipmaps = false;
+  cameraFrameMat.map = cameraFrameTexture;
+  cameraFrameMat.needsUpdate = true;
+
+  viewportNav.resetView();
+};
 
 // Mount Top Command Bar (File, Save, Open, Export, Undo, Redo, Navigation, Drop listener)
 const topBarContainer = document.getElementById('top-bar-container');
@@ -186,6 +257,11 @@ function animate(): void {
   const antsDirty = marchingAnts.render();
   if (antsDirty) {
     selectionTexture.needsUpdate = true;
+  }
+
+  const frameDirty = cameraFrameOverlay.render();
+  if (frameDirty) {
+    cameraFrameTexture.needsUpdate = true;
   }
 
   renderer.render(scene, camera);

@@ -3,6 +3,7 @@ import type { TimelineManager } from '../animation/timelineManager';
 import { importOniriPackage } from './oniriPackage';
 import { importClipProject, isClipBuffer } from './clipImporter';
 import { openPressureCalibrationModal } from '../tools/pressureCalibrationModal';
+import { openNewProjectModal } from '../tools/newProjectModal';
 import { buildTopMenuCategories } from '../ui/defaultMenuConfig';
 import { TopMenuBar } from '../ui/topMenuBar';
 import { commandDispatcher } from '../ui/commandDispatcher';
@@ -18,6 +19,18 @@ export interface FileMenuOptions {
 }
 
 let activeProjectName = 'Sin título.oniri';
+
+export function getActiveProjectName(): string {
+  return activeProjectName;
+}
+
+export function setActiveProjectName(name: string): void {
+  activeProjectName = name;
+  const label = document.getElementById('csp-active-project-title');
+  if (label) {
+    label.textContent = name;
+  }
+}
 
 /**
  * Creates and mounts the CSP-style 2-tier Top Command Bar & Menu System.
@@ -58,10 +71,7 @@ export function mountFileMenu(container: HTMLElement, options: FileMenuOptions):
     timeline,
     onOpenFileInput: () => fileInput.click(),
     onNewCanvas: () => {
-      if (confirm('¿Deseas iniciar un nuevo lienzo en blanco? Se reiniciarán las capas actuales.')) {
-        resetToDefaultCanvas(engine, timeline);
-        setProjectTitle('Sin título.oniri');
-      }
+      openNewProjectModal(engine, timeline);
     },
     onToggleNavigator: () => onToggleNavigator?.(),
     isNavigatorVisible: () => isNavigatorVisible ? isNavigatorVisible() : false,
@@ -274,10 +284,10 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
       showNotification('Proyecto Oniri cargado', `Cargado "${res.title}" con ${res.layersCount} capas.`);
     } else if (ext === 'clip' || isClipBuffer(buffer)) {
       const res = await importClipProject(buffer, engine, timeline, file.name);
-      setProjectTitle(file.name.replace(/\.clip$/i, '.oniri'));
+      setActiveProjectName(file.name);
       showNotification(
         'Archivo .clip de Clip Studio importado',
-        `Lienzo ${res.width}×${res.height} px, ${res.layersCount} capas reconstruidas exitosamente.`
+        `Lienzo ${res.width}×${res.height} px, ${res.layersCount} capas, ${res.tracksCount} pistas de animación (${res.totalFrames} frames @ ${res.fps} fps).`
       );
     } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
       const activeLayer = engine.layerManager.getActiveDrawableLayer();
@@ -357,7 +367,7 @@ function setupDragAndDrop(engine: BrushEngine, timeline: TimelineManager): void 
 /**
  * Resets canvas to default initial state.
  */
-function resetToDefaultCanvas(engine: BrushEngine, timeline: TimelineManager): void {
+export function resetToDefaultCanvas(engine: BrushEngine, timeline: TimelineManager): void {
   const paper = document.createElement('canvas');
   paper.width = 1920;
   paper.height = 1080;

@@ -30,6 +30,7 @@ export interface StrokeInputOptions {
 
 export interface StrokeInputHandle {
   dispose: () => void;
+  setDocDimensions: (w: number, h: number) => void;
 }
 
 interface PointerLike {
@@ -98,6 +99,8 @@ function pressureOf(event: PointerLike, isStart = false): number {
 
 export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandle {
   const { canvas, camera, plane, engine, docW, docH, onPickColor } = options;
+  let currentDocW = docW;
+  let currentDocH = docH;
   const raycaster = new THREE.Raycaster();
   const pointerVec = new THREE.Vector2();
 
@@ -205,7 +208,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     raycaster.setFromCamera(pointerVec, camera);
     const hits = raycaster.intersectObject(plane, false);
     if (hits.length === 0 || !hits[0].uv) return null;
-    return { x: hits[0].uv.x * docW, y: (1 - hits[0].uv.y) * docH };
+    return { x: hits[0].uv.x * currentDocW, y: (1 - hits[0].uv.y) * currentDocH };
   };
 
   const emitTo = (x: number, y: number, pressure: number): void => {
@@ -1368,6 +1371,10 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   window.addEventListener('keyup', onKeyUp);
 
   return {
+    setDocDimensions: (w: number, h: number) => {
+      currentDocW = w;
+      currentDocH = h;
+    },
     dispose: () => {
       unsubscribe();
       if (activeStroke) finish(activePointerId ?? undefined);

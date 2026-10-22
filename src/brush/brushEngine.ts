@@ -35,6 +35,10 @@ export interface BrushEngine {
   readonly strokeCanvas: HTMLCanvasElement;
   readonly compositeCanvas: HTMLCanvasElement;
   readonly selection: SelectionModel;
+  docW: number;
+  docH: number;
+  setDocumentSize(w: number, h: number): void;
+  onDocumentResize?: (w: number, h: number) => void;
   compositeDirty: boolean;
   setTimelineManager(tm: TimelineManager): void;
   getTimelineManager(): TimelineManager | null;
@@ -63,6 +67,7 @@ export interface BrushEngine {
   redo(): boolean;
   canUndo(): boolean;
   canRedo(): boolean;
+  clearHistory(): void;
   updateComposite(): void;
 }
 
@@ -173,26 +178,28 @@ function getEffectiveOpacity(node: LayerNode, layerMap: Map<string, LayerNode>):
 }
 
 export function createBrushEngine(): BrushEngine {
-  const layerManager = createLayerManager(DOC_W, DOC_H);
-  const strokeCanvas = makeCanvas(DOC_W, DOC_H);
-  const compositeCanvas = makeCanvas(DOC_W, DOC_H);
-  const groupCanvas = makeCanvas(DOC_W, DOC_H);
-  const clipCanvas = makeCanvas(DOC_W, DOC_H);
-  const onionCanvas = makeCanvas(DOC_W, DOC_H);
-  const lockAlphaCanvas = makeCanvas(DOC_W, DOC_H);
-  const liveMaskCanvas = makeCanvas(DOC_W, DOC_H);
-  const predictedCanvas = makeCanvas(DOC_W, DOC_H);
-  const layerColorCanvas = makeCanvas(DOC_W, DOC_H);
+  let curDocW = DOC_W;
+  let curDocH = DOC_H;
+  const layerManager = createLayerManager(curDocW, curDocH);
+  const strokeCanvas = makeCanvas(curDocW, curDocH);
+  const compositeCanvas = makeCanvas(curDocW, curDocH);
+  const groupCanvas = makeCanvas(curDocW, curDocH);
+  const clipCanvas = makeCanvas(curDocW, curDocH);
+  const onionCanvas = makeCanvas(curDocW, curDocH);
+  const lockAlphaCanvas = makeCanvas(curDocW, curDocH);
+  const liveMaskCanvas = makeCanvas(curDocW, curDocH);
+  const predictedCanvas = makeCanvas(curDocW, curDocH);
+  const layerColorCanvas = makeCanvas(curDocW, curDocH);
 
-  const strokeContext = strokeCanvas.getContext('2d')!;
-  const compositeContext = compositeCanvas.getContext('2d')!;
-  const groupContext = groupCanvas.getContext('2d')!;
-  const clipContext = clipCanvas.getContext('2d')!;
-  const onionContext = onionCanvas.getContext('2d')!;
-  const lockAlphaContext = lockAlphaCanvas.getContext('2d')!;
-  const liveMaskContext = liveMaskCanvas.getContext('2d')!;
-  const predictedContext = predictedCanvas.getContext('2d')!;
-  const layerColorContext = layerColorCanvas.getContext('2d')!;
+  const strokeContext = strokeCanvas.getContext('2d', { willReadFrequently: true })!;
+  const compositeContext = compositeCanvas.getContext('2d', { willReadFrequently: true })!;
+  const groupContext = groupCanvas.getContext('2d', { willReadFrequently: true })!;
+  const clipContext = clipCanvas.getContext('2d', { willReadFrequently: true })!;
+  const onionContext = onionCanvas.getContext('2d', { willReadFrequently: true })!;
+  const lockAlphaContext = lockAlphaCanvas.getContext('2d', { willReadFrequently: true })!;
+  const liveMaskContext = liveMaskCanvas.getContext('2d', { willReadFrequently: true })!;
+  const predictedContext = predictedCanvas.getContext('2d', { willReadFrequently: true })!;
+  const layerColorContext = layerColorCanvas.getContext('2d', { willReadFrequently: true })!;
   let hasPredictions = false;
 
   const history: HistoryManager = createHistoryManager(30);
@@ -219,8 +226,8 @@ export function createBrushEngine(): BrushEngine {
     if (!preStrokeSnapshot) return null;
     const ix = Math.floor(x);
     const iy = Math.floor(y);
-    if (ix < 0 || ix >= DOC_W || iy < 0 || iy >= DOC_H) return null;
-    const idx = (iy * DOC_W + ix) * 4;
+    if (ix < 0 || ix >= curDocW || iy < 0 || iy >= curDocH) return null;
+    const idx = (iy * curDocW + ix) * 4;
     const a = preStrokeSnapshot.data[idx + 3];
     if (a < 5) return null;
     return [
@@ -513,7 +520,7 @@ export function createBrushEngine(): BrushEngine {
 
   function renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void {
     if (!mode || mode === 'shape' || points.length === 0) return;
-    predictedContext.clearRect(0, 0, DOC_W, DOC_H);
+    predictedContext.clearRect(0, 0, curDocW, curDocH);
     hasPredictions = true;
 
     let prevX = lastX;
@@ -541,7 +548,7 @@ export function createBrushEngine(): BrushEngine {
 
   function clearPredictedStroke(): void {
     if (hasPredictions) {
-      predictedContext.clearRect(0, 0, DOC_W, DOC_H);
+      predictedContext.clearRect(0, 0, curDocW, curDocH);
       hasPredictions = false;
       engine.compositeDirty = true;
     }
@@ -570,7 +577,7 @@ export function createBrushEngine(): BrushEngine {
         active.context.drawImage(strokeCanvas, 0, 0);
         active.context.restore();
       }
-      strokeContext.clearRect(0, 0, DOC_W, DOC_H);
+      strokeContext.clearRect(0, 0, curDocW, curDocH);
     } else if (mode === 'erase' && selectionModel.hasSelection()) {
       if (active.context) {
         strokeContext.save();
@@ -583,7 +590,7 @@ export function createBrushEngine(): BrushEngine {
         active.context.drawImage(strokeCanvas, 0, 0);
         active.context.restore();
       }
-      strokeContext.clearRect(0, 0, DOC_W, DOC_H);
+      strokeContext.clearRect(0, 0, curDocW, curDocH);
     }
 
     if (preStrokeSnapshot) {
@@ -691,7 +698,7 @@ export function createBrushEngine(): BrushEngine {
   }
 
   function updateComposite(): void {
-    compositeContext.clearRect(0, 0, DOC_W, DOC_H);
+    compositeContext.clearRect(0, 0, curDocW, curDocH);
 
     const layerMap = new Map(layerManager.layers.map((l) => [l.id, l]));
     const activeDrawable = layerManager.getActiveDrawableLayer();
@@ -739,8 +746,8 @@ export function createBrushEngine(): BrushEngine {
           kfTransform.scaleY !== 1 ||
           kfTransform.rotation !== 0)
       ) {
-        const cx = DOC_W / 2;
-        const cy = DOC_H / 2;
+        const cx = curDocW / 2;
+        const cy = curDocH / 2;
         targetCtx.translate(cx + kfTransform.x, cy + kfTransform.y);
         if (kfTransform.rotation !== 0) {
           targetCtx.rotate((kfTransform.rotation * Math.PI) / 180);
@@ -762,7 +769,7 @@ export function createBrushEngine(): BrushEngine {
       let liveStrokeDrawnInTint = false;
 
       if (isLivePainting && layer.lockAlpha) {
-        lockAlphaContext.clearRect(0, 0, DOC_W, DOC_H);
+        lockAlphaContext.clearRect(0, 0, curDocW, curDocH);
         lockAlphaContext.drawImage(layer.canvas, 0, 0);
         lockAlphaContext.save();
         lockAlphaContext.globalCompositeOperation = 'source-atop';
@@ -777,7 +784,7 @@ export function createBrushEngine(): BrushEngine {
 
       // CSP Layer Color Effect (Azul de boceto / Sketch cyan non-destructive tint)
       if (layer.useLayerColor && !layer.isPaper) {
-        layerColorContext.clearRect(0, 0, DOC_W, DOC_H);
+        layerColorContext.clearRect(0, 0, curDocW, curDocH);
         layerColorContext.drawImage(sourceCanvasToDraw, 0, 0);
 
         if (isLivePainting && !layer.lockAlpha) {
@@ -787,7 +794,7 @@ export function createBrushEngine(): BrushEngine {
             layerColorContext.globalCompositeOperation = 'lighter';
           }
           if (selectionModel.hasSelection()) {
-            liveMaskContext.clearRect(0, 0, DOC_W, DOC_H);
+            liveMaskContext.clearRect(0, 0, curDocW, curDocH);
             liveMaskContext.drawImage(strokeCanvas, 0, 0);
             if (hasPredictions) {
               liveMaskContext.drawImage(predictedCanvas, 0, 0);
@@ -810,7 +817,7 @@ export function createBrushEngine(): BrushEngine {
         layerColorContext.save();
         layerColorContext.globalCompositeOperation = 'source-in';
         layerColorContext.fillStyle = layer.layerColor || '#00a0e9';
-        layerColorContext.fillRect(0, 0, DOC_W, DOC_H);
+        layerColorContext.fillRect(0, 0, curDocW, curDocH);
         layerColorContext.restore();
 
         sourceCanvasToDraw = layerColorCanvas;
@@ -844,7 +851,7 @@ export function createBrushEngine(): BrushEngine {
           targetCtx.globalCompositeOperation = 'lighter';
         }
         if (selectionModel.hasSelection()) {
-          liveMaskContext.clearRect(0, 0, DOC_W, DOC_H);
+          liveMaskContext.clearRect(0, 0, curDocW, curDocH);
           liveMaskContext.drawImage(strokeCanvas, 0, 0);
           if (hasPredictions) {
             liveMaskContext.drawImage(predictedCanvas, 0, 0);
@@ -884,11 +891,11 @@ export function createBrushEngine(): BrushEngine {
         const onionCels = timelineManager.getOnionSkinCels(track.id, timelineManager.settings.currentFrame);
         for (const item of onionCels) {
           if (!item.layer.canvas) continue;
-          onionContext.clearRect(0, 0, DOC_W, DOC_H);
+          onionContext.clearRect(0, 0, curDocW, curDocH);
           onionContext.save();
 
-          const cx = DOC_W / 2;
-          const cy = DOC_H / 2;
+          const cx = curDocW / 2;
+          const cy = curDocH / 2;
 
           // Track animated keyframe transform
           if (
@@ -926,7 +933,7 @@ export function createBrushEngine(): BrushEngine {
             onionContext.save();
             onionContext.globalCompositeOperation = 'source-in';
             onionContext.fillStyle = item.tintColor;
-            onionContext.fillRect(0, 0, DOC_W, DOC_H);
+            onionContext.fillRect(0, 0, curDocW, curDocH);
             onionContext.restore();
           }
 
@@ -938,13 +945,26 @@ export function createBrushEngine(): BrushEngine {
       }
     }
 
+    // Pre-calculate active cel IDs across all animation tracks for O(1) visibility checking
+    const activeAnimationCelIds = new Set<string>();
+    if (timelineManager) {
+      const curFrame = timelineManager.settings.currentFrame;
+      for (const t of timelineManager.tracks) {
+        const cel = timelineManager.getActiveCelForFrame(t.id, curFrame);
+        if (cel) activeAnimationCelIds.add(cel.id);
+      }
+    }
+
     // 3. Filter visible non-paper raster layers (respecting animation timeline active cels & folder hierarchy)
     const renderOrdered = getRenderOrder(layerManager.layers);
     const visibleLayers = renderOrdered.filter((l) => {
       if (l.type !== 'raster' || !l.canvas || l.isPaper) return false;
       if (!isEffectivelyVisible(l, layerMap)) return false;
-      if (timelineManager && !timelineManager.isLayerVisibleAtFrame(l, timelineManager.settings.currentFrame)) {
-        return false;
+      if (timelineManager && l.parentId) {
+        const parent = layerMap.get(l.parentId);
+        if (parent && parent.isAnimationFolder) {
+          return activeAnimationCelIds.has(l.id);
+        }
       }
       return true;
     });
@@ -967,13 +987,13 @@ export function createBrushEngine(): BrushEngine {
         i++;
       } else {
         // Clipping Mask Cluster: Mask each clipped layer with baseLayer's alpha
-        groupContext.clearRect(0, 0, DOC_W, DOC_H);
+        groupContext.clearRect(0, 0, curDocW, curDocH);
         renderLayerTo(groupContext, baseLayer, 1);
 
         for (const clipped of clippedGroup) {
           const clippedOpacity = getEffectiveOpacity(clipped, layerMap);
 
-          clipContext.clearRect(0, 0, DOC_W, DOC_H);
+          clipContext.clearRect(0, 0, curDocW, curDocH);
           renderLayerTo(clipContext, clipped, clippedOpacity);
 
           clipContext.save();
@@ -1009,7 +1029,7 @@ export function createBrushEngine(): BrushEngine {
     const active = layerManager.getActiveDrawableLayer();
     if (!active.context || active.locked || active.isPaper) return;
     if (erase && active.lockAlpha) return;
-    preStrokeSnapshot = active.context.getImageData(0, 0, DOC_W, DOC_H);
+    preStrokeSnapshot = active.context.getImageData(0, 0, curDocW, curDocH);
     preStrokeLayerId = active.id;
 
     strokeSettings = { ...getToolState().brush };
@@ -1067,7 +1087,46 @@ export function createBrushEngine(): BrushEngine {
     engine.compositeDirty = true;
   });
 
+  function setDocumentSize(w: number, h: number): void {
+    curDocW = w;
+    curDocH = h;
+    engine.docW = w;
+    engine.docH = h;
+    layerManager.resize(w, h);
+
+    strokeCanvas.width = w;
+    strokeCanvas.height = h;
+    compositeCanvas.width = w;
+    compositeCanvas.height = h;
+    groupCanvas.width = w;
+    groupCanvas.height = h;
+    clipCanvas.width = w;
+    clipCanvas.height = h;
+    onionCanvas.width = w;
+    onionCanvas.height = h;
+    lockAlphaCanvas.width = w;
+    lockAlphaCanvas.height = h;
+    liveMaskCanvas.width = w;
+    liveMaskCanvas.height = h;
+    predictedCanvas.width = w;
+    predictedCanvas.height = h;
+    layerColorCanvas.width = w;
+    layerColorCanvas.height = h;
+
+    selectionModel.resize(w, h);
+
+    if (engine.onDocumentResize) {
+      engine.onDocumentResize(w, h);
+    }
+
+    engine.compositeDirty = true;
+    engine.updateComposite();
+  }
+
   const engine: BrushEngine = {
+    docW: curDocW,
+    docH: curDocH,
+    setDocumentSize,
     layerManager,
     strokeCanvas,
     compositeCanvas,
@@ -1133,17 +1192,17 @@ export function createBrushEngine(): BrushEngine {
       finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return;
-      preStrokeSnapshot = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      preStrokeSnapshot = active.context.getImageData(0, 0, curDocW, curDocH);
       preStrokeLayerId = active.id;
       mode = 'shape';
       lastX = x;
       lastY = y;
-      strokeContext.clearRect(0, 0, DOC_W, DOC_H);
+      strokeContext.clearRect(0, 0, curDocW, curDocH);
       engine.compositeDirty = true;
     },
     updateShape(currentX, currentY) {
       if (mode !== 'shape') return;
-      strokeContext.clearRect(0, 0, DOC_W, DOC_H);
+      strokeContext.clearRect(0, 0, curDocW, curDocH);
       const { size, color, shapeType, shapeFill } = getToolState().brush;
       drawShape(strokeContext, lastX, lastY, currentX, currentY, shapeType, shapeFill, size, color);
       engine.compositeDirty = true;
@@ -1163,7 +1222,7 @@ export function createBrushEngine(): BrushEngine {
       if (selectionModel.hasSelection() && !selectionModel.isPixelSelected(x, y)) {
         return;
       }
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       history.push(active.id, current);
 
       const bSettings = getToolState().brush;
@@ -1178,16 +1237,16 @@ export function createBrushEngine(): BrushEngine {
         activeLayer: active,
         allLayers: layerManager.layers,
         selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
-        docW: DOC_W,
-        docH: DOC_H,
+        docW: curDocW,
+        docH: curDocH,
       });
 
       if (!handled) {
         floodFill(active.context, x, y, colorHex, tolerance);
         if (selectionModel.hasSelection()) {
           // If selection is active, restore pixels outside selection using pre-fill snapshot
-          const newImg = active.context.getImageData(0, 0, DOC_W, DOC_H);
-          const maskData = selectionModel.maskCtx.getImageData(0, 0, DOC_W, DOC_H).data;
+          const newImg = active.context.getImageData(0, 0, curDocW, curDocH);
+          const maskData = selectionModel.maskCtx.getImageData(0, 0, curDocW, curDocH).data;
           for (let i = 0; i < current.data.length; i += 4) {
             if (maskData[i + 3] === 0) {
               newImg.data[i] = current.data[i];
@@ -1206,7 +1265,7 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return false;
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       const bSettings = getToolState().brush;
 
       const ok = executeEncloseAndFill({
@@ -1219,8 +1278,8 @@ export function createBrushEngine(): BrushEngine {
         activeLayer: active,
         allLayers: layerManager.layers,
         selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
-        docW: DOC_W,
-        docH: DOC_H,
+        docW: curDocW,
+        docH: curDocH,
       });
 
       if (ok) {
@@ -1234,7 +1293,7 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return false;
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       const bSettings = getToolState().brush;
 
       const ok = executePaintUnfilledArea({
@@ -1248,8 +1307,8 @@ export function createBrushEngine(): BrushEngine {
         activeLayer: active,
         allLayers: layerManager.layers,
         selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
-        docW: DOC_W,
-        docH: DOC_H,
+        docW: curDocW,
+        docH: curDocH,
       });
 
       if (ok) {
@@ -1263,7 +1322,7 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return;
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       history.push(active.id, current);
       meshCache.delete(active.id);
 
@@ -1272,9 +1331,9 @@ export function createBrushEngine(): BrushEngine {
       if (active.lockAlpha) {
         active.context.globalCompositeOperation = 'source-atop';
       }
-      liveMaskContext.clearRect(0, 0, DOC_W, DOC_H);
+      liveMaskContext.clearRect(0, 0, curDocW, curDocH);
       liveMaskContext.fillStyle = color;
-      liveMaskContext.fillRect(0, 0, DOC_W, DOC_H);
+      liveMaskContext.fillRect(0, 0, curDocW, curDocH);
       if (selectionModel.hasSelection()) {
         liveMaskContext.save();
         liveMaskContext.globalCompositeOperation = 'destination-in';
@@ -1289,7 +1348,7 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return false;
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       history.push(active.id, current);
       meshCache.delete(active.id);
       if (selectionModel.hasSelection()) {
@@ -1310,7 +1369,7 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context) return false;
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       const record = history.undo(active.id, current);
       if (!record) return false;
 
@@ -1330,7 +1389,7 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context) return false;
-      const current = active.context.getImageData(0, 0, DOC_W, DOC_H);
+      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       const record = history.redo(active.id, current);
       if (!record) return false;
 
@@ -1351,6 +1410,9 @@ export function createBrushEngine(): BrushEngine {
     },
     canRedo(): boolean {
       return history.canRedo();
+    },
+    clearHistory(): void {
+      history.clear();
     },
     selection: selectionModel,
     updateComposite,

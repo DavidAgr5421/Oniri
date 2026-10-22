@@ -222,9 +222,7 @@ function syncTrackFlatExposures(track: AnimationTrack): void {
   track.clips.sort((a, b) => a.startFrame - b.startFrame);
   for (const clip of track.clips) {
     for (const [f, celId] of clip.exposures.entries()) {
-      if (f >= clip.startFrame && f <= clip.endFrame) {
-        track.exposures.set(f, celId);
-      }
+      track.exposures.set(f, celId);
     }
   }
 }
@@ -703,7 +701,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     setRange(start: number, end: number) {
       const settings = getActiveScene().settings;
-      const s = Math.max(1, Math.min(settings.totalFrames, Math.round(start)));
+      const s = Math.max(0, Math.min(settings.totalFrames, Math.round(start)));
       const e = Math.max(s, Math.min(settings.totalFrames, Math.round(end)));
       settings.startFrame = s;
       settings.endFrame = e;
@@ -1902,7 +1900,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     // --- Query State for Rendering ---
     getActiveCelForFrame(trackId: string, frame: number): LayerNode | undefined {
       const { tracks } = getActiveScene();
-      const track = tracks.find((t) => t.id === trackId);
+      const track = tracks.find((t) => t.id === trackId || t.folderId === trackId);
       if (!track) return undefined;
 
       // Check clip bounds first (CSP Clip duration cuts off visibility outside clip)
@@ -1910,10 +1908,10 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (!clip) return undefined;
 
       let activeCelId: string | undefined;
-      let maxFrame = -1;
+      let maxFrame = -Infinity;
 
       for (const [expFrame, celId] of clip.exposures.entries()) {
-        if (expFrame >= clip.startFrame && expFrame <= frame && expFrame > maxFrame) {
+        if (expFrame <= frame && expFrame > maxFrame) {
           maxFrame = expFrame;
           activeCelId = celId;
         }
