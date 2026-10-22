@@ -1,4 +1,5 @@
 import { isTransformModalLocked, warnTransformModalBlocked } from '../selection/transformModal';
+import { ensureClipboardHelper, schedulePasteFallback } from '../storage/clipboardManager';
 
 export interface CommandItem {
   id: string;
@@ -104,7 +105,13 @@ class CommandDispatcher {
   }
 
   public handleKeyEvent(event: KeyboardEvent): boolean {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+    const target = event.target as HTMLElement;
+    const isRealInput =
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      target.id !== 'oniri-clipboard-helper' &&
+      target.id !== 'modal-paste-catcher';
+
+    if (isRealInput) {
       return false;
     }
 
@@ -128,6 +135,17 @@ class CommandDispatcher {
 
     const cmdId = this.shortcutMap.get(norm);
     if (cmdId) {
+      if (cmdId === 'edit.paste') {
+        // Pre-focus hidden clipboard helper so the browser dispatches a native DOM paste event
+        // with complete access to Explorer files (CF_HDROP) and image bitmaps.
+        const helper = ensureClipboardHelper();
+        helper.focus({ preventScroll: true });
+
+        // Schedule fallback: if the native DOM paste event does not fire within 80ms,
+        // execute edit.paste via the Async Clipboard API.
+        schedulePasteFallback();
+        return false;
+      }
       event.preventDefault();
       event.stopPropagation();
       this.execute(cmdId);

@@ -50,6 +50,12 @@ interface ToolDef {
 
 const TOOLS: ToolDef[] = [
   {
+    id: 'move',
+    label: 'Mover Capa (Atajo: V / K)',
+    shortcut: 'V',
+    icon: '<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3M2 12h20M12 2v20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  },
+  {
     id: 'select',
     label: 'Área de Selección',
     shortcut: 'M',

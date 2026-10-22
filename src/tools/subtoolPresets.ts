@@ -10,6 +10,15 @@ export interface SubTool {
 }
 
 export const SUBTOOLS: SubTool[] = [
+  // Move / Object tool (V / K) - CSP Move layer / Operación
+  {
+    id: 'move-layer',
+    name: 'Mover capa',
+    tool: 'move',
+    description: 'Mueve la capa activa libremente por el lienzo arrastrando con el cursor.',
+    settings: {},
+  },
+
   // Pen / Inking tools (P)
   {
     id: 'g-pen',

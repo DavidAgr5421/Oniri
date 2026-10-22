@@ -1,5 +1,4 @@
 import type { BrushEngine } from '../brush/brushEngine';
-import { DOC_H, DOC_W } from '../brush/docConstants';
 import { selectionModel } from './selectionModel';
 import { setTransformModalLocked } from './transformModal';
 
@@ -90,14 +89,20 @@ export class TransformManager {
 
     this.engine = engine;
     this.targetLayerId = activeLayer.id;
+    const docW = engine.docW;
+    const docH = engine.docH;
+    const curW = activeLayer.canvas?.width || docW;
+    const curH = activeLayer.canvas?.height || docH;
+    const ox = activeLayer.offsetX ?? 0;
+    const oy = activeLayer.offsetY ?? 0;
 
     // Save full pre-transform layer snapshot for undo or cancel
-    this.snapshotBeforeTransform = activeLayer.context.getImageData(0, 0, DOC_W, DOC_H);
+    this.snapshotBeforeTransform = activeLayer.context.getImageData(0, 0, curW, curH);
 
     let bx = 0;
     let by = 0;
-    let bw = DOC_W;
-    let bh = DOC_H;
+    let bw = docW;
+    let bh = docH;
 
     if (selectionModel.hasSelection()) {
       const bounds = selectionModel.getBounds();
@@ -109,15 +114,15 @@ export class TransformManager {
     } else {
       // Find non-empty bounding box of active layer
       const data = this.snapshotBeforeTransform.data;
-      let minX = DOC_W;
-      let minY = DOC_H;
+      let minX = curW;
+      let minY = curH;
       let maxX = -1;
       let maxY = -1;
       let found = false;
 
-      for (let y = 0; y < DOC_H; y++) {
-        const row = y * DOC_W * 4;
-        for (let x = 0; x < DOC_W; x++) {
+      for (let y = 0; y < curH; y++) {
+        const row = y * curW * 4;
+        for (let x = 0; x < curW; x++) {
           if (data[row + x * 4 + 3] > 0) {
             found = true;
             if (x < minX) minX = x;
@@ -133,8 +138,8 @@ export class TransformManager {
         return false;
       }
 
-      bx = minX;
-      by = minY;
+      bx = minX + ox;
+      by = minY + oy;
       bw = maxX - minX + 1;
       bh = maxY - minY + 1;
     }
@@ -201,33 +206,159 @@ export class TransformManager {
   /**
    * Commits the transform into the layer (Enter)
    */
+  /**
+   * Activates Free Transform on a newly pasted image, wrapping it in the transform gizmo
+   * without destructive canvas clipping so it can be moved, scaled, and rotated immediately.
+   */
+  public startTransformWithPastedImage(
+    engine: BrushEngine,
+    img: CanvasImageSource,
+    width: number,
+    height: number,
+    layerName = 'Capa pegada'
+  ): boolean {
+    if (this.active) {
+      this.commitTransform();
+    }
+
+    // 1. Create a root raster layer (parentId: null) above active layer so it's never hidden in animation folder
+    const newLayer = engine.layerManager.createLayer(layerName, null);
+    if (!newLayer.context) return false;
+
+    // 2. Center coordinates
+    const docW = engine.docW;
+    const docH = engine.docH;
+
+    let initX = Math.round((docW - width) / 2);
+    let initY = Math.round((docH - height) / 2);
+
+    if (selectionModel.hasSelection()) {
+      const bounds = selectionModel.getBounds();
+      if (bounds && bounds.width > 0 && bounds.height > 0) {
+        initX = Math.round(bounds.minX + (bounds.width - width) / 2);
+        initY = Math.round(bounds.minY + (bounds.height - height) / 2);
+      }
+    }
+
+    this.engine = engine;
+    this.targetLayerId = newLayer.id;
+    this.active = true;
+    this.hadSelection = false;
+
+    // 3. Store full unclipped image in transformCanvas (never clipped!)
+    this.transformCanvas.width = width;
+    this.transformCanvas.height = height;
+    this.transformCtx.clearRect(0, 0, width, height);
+    this.transformCtx.drawImage(img, 0, 0, width, height);
+
+    this.origWidth = width;
+    this.origHeight = height;
+    this.currentX = initX;
+    this.currentY = initY;
+    this.currentWidth = width;
+    this.currentHeight = height;
+    this.rotation = 0;
+    this.flipH = false;
+    this.flipV = false;
+    this.dragHandle = null;
+
+    // Blank snapshot before transform
+    this.snapshotBeforeTransform = newLayer.context.getImageData(0, 0, docW, docH);
+
+    engine.layerManager.setActiveLayer(newLayer.id);
+    engine.compositeDirty = true;
+    engine.updateComposite();
+    setTransformModalLocked(true);
+    this.notify();
+
+    return true;
+  }
+
   public commitTransform(): void {
     if (!this.active || !this.engine) return;
     const activeLayer = this.engine.layerManager.layers.find((l) => l.id === this.targetLayerId);
     if (activeLayer && activeLayer.context && this.snapshotBeforeTransform) {
       // Register the pre-transform pixels in the undo history before rasterizing
       this.engine.pushUndoRecord(this.targetLayerId, this.snapshotBeforeTransform);
-      // Draw transformed pixels onto active layer
-      activeLayer.context.save();
+
+      const docW = this.engine.docW;
+      const docH = this.engine.docH;
       const cx = this.currentX + this.currentWidth / 2;
       const cy = this.currentY + this.currentHeight / 2;
-
-      activeLayer.context.translate(cx, cy);
-      if (this.rotation !== 0) activeLayer.context.rotate(this.rotation);
       const sx = (this.flipH ? -1 : 1) * (this.currentWidth / Math.max(1, this.origWidth));
       const sy = (this.flipV ? -1 : 1) * (this.currentHeight / Math.max(1, this.origHeight));
-      activeLayer.context.scale(sx, sy);
 
-      activeLayer.context.drawImage(
-        this.transformCanvas,
-        -this.origWidth / 2,
-        -this.origHeight / 2,
-      );
-      activeLayer.context.restore();
+      const hw = this.currentWidth / 2;
+      const hh = this.currentHeight / 2;
+      const cos = Math.cos(this.rotation);
+      const sin = Math.sin(this.rotation);
+      const corners = [
+        { x: -hw, y: -hh },
+        { x: hw, y: -hh },
+        { x: hw, y: hh },
+        { x: -hw, y: hh },
+      ];
+      let minX = 0;
+      let minY = 0;
+      let maxX = docW;
+      let maxY = docH;
+      for (const pt of corners) {
+        const rx = cx + (pt.x * cos - pt.y * sin);
+        const ry = cy + (pt.x * sin + pt.y * cos);
+        if (rx < minX) minX = Math.floor(rx);
+        if (rx > maxX) maxX = Math.ceil(rx);
+        if (ry < minY) minY = Math.floor(ry);
+        if (ry > maxY) maxY = Math.ceil(ry);
+      }
+
+      if (minX < 0 || minY < 0 || maxX > docW || maxY > docH) {
+        // Expand activeLayer canvas so off-canvas pixels are preserved without clipping
+        const newW = maxX - minX;
+        const newH = maxY - minY;
+        const newCanvas = document.createElement('canvas');
+        newCanvas.width = newW;
+        newCanvas.height = newH;
+        const newCtx = newCanvas.getContext('2d', { willReadFrequently: true })!;
+
+        const oldOx = activeLayer.offsetX ?? 0;
+        const oldOy = activeLayer.offsetY ?? 0;
+        if (activeLayer.canvas) {
+          newCtx.drawImage(activeLayer.canvas, oldOx - minX, oldOy - minY);
+        }
+
+        newCtx.save();
+        newCtx.translate(cx - minX, cy - minY);
+        if (this.rotation !== 0) newCtx.rotate(this.rotation);
+        newCtx.scale(sx, sy);
+        newCtx.drawImage(
+          this.transformCanvas,
+          -this.origWidth / 2,
+          -this.origHeight / 2,
+        );
+        newCtx.restore();
+
+        activeLayer.canvas = newCanvas;
+        activeLayer.context = newCtx;
+        activeLayer.offsetX = minX;
+        activeLayer.offsetY = minY;
+      } else {
+        const ox = activeLayer.offsetX ?? 0;
+        const oy = activeLayer.offsetY ?? 0;
+        activeLayer.context.save();
+        activeLayer.context.translate(cx - ox, cy - oy);
+        if (this.rotation !== 0) activeLayer.context.rotate(this.rotation);
+        activeLayer.context.scale(sx, sy);
+        activeLayer.context.drawImage(
+          this.transformCanvas,
+          -this.origWidth / 2,
+          -this.origHeight / 2,
+        );
+        activeLayer.context.restore();
+      }
 
       // If a selection was active, transform the selection mask along with the pixels
       if (this.hadSelection) {
-        selectionModel.maskCtx.clearRect(0, 0, DOC_W, DOC_H);
+        selectionModel.maskCtx.clearRect(0, 0, docW, docH);
         selectionModel.maskCtx.save();
         selectionModel.maskCtx.translate(cx, cy);
         if (this.rotation !== 0) selectionModel.maskCtx.rotate(this.rotation);

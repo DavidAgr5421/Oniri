@@ -156,6 +156,7 @@ export class TopMenuBar {
           e.stopPropagation();
           if (isItemDisabled) return;
           this.closeAll();
+          window.focus();
           if (item.id) {
             commandDispatcher.execute(item.id);
           } else if (item.action) {

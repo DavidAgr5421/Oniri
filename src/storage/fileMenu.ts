@@ -2,6 +2,7 @@ import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from '../animation/timelineManager';
 import { importOniriPackage } from './oniriPackage';
 import { importClipProject, isClipBuffer } from './clipImporter';
+import { openImageAsDocument } from './clipboardManager';
 import { openPressureCalibrationModal } from '../tools/pressureCalibrationModal';
 import { openNewProjectModal } from '../tools/newProjectModal';
 import { buildTopMenuCategories } from '../ui/defaultMenuConfig';
@@ -40,10 +41,10 @@ export function mountFileMenu(container: HTMLElement, options: FileMenuOptions):
 
   container.innerHTML = '';
 
-  // Hidden File Input
+  // Hidden File Input (Open Document)
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
-  fileInput.accept = '.oniri,.clip,.png,.jpg,.jpeg';
+  fileInput.accept = '.oniri,.clip,.png,.jpg,.jpeg,.webp,.bmp,.gif';
   fileInput.style.display = 'none';
 
   fileInput.addEventListener('change', async () => {
@@ -289,20 +290,15 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
         'Archivo .clip de Clip Studio importado',
         `Lienzo ${res.width}×${res.height} px, ${res.layersCount} capas, ${res.tracksCount} pistas de animación (${res.totalFrames} frames @ ${res.fps} fps).`
       );
-    } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
-      const activeLayer = engine.layerManager.getActiveDrawableLayer();
-      if (activeLayer.context && activeLayer.canvas) {
-        const img = new Image();
-        const url = URL.createObjectURL(file);
-        img.onload = () => {
-          activeLayer.context!.drawImage(img, 0, 0, activeLayer.canvas!.width, activeLayer.canvas!.height);
-          engine.compositeDirty = true;
-          engine.updateComposite();
-          URL.revokeObjectURL(url);
-          showNotification('Imagen importada', `Dibujada sobre "${activeLayer.name}".`);
-        };
-        img.src = url;
-      }
+    } else if (
+      ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'].includes(ext) ||
+      (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) || // JPEG
+      (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) || // PNG
+      (buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4d) || // BMP
+      (buffer.length >= 3 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) || // GIF
+      (buffer.length >= 12 && buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) // WEBP
+    ) {
+      await openImageAsDocument(file, file.name, engine, timeline);
     } else {
       alert(`Formato de archivo no reconocido: .${ext}`);
     }
@@ -424,7 +420,7 @@ export function resetToDefaultCanvas(engine: BrushEngine, timeline: TimelineMana
 /**
  * Displays floating notification banner.
  */
-function showNotification(title: string, message: string): void {
+export function showNotification(title: string, message: string): void {
   let toast = document.querySelector('.csp-notification-toast') as HTMLElement;
   if (!toast) {
     toast = document.createElement('div');

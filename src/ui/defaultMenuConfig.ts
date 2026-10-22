@@ -14,6 +14,13 @@ import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { saveOniriToFile } from '../storage/oniriPackage';
 import { saveClipToFile } from '../storage/clipImporter';
 import { getActiveProjectName } from '../storage/fileMenu';
+import {
+  createNewFromClipboard,
+  pasteClipboardImage,
+  copyToClipboard,
+  cutToClipboard,
+  setupGlobalClipboardHandlers,
+} from '../storage/clipboardManager';
 import { commandDispatcher } from './commandDispatcher';
 import type { TopMenuCategory } from './topMenuBar';
 
@@ -40,6 +47,12 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     category: 'file',
     shortcut: 'Ctrl+N',
     execute: () => onNewCanvas(),
+  });
+  commandDispatcher.register({
+    id: 'file.newFromClipboard',
+    label: 'Crear nuevo desde portapapeles',
+    category: 'file',
+    execute: () => { createNewFromClipboard(engine, timeline); },
   });
   commandDispatcher.register({
     id: 'file.open',
@@ -121,6 +134,27 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     aliases: ['Ctrl+Shift+Z'],
     isEnabled: () => !transformManager.isTransforming() && engine.canRedo(),
     execute: () => { engine.redo(); },
+  });
+  commandDispatcher.register({
+    id: 'edit.cut',
+    label: 'Cortar',
+    category: 'edit',
+    shortcut: 'Ctrl+X',
+    execute: () => { cutToClipboard(engine); },
+  });
+  commandDispatcher.register({
+    id: 'edit.copy',
+    label: 'Copiar',
+    category: 'edit',
+    shortcut: 'Ctrl+C',
+    execute: () => { copyToClipboard(engine); },
+  });
+  commandDispatcher.register({
+    id: 'edit.paste',
+    label: 'Pegar',
+    category: 'edit',
+    shortcut: 'Ctrl+V',
+    execute: () => { pasteClipboardImage(engine); },
   });
   commandDispatcher.register({
     id: 'edit.clear',
@@ -574,6 +608,9 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     commandDispatcher.handleKeyEvent(e);
   });
 
+  // Global clipboard paste listener
+  setupGlobalClipboardHandlers(engine, timeline);
+
   // Return full hierarchical category definition
   return [
     {
@@ -581,6 +618,7 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
       title: 'Archivo',
       entries: [
         { id: 'file.new', label: 'Nuevo...', shortcut: 'Ctrl+N' },
+        { id: 'file.newFromClipboard', label: 'Crear nuevo desde portapapeles' },
         { id: 'file.open', label: 'Abrir...', shortcut: 'Ctrl+O' },
         { id: 'file.save', label: 'Guardar .oniri', shortcut: 'Ctrl+S' },
         { id: 'file.saveClip', label: 'Guardar .clip (Clip Studio Paint)' },
@@ -597,6 +635,10 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
       entries: [
         { id: 'edit.undo', label: 'Deshacer', shortcut: 'Ctrl+Z' },
         { id: 'edit.redo', label: 'Rehacer', shortcut: 'Ctrl+Y' },
+        { divider: true },
+        { id: 'edit.cut', label: 'Cortar', shortcut: 'Ctrl+X' },
+        { id: 'edit.copy', label: 'Copiar', shortcut: 'Ctrl+C' },
+        { id: 'edit.paste', label: 'Pegar', shortcut: 'Ctrl+V' },
         { divider: true },
         { id: 'edit.clear', label: 'Borrar', shortcut: 'Delete' },
         { id: 'edit.clearOutside', label: 'Borrar fuera de selección', shortcut: 'Alt+Delete' },

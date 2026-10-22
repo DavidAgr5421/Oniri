@@ -21,6 +21,8 @@ export interface LayerNode {
   layerColor?: string; // Hex color (default '#00a0e9')
   boundBoneId?: string | null; // Rigid cutout binding to a Bone2D
   meshSkinningEnabled?: boolean; // Automatic multi-bone LBS mesh deformation
+  offsetX?: number; // Layer position offset X relative to canvas (allows moving & unclipped pixels)
+  offsetY?: number; // Layer position offset Y relative to canvas (allows moving & unclipped pixels)
 }
 
 export interface LayerManager {

@@ -1,4 +1,4 @@
-export type ToolId = 'pen' | 'brush' | 'effect' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand' | 'rotate' | 'select';
+export type ToolId = 'move' | 'pen' | 'brush' | 'effect' | 'eraser' | 'eyedropper' | 'bucket' | 'shape' | 'bone' | 'hand' | 'rotate' | 'select';
 export type BoneToolMode = 'rig' | 'pose_fk' | 'pose_ik';
 export type SelectionCombineMode = 'replace' | 'add' | 'subtract';
 export type ShapeType = 'line' | 'rectangle' | 'ellipse';

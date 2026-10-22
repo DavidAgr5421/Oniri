@@ -39,6 +39,7 @@ export interface BrushEngine {
   docH: number;
   setDocumentSize(w: number, h: number): void;
   onDocumentResize?: (w: number, h: number) => void;
+  onCompositeUpdated?: () => void;
   compositeDirty: boolean;
   setTimelineManager(tm: TimelineManager): void;
   getTimelineManager(): TimelineManager | null;
@@ -823,6 +824,9 @@ export function createBrushEngine(): BrushEngine {
         sourceCanvasToDraw = layerColorCanvas;
       }
 
+      const ox = layer.offsetX ?? 0;
+      const oy = layer.offsetY ?? 0;
+
       if (useMeshSkin && timelineManager && evaluatedBones) {
         let cached = meshCache.get(layer.id);
         if (!cached || cached.boneCount !== timelineManager.bones.length) {
@@ -835,14 +839,14 @@ export function createBrushEngine(): BrushEngine {
         if (cached) {
           renderSkinnedLayerMesh(targetCtx, sourceCanvasToDraw, cached.mesh, evaluatedBones);
         } else {
-          targetCtx.drawImage(sourceCanvasToDraw, 0, 0);
+          targetCtx.drawImage(sourceCanvasToDraw, ox, oy);
         }
       } else if (boundBoneEval) {
         const [a, b, c, d, tx, ty] = boundBoneEval.skinMatrix;
         targetCtx.transform(a, b, c, d, tx, ty);
-        targetCtx.drawImage(sourceCanvasToDraw, 0, 0);
+        targetCtx.drawImage(sourceCanvasToDraw, ox, oy);
       } else {
-        targetCtx.drawImage(sourceCanvasToDraw, 0, 0);
+        targetCtx.drawImage(sourceCanvasToDraw, ox, oy);
       }
 
       if (isLivePainting && !layer.lockAlpha && !liveStrokeDrawnInTint) {
@@ -1023,6 +1027,9 @@ export function createBrushEngine(): BrushEngine {
     }
 
     engine.compositeDirty = false;
+    if (engine.onCompositeUpdated) {
+      engine.onCompositeUpdated();
+    }
   }
 
   function beginInkStroke(x: number, y: number, pressure: number, erase: boolean): void {

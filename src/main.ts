@@ -196,6 +196,10 @@ engine.onDocumentResize = (w: number, h: number) => {
   viewportNav.resetView();
 };
 
+engine.onCompositeUpdated = () => {
+  canvasTexture.needsUpdate = true;
+};
+
 // Mount Top Command Bar (File, Save, Open, Export, Undo, Redo, Navigation, Drop listener)
 const topBarContainer = document.getElementById('top-bar-container');
 if (topBarContainer) {

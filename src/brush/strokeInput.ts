@@ -168,6 +168,13 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   let resizeStartSize = 20;
   let initialSampledColor = '#000000';
 
+  // Move Layer tool drag state
+  let isMovingLayer = false;
+  let moveStartDocX = 0;
+  let moveStartDocY = 0;
+  let moveOrigOffsetX = 0;
+  let moveOrigOffsetY = 0;
+
   // Smoothing state
   let smoothedX = 0;
   let smoothedY = 0;
@@ -191,6 +198,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       canvas.style.cursor = 'cell';
     } else if (isSpacePressed || activeTool() === 'hand') {
       canvas.style.cursor = 'grab';
+    } else if (activeTool() === 'move') {
+      canvas.style.cursor = 'move';
     } else if (activeTool() === 'bone') {
       canvas.style.cursor = 'pointer';
     } else {
@@ -577,6 +586,26 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
+    // Move Layer Tool (CSP Move Layer / Mouse Tool)
+    if (tool === 'move') {
+      const activeLayer = engine.layerManager.getActiveDrawableLayer();
+      if (activeLayer && !activeLayer.locked && !activeLayer.isPaper) {
+        isMovingLayer = true;
+        moveStartDocX = doc.x;
+        moveStartDocY = doc.y;
+        moveOrigOffsetX = activeLayer.offsetX ?? 0;
+        moveOrigOffsetY = activeLayer.offsetY ?? 0;
+        activePointerId = event.pointerId;
+        try {
+          canvas.setPointerCapture(event.pointerId);
+        } catch {
+          // Ignored
+        }
+        updateCursor();
+      }
+      return;
+    }
+
     // Physical eraser tip (REA study 5.4): erases with the current sub tool
     // settings without touching the selected tool, and restores it as soon as
     // the pen is flipped back.
@@ -896,6 +925,21 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    if (isMovingLayer) {
+      const doc = pointerToDoc(event);
+      if (doc) {
+        const activeLayer = engine.layerManager.getActiveDrawableLayer();
+        if (activeLayer) {
+          const dx = doc.x - moveStartDocX;
+          const dy = doc.y - moveStartDocY;
+          activeLayer.offsetX = Math.round(moveOrigOffsetX + dx);
+          activeLayer.offsetY = Math.round(moveOrigOffsetY + dy);
+          engine.compositeDirty = true;
+          engine.updateComposite();
+        }
+      }
+      return;
+    }
     // Dynamic brush resize movement (Ctrl+Alt+Drag)
     if (isResizingBrush) {
       const dx = event.clientX - resizeStartX;
@@ -1293,7 +1337,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     if (!isCtrl && !event.altKey) {
-      if (key === 'p') setTool('pen');
+      if (key === 'v' || key === 'k') setTool('move');
+      else if (key === 'p') setTool('pen');
       else if (key === 'b') setTool('brush');
       else if (key === 'd') setTool('effect');
       else if (key === 'e') setTool('eraser');

@@ -3,6 +3,7 @@ import type { TimelineManager } from '../animation/timelineManager';
 import type { LayerNode } from '../brush/layers';
 import { setActiveProjectName } from '../storage/fileMenu';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
+import { getClipboardImage } from '../storage/clipboardManager';
 
 let activeNewProjectModal: HTMLElement | null = null;
 
@@ -316,7 +317,10 @@ export function openNewProjectModal(
 
       <!-- Presets Dropdown for Selected Category -->
       <div>
-        <label style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; margin-bottom: 6px; font-weight: 600;">Ajustes preestablecidos</label>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; font-weight: 600; margin: 0;">Ajustes preestablecidos</label>
+          <button type="button" id="clipboard-size-btn" title="Detectar dimensiones de imagen en el portapapeles" style="background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #38bdf8; cursor: pointer; transition: all 0.15s ease;">📋 Tamaño del portapapeles</button>
+        </div>
         <select id="csp-preset-select" style="width: 100%; padding: 8px 10px; background: #131417; border: 1px solid #2d3139; border-radius: 6px; color: #f1f5f9; font-size: 12px; outline: none; cursor: pointer;">
         </select>
       </div>
@@ -562,6 +566,28 @@ export function openNewProjectModal(
       const list = CANVAS_PRESETS.filter((p) => p.category === currentCategory);
       const p = list[Number(val)];
       if (p) loadPreset(p);
+    }
+  });
+
+  const clipBtn = overlay.querySelector('#clipboard-size-btn') as HTMLButtonElement | null;
+  clipBtn?.addEventListener('click', async () => {
+    clipBtn.textContent = '⏳ Leyendo portapapeles...';
+    try {
+      const data = await getClipboardImage();
+      if (data) {
+        widthInput.value = String(data.width);
+        heightInput.value = String(data.height);
+        presetSelect.value = 'custom';
+        updateExtendedCanvasHint();
+        clipBtn.textContent = `✓ ${data.width} × ${data.height} px`;
+        setTimeout(() => { clipBtn.textContent = '📋 Tamaño del portapapeles'; }, 2500);
+      } else {
+        clipBtn.textContent = '⚠ Sin imagen';
+        setTimeout(() => { clipBtn.textContent = '📋 Tamaño del portapapeles'; }, 2000);
+      }
+    } catch {
+      clipBtn.textContent = '⚠ Sin acceso';
+      setTimeout(() => { clipBtn.textContent = '📋 Tamaño del portapapeles'; }, 2000);
     }
   });
 
