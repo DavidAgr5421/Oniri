@@ -105,9 +105,14 @@ class CommandDispatcher {
   }
 
   public handleKeyEvent(event: KeyboardEvent): boolean {
-    const target = event.target as HTMLElement;
+    const target = event.target as HTMLElement | null;
     const isRealInput =
-      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      ((target instanceof HTMLInputElement &&
+        target.type !== 'range' &&
+        target.type !== 'checkbox' &&
+        target.type !== 'button' &&
+        target.type !== 'color') ||
+        target instanceof HTMLTextAreaElement) &&
       target.id !== 'oniri-clipboard-helper' &&
       target.id !== 'modal-paste-catcher';
 
@@ -137,9 +142,12 @@ class CommandDispatcher {
     if (cmdId) {
       if (cmdId === 'edit.paste') {
         // Pre-focus hidden clipboard helper so the browser dispatches a native DOM paste event
-        // with complete access to Explorer files (CF_HDROP) and image bitmaps.
+        // with complete access to Explorer files (CF_HDROP) and image bitmaps, then blur immediately.
         const helper = ensureClipboardHelper();
         helper.focus({ preventScroll: true });
+        setTimeout(() => {
+          if (document.activeElement === helper) helper.blur();
+        }, 90);
 
         // Schedule fallback: if the native DOM paste event does not fire within 80ms,
         // execute edit.paste via the Async Clipboard API.

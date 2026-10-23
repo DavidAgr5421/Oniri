@@ -33,6 +33,8 @@ export function ensureClipboardHelper(): HTMLTextAreaElement {
     hiddenClipHelper = document.createElement('textarea');
     hiddenClipHelper.id = 'oniri-clipboard-helper';
     hiddenClipHelper.tabIndex = -1;
+    hiddenClipHelper.readOnly = true;
+    hiddenClipHelper.setAttribute('inputmode', 'none');
     hiddenClipHelper.setAttribute('aria-hidden', 'true');
     hiddenClipHelper.setAttribute('autocomplete', 'off');
     hiddenClipHelper.style.cssText = `
@@ -51,18 +53,12 @@ export function ensureClipboardHelper(): HTMLTextAreaElement {
 }
 
 /**
- * Focuses the clipboard helper if not currently typing in a real input.
+ * Blurs the clipboard helper so keyboard shortcuts (Space, P, B, E, V, etc.)
+ * and stylus input never get trapped in a focused textarea or summon the OS virtual keyboard.
  */
 export function focusClipboardHelper(): void {
-  const active = document.activeElement;
-  const isRealInput =
-    (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) &&
-    active.id !== 'oniri-clipboard-helper' &&
-    active.id !== 'modal-paste-catcher';
-
-  if (!isRealInput) {
-    const helper = ensureClipboardHelper();
-    helper.focus({ preventScroll: true });
+  if (hiddenClipHelper && document.activeElement === hiddenClipHelper) {
+    hiddenClipHelper.blur();
   }
 }
 
@@ -671,20 +667,8 @@ export function setupGlobalClipboardHandlers(
   activeEngine = engine;
   activeTimeline = timeline;
 
-  // Ensure the hidden clipboard helper exists in document
+  // Ensure the hidden clipboard helper exists in document (only focused transiently during Ctrl+V)
   ensureClipboardHelper();
-
-  // Focus helper on canvas or workspace pointerdown so Ctrl+V is always captured
-  window.addEventListener('pointerdown', (e) => {
-    const target = e.target as HTMLElement;
-    const isInput =
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      (target as any)?.isContentEditable;
-    if (!isInput) {
-      focusClipboardHelper();
-    }
-  });
 
   // Global DOM paste event listener
   window.addEventListener('paste', async (e: ClipboardEvent) => {
@@ -699,6 +683,10 @@ export function setupGlobalClipboardHandlers(
       return;
     }
 
+    if (hiddenClipHelper && document.activeElement === hiddenClipHelper) {
+      hiddenClipHelper.blur();
+    }
+
     const modal = document.getElementById('csp-clipboard-paste-modal');
     const data = await extractImageFromClipboardEvent(e);
     if (!data) return;
@@ -709,7 +697,6 @@ export function setupGlobalClipboardHandlers(
 
     if (modal) {
       modal.remove();
-      focusClipboardHelper();
       await openImageAsDocument(
         data.blob,
         data.name || 'Sin título [Portapapeles].oniri',

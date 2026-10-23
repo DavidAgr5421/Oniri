@@ -2,12 +2,17 @@ import type {
   AntiAliasingLevel,
   BoneToolMode,
   BrushPropKey,
+  DualBlendMode,
   PaperTextureId,
   PressureCurveMode,
   SelectionCombineMode,
   ShapeFillMode,
   ShapeType,
+  TextureMode,
+  ThicknessDirection,
+  TipCycleMode,
   TipShape,
+  TipTextureId,
   ToolId,
   ToolState,
 } from './toolState';
@@ -19,6 +24,7 @@ import {
   createCustomSubTool,
   deleteSubTool,
   duplicateSubTool,
+  moveSubToolToTool,
   resetSubTool,
   selectSubTool,
   setActiveColorSlot,
@@ -130,6 +136,8 @@ import {
   PAPER_TEXTURES,
 } from './subToolDetailModal';
 import { openPressureCalibrationModal } from './pressureCalibrationModal';
+import { openMaterialPickerModal } from './materialPickerModal';
+import { PAPER_MATERIAL_CATALOG, TIP_MATERIAL_CATALOG } from '../brush/brushTextureAssets';
 
 const QUICK_SIZES = [3, 5, 8, 12, 18, 28, 45, 70];
 
@@ -173,6 +181,27 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
         toggleProperties(true);
       }
     });
+    if (tool.id === 'pen' || tool.id === 'brush' || tool.id === 'effect' || tool.id === 'eraser') {
+      button.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        button.style.outline = '2px solid #38bdf8';
+      });
+      button.addEventListener('dragleave', () => {
+        button.style.outline = '';
+      });
+      button.addEventListener('drop', (e) => {
+        e.preventDefault();
+        button.style.outline = '';
+        const subId = e.dataTransfer?.getData('text/plain');
+        if (subId) {
+          if (moveSubToolToTool(subId, tool.id)) {
+            setTool(tool.id);
+            selectSubTool(subId);
+          }
+        }
+      });
+    }
     lateralBar.appendChild(button);
     toolButtons.set(tool.id, button);
   }
@@ -219,12 +248,26 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const secondarySwatch = document.createElement('div');
   secondarySwatch.className = 'csp-swatch secondary';
   secondarySwatch.title = 'Color Secundario (Clic para seleccionar)';
-  secondarySwatch.addEventListener('click', () => setActiveColorSlot('secondary'));
+  secondarySwatch.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveColorSlot('secondary');
+    if (!getToolState().propertiesOpen) {
+      toggleProperties(true);
+    }
+  });
 
   const primarySwatch = document.createElement('div');
   primarySwatch.className = 'csp-swatch primary';
   primarySwatch.title = 'Color Principal (Clic para seleccionar)';
-  primarySwatch.addEventListener('click', () => setActiveColorSlot('primary'));
+  primarySwatch.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveColorSlot('primary');
+    if (!getToolState().propertiesOpen) {
+      toggleProperties(true);
+    }
+  });
 
   const swapBtn = document.createElement('button');
   swapBtn.className = 'csp-swap-btn';
@@ -235,7 +278,8 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       <path d="M12 15V3"/>
     </svg>
   `;
-  swapBtn.addEventListener('click', (e) => {
+  swapBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
     e.stopPropagation();
     swapColors();
   });
@@ -247,7 +291,11 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   transparentTile.className = 'csp-transparent-tile';
   transparentTile.title = 'Color Transparente (Atajo: C) - Convierte el pincel en borrador conservando su textura';
   transparentTile.innerHTML = `<div class="csp-checkerboard"></div>`;
-  transparentTile.addEventListener('click', () => toggleTransparentColor());
+  transparentTile.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleTransparentColor();
+  });
   colorWidget.appendChild(transparentTile);
 
   lateralBar.appendChild(colorWidget);
@@ -355,8 +403,89 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   }
 
   const createBtn = actionBtn('+', 'Crear un pincel nuevo a partir del actual (duplicar)');
+  const moveCatBtn = actionBtn('⇄', 'Mover pincel activo a otra herramienta (Pluma ↔ Pincel ↔ Efectos ↔ Borrador)');
   const resetBtn = actionBtn('↺', 'Restaurar los ajustes de fábrica de este pincel');
   const deleteBtn = actionBtn('🗑', 'Eliminar este pincel personalizado', true);
+
+  let moveMenuEl: HTMLDivElement | null = null;
+  moveCatBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (moveMenuEl) {
+      moveMenuEl.remove();
+      moveMenuEl = null;
+      return;
+    }
+    const activeSub = getActiveSubTool();
+    if (!activeSub) return;
+    const menu = document.createElement('div');
+    Object.assign(menu.style, {
+      position: 'fixed',
+      zIndex: '9999',
+      backgroundColor: '#252525',
+      border: '1px solid #484848',
+      borderRadius: '4px',
+      padding: '4px',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.65)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '2px',
+      minWidth: '155px',
+    });
+    const rect = moveCatBtn.getBoundingClientRect();
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.left = `${Math.max(8, rect.left - 80)}px`;
+
+    const targets: { id: ToolId; label: string }[] = [
+      { id: 'pen', label: '✒️ Mover a Pluma (P)' },
+      { id: 'brush', label: '🖌️ Mover a Pincel (B)' },
+      { id: 'effect', label: '✨ Mover a Efectos (D)' },
+      { id: 'eraser', label: '🧹 Mover a Borrador (E)' },
+    ];
+    for (const t of targets) {
+      const itemBtn = document.createElement('button');
+      const isCur = activeSub.tool === t.id;
+      itemBtn.textContent = isCur ? `${t.label} (Actual)` : t.label;
+      itemBtn.disabled = isCur;
+      Object.assign(itemBtn.style, {
+        textAlign: 'left',
+        padding: '5px 8px',
+        backgroundColor: isCur ? '#333' : 'transparent',
+        color: isCur ? '#777' : '#e5e7eb',
+        border: 'none',
+        borderRadius: '3px',
+        fontSize: '11.5px',
+        cursor: isCur ? 'default' : 'pointer',
+      });
+      if (!isCur) {
+        itemBtn.addEventListener('mouseenter', () => {
+          itemBtn.style.backgroundColor = '#3b82f6';
+        });
+        itemBtn.addEventListener('mouseleave', () => {
+          itemBtn.style.backgroundColor = 'transparent';
+        });
+        itemBtn.addEventListener('click', () => {
+          const subId = activeSub.id;
+          if (moveSubToolToTool(subId, t.id)) {
+            setTool(t.id);
+            selectSubTool(subId);
+          }
+          menu.remove();
+          moveMenuEl = null;
+        });
+      }
+      menu.appendChild(itemBtn);
+    }
+    const closeMenu = (ev: MouseEvent) => {
+      if (!menu.contains(ev.target as Node)) {
+        menu.remove();
+        moveMenuEl = null;
+        window.removeEventListener('mousedown', closeMenu);
+      }
+    };
+    setTimeout(() => window.addEventListener('mousedown', closeMenu), 10);
+    document.body.appendChild(menu);
+    moveMenuEl = menu;
+  });
 
   createBtn.addEventListener('click', () => {
     const activeId = getToolState().activeSubToolId;
@@ -372,7 +501,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
   const subtoolActions = document.createElement('div');
   subtoolActions.className = 'subtool-header-actions';
-  subtoolActions.append(createBtn, resetBtn, deleteBtn);
+  subtoolActions.append(moveCatBtn, createBtn, resetBtn, deleteBtn);
   subtoolHeader.appendChild(subtoolActions);
   subtoolSection.appendChild(subtoolHeader);
 
@@ -718,14 +847,121 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(taperBox);
   inkPropertyBoxes.set('taper', taperBox);
 
-  // 8. Tip Shape Box
+  // 8. Tip Shape & Material Box (CSP ブラシ先端形状: 円形 / 素材 + 向き)
   const tipBox = document.createElement('div');
   tipBox.className = 'prop-row-box';
   const tipLabel = document.createElement('span');
   tipLabel.className = 'prop-label';
   tipLabel.textContent = 'Forma de punta';
   const tipSeg = makeSegGroup<TipShape>(TIP_SHAPES, (id) => setBrushSettings({ tipShape: id }));
-  tipBox.append(tipLabel, tipSeg.group);
+
+  const tipMatLabel = document.createElement('span');
+  tipMatLabel.className = 'prop-label';
+  tipMatLabel.style.marginTop = '4px';
+  tipMatLabel.textContent = 'Material de punta (CSP)';
+
+  const tipMatPreviewCard = document.createElement('div');
+  Object.assign(tipMatPreviewCard.style, {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: '4px 6px',
+    backgroundColor: '#1f1f1f',
+    border: '1px solid #3d3d3d',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    marginBottom: '4px',
+  });
+  tipMatPreviewCard.title = 'Haz clic para ver la imagen del material y elegir entre todos los submateriales de punta de CSP';
+  tipMatPreviewCard.addEventListener('click', () => {
+    openMaterialPickerModal({
+      category: 'tip',
+      currentId: getToolState().brush.tipTexture || 'default',
+      onSelect: (id) => {
+        const typedId = id as TipTextureId;
+        setBrushSettings({
+          tipTexture: typedId,
+          tipTextures:
+            typedId === 'default'
+              ? []
+              : typedId === 'pencil-01'
+                ? ['pencil-01', 'pencil-02', 'pencil-03']
+                : typedId === 'brush-pen-01'
+                  ? ['brush-pen-01', 'brush-pen-02']
+                  : [typedId],
+        });
+      },
+    });
+  });
+
+  const tipMatSeg = makeSegGroup<TipTextureId>(
+    [
+      { id: 'default', label: 'Lisa' },
+      { id: 'real-g', label: 'G Real' },
+      { id: 'gasagasa', label: 'Gasa' },
+      { id: 'pencil-01', label: 'Grafito' },
+      { id: 'brush-pen-01', label: 'Pincel' },
+      { id: 'brush02', label: 'Cerdas' },
+      { id: 'flat-square', label: 'Plana' },
+    ],
+    (id) =>
+      setBrushSettings({
+        tipTexture: id,
+        tipTextures:
+          id === 'default'
+            ? []
+            : id === 'pencil-01'
+              ? ['pencil-01', 'pencil-02', 'pencil-03']
+              : id === 'brush-pen-01'
+                ? ['brush-pen-01', 'brush-pen-02']
+                : [id],
+      }),
+  );
+
+  const tipCycleLabel = document.createElement('span');
+  tipCycleLabel.className = 'prop-label';
+  tipCycleLabel.style.marginTop = '4px';
+  tipCycleLabel.textContent = 'Secuencia de múltiples puntas';
+  const tipCycleSeg = makeSegGroup<TipCycleMode>(
+    [
+      { id: 'single', label: 'Única' },
+      { id: 'sequential', label: 'Ciclo' },
+      { id: 'reverse', label: 'Ida/Vuelta' },
+      { id: 'random', label: 'Azar' },
+    ],
+    (id) => setBrushSettings({ tipCycleMode: id }),
+  );
+
+  const followDir = makeCheckbox('follow-dir-check', 'Orientar con dirección del trazo');
+  const followDirRow = document.createElement('div');
+  followDirRow.className = 'csp-toggle-row';
+  followDirRow.style.marginTop = '4px';
+  followDirRow.append(followDir.box, followDir.label);
+  followDir.box.addEventListener('change', () => setBrushSettings({ followDirection: followDir.box.checked }));
+
+  const ribbonChk = makeCheckbox('ribbon-check', 'Cinta continua (Ribbon)');
+  const ribbonRow = document.createElement('div');
+  ribbonRow.className = 'csp-toggle-row';
+  ribbonRow.append(ribbonChk.box, ribbonChk.label);
+  ribbonChk.box.addEventListener('change', () =>
+    setBrushSettings({
+      ribbon: ribbonChk.box.checked,
+      ...(ribbonChk.box.checked ? { followDirection: true } : {}),
+    }),
+  );
+
+  tipBox.append(
+    tipLabel,
+    tipSeg.group,
+    tipMatLabel,
+    tipMatPreviewCard,
+    tipMatSeg.group,
+    tipCycleLabel,
+    tipCycleSeg.group,
+    followDirRow,
+    ribbonRow,
+  );
   propBody.appendChild(tipBox);
   inkPropertyBoxes.set('tipShape', tipBox);
 
@@ -740,21 +976,29 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(aaBox);
   inkPropertyBoxes.set('antiAliasing', aaBox);
 
-  // 10. Roundness & Angle Boxes
+  // 10. Roundness (Thickness) & Angle Boxes
   const roundBox = document.createElement('div');
   roundBox.className = 'prop-row-box';
-  const roundHeader = makePropHeader('Achatamiento de punta', '100%');
+  const roundHeader = makePropHeader('Espesor / Achatamiento (Thickness)', '100%');
   const roundSlider = makeSlider('10', '100', '1');
   roundSlider.addEventListener('input', () => {
     setBrushSettings({ tipRoundness: Number(roundSlider.value) / 100 });
   });
-  roundBox.append(roundHeader.header, roundSlider);
+  const thickDirSeg = makeSegGroup<ThicknessDirection>(
+    [
+      { id: 'horizontal', label: '↔ Horizontal' },
+      { id: 'vertical', label: '↕ Vertical' },
+    ],
+    (id) => setBrushSettings({ thicknessDirection: id }),
+  );
+  thickDirSeg.group.style.marginTop = '4px';
+  roundBox.append(roundHeader.header, roundSlider, thickDirSeg.group);
   propBody.appendChild(roundBox);
   inkPropertyBoxes.set('roundness', roundBox);
 
   const angleBox = document.createElement('div');
   angleBox.className = 'prop-row-box';
-  const angleHeader = makePropHeader('Ángulo de punta', '0°');
+  const angleHeader = makePropHeader('Ángulo de punta (Angle)', '0°');
   const angleSlider = makeSlider('0', '180', '1');
   angleSlider.addEventListener('input', () => {
     setBrushSettings({ tipAngle: Number(angleSlider.value) });
@@ -775,28 +1019,161 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(colorMixBox);
   inkPropertyBoxes.set('colorMix', colorMixBox);
 
-  // 12. Paper Texture Box
+  // 12. Paper Texture Box (CSP テクスチャ: 減算 / 乗算 / 高さ / 輪郭 + 反転 + 描画ごと)
   const paperBox = document.createElement('div');
   paperBox.className = 'prop-row-box';
   const paperLabel = document.createElement('span');
   paperLabel.className = 'prop-label';
-  paperLabel.textContent = 'Textura de papel (Grano)';
-  const paperSeg = makeSegGroup<PaperTextureId>(PAPER_TEXTURES, (id) => setBrushSettings({ paperTexture: id }));
-  paperBox.append(paperLabel, paperSeg.group);
+  paperLabel.textContent = 'Textura de papel (Grano CSP)';
+
+  const paperPreviewCard = document.createElement('div');
+  Object.assign(paperPreviewCard.style, {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: '4px 6px',
+    backgroundColor: '#1f1f1f',
+    border: '1px solid #3d3d3d',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    marginBottom: '4px',
+  });
+  paperPreviewCard.title = 'Haz clic para ver la imagen de la textura y abrir el selector de materiales de papel de CSP';
+  paperPreviewCard.addEventListener('click', () => {
+    openMaterialPickerModal({
+      category: 'paper',
+      currentId: getToolState().brush.paperTexture ?? 'none',
+      onSelect: (id) => {
+        const nextId = id as PaperTextureId;
+        const curDens = getToolState().brush.textureDensity ?? 0;
+        setBrushSettings({
+          paperTexture: nextId,
+          ...(nextId !== 'none' && curDens === 0 ? { textureDensity: 0.75 } : {}),
+        });
+      },
+    });
+  });
+
+  const paperSeg = makeSegGroup<PaperTextureId>(PAPER_TEXTURES, (id) =>
+    setBrushSettings({
+      paperTexture: id,
+      ...(id !== 'none' && (getToolState().brush.textureDensity ?? 0) === 0 ? { textureDensity: 0.75 } : {}),
+    }),
+  );
+
+  const texModeLabel = document.createElement('span');
+  texModeLabel.className = 'prop-label';
+  texModeLabel.style.marginTop = '4px';
+  texModeLabel.textContent = 'Modo de textura';
+  const texModeSeg = makeSegGroup<TextureMode>(
+    [
+      { id: 'subtract', label: 'Restar' },
+      { id: 'multiply', label: 'Multiplicar' },
+      { id: 'height', label: 'Altura' },
+      { id: 'outline', label: 'Contorno' },
+    ],
+    (id) => setBrushSettings({ textureMode: id }),
+  );
+
+  const texInvertChk = makeCheckbox('tex-invert-check', 'Invertir textura');
+  const texInvertRow = document.createElement('div');
+  texInvertRow.className = 'csp-toggle-row';
+  texInvertRow.style.marginTop = '4px';
+  texInvertRow.append(texInvertChk.box, texInvertChk.label);
+  texInvertChk.box.addEventListener('change', () => setBrushSettings({ textureInvert: texInvertChk.box.checked }));
+
+  const texPerTipChk = makeCheckbox('tex-pertip-check', 'Aplicar en cada punta (desact. = al final)');
+  const texPerTipRow = document.createElement('div');
+  texPerTipRow.className = 'csp-toggle-row';
+  texPerTipRow.append(texPerTipChk.box, texPerTipChk.label);
+  texPerTipChk.box.addEventListener('change', () => setBrushSettings({ textureApplyPerTip: texPerTipChk.box.checked }));
+
+  paperBox.append(
+    paperLabel,
+    paperPreviewCard,
+    paperSeg.group,
+    texModeLabel,
+    texModeSeg.group,
+    texInvertRow,
+    texPerTipRow,
+  );
   propBody.appendChild(paperBox);
   inkPropertyBoxes.set('paperTexture', paperBox);
 
-  // 13. Texture Density Box
+  // 13. Texture Density & Scale Box
   const densityBox = document.createElement('div');
   densityBox.className = 'prop-row-box';
-  const densityHeader = makePropHeader('Densidad de textura', '0%');
+  const densityHeader = makePropHeader('Densidad de textura (Texture density)', '0%');
   const densitySlider = makeSlider('0', '100', '1');
   densitySlider.addEventListener('input', () => {
     setBrushSettings({ textureDensity: Number(densitySlider.value) / 100 });
   });
-  densityBox.append(densityHeader.header, densitySlider);
+  const texScaleHeader = makePropHeader('Escala de textura (Scale ratio)', '35%');
+  texScaleHeader.header.style.marginTop = '4px';
+  const texScaleSlider = makeSlider('10', '200', '5');
+  texScaleSlider.addEventListener('input', () => {
+    setBrushSettings({ textureScale: Number(texScaleSlider.value) / 100 });
+  });
+  densityBox.append(densityHeader.header, densitySlider, texScaleHeader.header, texScaleSlider);
   propBody.appendChild(densityBox);
   inkPropertyBoxes.set('textureDensity', densityBox);
+
+  // 13a. Dual Brush Box (CSP 2-Shape / デュアルブラシ)
+  const dualBrushBox = document.createElement('div');
+  dualBrushBox.className = 'prop-row-box';
+  const dualEnableChk = makeCheckbox('dual-enable-check', 'Doble Pincel (2-Shape / Dual Brush)');
+  const dualEnableRow = document.createElement('div');
+  dualEnableRow.className = 'csp-toggle-row';
+  dualEnableRow.append(dualEnableChk.box, dualEnableChk.label);
+  dualEnableChk.box.addEventListener('change', () => setBrushSettings({ dualBrushEnabled: dualEnableChk.box.checked }));
+
+  const dualMatLabel = document.createElement('span');
+  dualMatLabel.className = 'prop-label';
+  dualMatLabel.style.marginTop = '4px';
+  dualMatLabel.textContent = 'Material 2ª punta';
+  const dualMatSeg = makeSegGroup<TipTextureId>(
+    [
+      { id: 'brush02', label: 'Cerdas' },
+      { id: 'gasagasa', label: 'Gasa' },
+      { id: 'pencil-01', label: 'Grafito' },
+      { id: 'flat-square', label: 'Plana' },
+      { id: 'default', label: 'Circular' },
+    ],
+    (id) => setBrushSettings({ dualTipTexture: id }),
+  );
+
+  const dualBlendLabel = document.createElement('span');
+  dualBlendLabel.className = 'prop-label';
+  dualBlendLabel.style.marginTop = '4px';
+  dualBlendLabel.textContent = 'Modo Doble Pincel';
+  const dualBlendSeg = makeSegGroup<DualBlendMode>(
+    [
+      { id: 'multiply', label: 'Multiplicar' },
+      { id: 'subtract', label: 'Restar' },
+      { id: 'darken', label: 'Oscurecer' },
+      { id: 'lighten', label: 'Aclarar' },
+    ],
+    (id) => setBrushSettings({ dualBlendMode: id }),
+  );
+
+  const dualScaleHeader = makePropHeader('Escala 2ª punta', '100%');
+  const dualScaleSlider = makeSlider('20', '250', '5');
+  dualScaleSlider.addEventListener('input', () => {
+    setBrushSettings({ dualSizeRatio: Number(dualScaleSlider.value) / 100 });
+  });
+
+  dualBrushBox.append(
+    dualEnableRow,
+    dualMatLabel,
+    dualMatSeg.group,
+    dualBlendLabel,
+    dualBlendSeg.group,
+    dualScaleHeader.header,
+    dualScaleSlider,
+  );
+  propBody.appendChild(dualBrushBox);
+  inkPropertyBoxes.set('dualBrush', dualBrushBox);
 
   // 13b. Tablet device settings (REA study 5.1/5.3): the pressure response and
   // the nib tilt belong to the tablet, not to a sub tool, so this box is always
@@ -1309,7 +1686,16 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       });
       item.appendChild(gearBtn);
 
-      item.title = sub.description;
+      item.title = `${sub.description}\n(Arrastra este pincel sobre los iconos de Pluma, Pincel, Efectos o Borrador para moverlo de categoría)`;
+      if (state.tool === 'pen' || state.tool === 'brush' || state.tool === 'effect' || state.tool === 'eraser') {
+        item.draggable = true;
+        item.addEventListener('dragstart', (e) => {
+          if (e.dataTransfer) {
+            e.dataTransfer.setData('text/plain', sub.id);
+            e.dataTransfer.effectAllowed = 'move';
+          }
+        });
+      }
       item.addEventListener('click', () => {
         selectSubTool(sub.id);
       });
@@ -1322,6 +1708,9 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       colorPickerComp.scroll.update();
     });
 
+    const isInkCat = state.tool === 'pen' || state.tool === 'brush' || state.tool === 'effect' || state.tool === 'eraser';
+    moveCatBtn.style.display = isInkCat ? 'inline-flex' : 'none';
+    moveCatBtn.disabled = !activeSub || subtools.length <= 1;
     resetBtn.disabled = !activeSub;
     deleteBtn.disabled = !activeSub || !activeSub.custom;
 
@@ -1404,23 +1793,80 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     for (const [id, btn] of tipSeg.buttons) {
       btn.classList.toggle('active', state.brush.tipShape === id);
     }
+    const curTipTex: TipTextureId = state.brush.tipTexture || 'default';
+    for (const [id, btn] of tipMatSeg.buttons) {
+      btn.classList.toggle('active', curTipTex === id);
+    }
+    const curTipCatalogItem = TIP_MATERIAL_CATALOG.find((c) => c.id === curTipTex);
+    tipMatPreviewCard.innerHTML = `
+      <div style="display:flex;align-items:center;gap:7px;min-width:0;">
+        <div style="width:26px;height:26px;flex-shrink:0;background:#e5e7eb;border:1px solid #555;border-radius:3px;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+          ${curTipCatalogItem?.dataUrl ? `<img src="${curTipCatalogItem.dataUrl}" style="max-width:100%;max-height:100%;object-fit:contain;filter:invert(0.85) contrast(1.4);"/>` : '<b style="color:#222;font-size:13px;">●</b>'}
+        </div>
+        <span style="font-size:11px;color:#e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${curTipCatalogItem?.name ?? curTipTex}</span>
+      </div>
+      <span style="font-size:10px;color:#60a5fa;flex-shrink:0;">Elegir ▾</span>
+    `;
+    const curCycleMode: TipCycleMode = state.brush.tipCycleMode ?? 'random';
+    for (const [id, btn] of tipCycleSeg.buttons) {
+      btn.classList.toggle('active', curCycleMode === id);
+    }
+    followDir.box.checked = !!state.brush.followDirection;
+    ribbonChk.box.checked = !!state.brush.ribbon;
     for (const [id, btn] of aaSeg.buttons) {
       btn.classList.toggle('active', state.brush.antiAliasing === id);
     }
     roundSlider.value = String(Math.round(state.brush.tipRoundness * 100));
     roundHeader.value.textContent = `${Math.round(state.brush.tipRoundness * 100)}%`;
+    const curThickDir: ThicknessDirection = state.brush.thicknessDirection ?? 'vertical';
+    for (const [id, btn] of thickDirSeg.buttons) {
+      btn.classList.toggle('active', curThickDir === id);
+    }
     angleSlider.value = String(Math.round(state.brush.tipAngle));
     angleHeader.value.textContent = `${Math.round(state.brush.tipAngle)}°`;
 
     colorMixSlider.value = String(Math.round((state.brush.colorMix ?? 0) * 100));
     colorMixHeader.value.textContent = `${Math.round((state.brush.colorMix ?? 0) * 100)}%`;
 
+    const curPaperTex: PaperTextureId = state.brush.paperTexture ?? 'none';
     for (const [id, btn] of paperSeg.buttons) {
-      btn.classList.toggle('active', (state.brush.paperTexture ?? 'none') === id);
+      btn.classList.toggle('active', curPaperTex === id);
     }
+    const curPaperCatalogItem = PAPER_MATERIAL_CATALOG.find((c) => c.id === curPaperTex);
+    paperPreviewCard.innerHTML = `
+      <div style="display:flex;align-items:center;gap:7px;min-width:0;">
+        <div style="width:28px;height:28px;flex-shrink:0;background:#e5e7eb;border:1px solid #555;border-radius:3px;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+          ${curPaperCatalogItem?.dataUrl ? `<img src="${curPaperCatalogItem.dataUrl}" style="width:100%;height:100%;object-fit:cover;"/>` : '<b style="color:#444;font-size:13px;">∅</b>'}
+        </div>
+        <span style="font-size:11px;color:#e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${curPaperCatalogItem?.name ?? curPaperTex}</span>
+      </div>
+      <span style="font-size:10px;color:#60a5fa;flex-shrink:0;">Textura ▾</span>
+    `;
+    const curTexMode: TextureMode = state.brush.textureMode ?? 'height';
+    for (const [id, btn] of texModeSeg.buttons) {
+      btn.classList.toggle('active', curTexMode === id);
+    }
+    texInvertChk.box.checked = !!state.brush.textureInvert;
+    texPerTipChk.box.checked = state.brush.textureApplyPerTip !== false;
 
     densitySlider.value = String(Math.round((state.brush.textureDensity ?? 0) * 100));
     densityHeader.value.textContent = `${Math.round((state.brush.textureDensity ?? 0) * 100)}%`;
+    const scalePct = Math.round((state.brush.textureScale ?? 0.35) * 100);
+    texScaleSlider.value = String(scalePct);
+    texScaleHeader.value.textContent = `${scalePct}%`;
+
+    dualEnableChk.box.checked = !!state.brush.dualBrushEnabled;
+    const curDualMat: TipTextureId = state.brush.dualTipTexture ?? 'brush02';
+    for (const [id, btn] of dualMatSeg.buttons) {
+      btn.classList.toggle('active', curDualMat === id);
+    }
+    const curDualBlend: DualBlendMode = state.brush.dualBlendMode ?? 'multiply';
+    for (const [id, btn] of dualBlendSeg.buttons) {
+      btn.classList.toggle('active', curDualBlend === id);
+    }
+    const dualRatioPct = Math.round((state.brush.dualSizeRatio ?? 1.0) * 100);
+    dualScaleSlider.value = String(dualRatioPct);
+    dualScaleHeader.value.textContent = `${dualRatioPct}%`;
 
     tabletBox.style.display = isInkTool ? 'block' : 'none';
     if (isInkTool) {

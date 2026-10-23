@@ -1,11 +1,18 @@
 # Private research notes
-#docs/
+docs/
 
 # Dependencies & build output
 node_modules/
 dist/
 
+# Tauri / Rust build targets & executables
+src-tauri/target/
+src-tauri/gen/
+*.exe
+*.msi
+
 # Editor / tooling
+.codegraph/
 .codegraph-wsl/
 .DS_Store
 *.local

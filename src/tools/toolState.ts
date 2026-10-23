@@ -7,9 +7,43 @@ export type TipShape = 'circle' | 'square' | 'calligraphic';
 export type AntiAliasingLevel = 'none' | 'weak' | 'medium' | 'strong';
 export type InkMode = 'uniform' | 'accumulate';
 
-export type TipTextureId = 'default' | 'flat-square' | 'gasagasa' | 'brush02' | 'star02' | 'star04';
-export type TipCycleMode = 'random' | 'sequential';
-export type PaperTextureId = 'none' | 'oil-paint' | 'pencil-paper';
+export type TipTextureId =
+  | 'default'
+  | 'real-g'
+  | 'gasagasa'
+  | 'flat-square'
+  | 'brush02'
+  | 'pencil-01'
+  | 'pencil-02'
+  | 'pencil-03'
+  | 'brush-pen-01'
+  | 'brush-pen-02'
+  | 'dry-ink'
+  | 'charcoal-01'
+  | 'star02'
+  | 'star04'
+  | 'lb1'
+  | 'lb2'
+  | 'lb3'
+  | 'lb4'
+  | 'rain-1'
+  | 'rain-2';
+export type TipCycleMode = 'single' | 'sequential' | 'reverse' | 'random';
+export type PaperTextureId =
+  | 'none'
+  | 'oil-paint'
+  | 'pencil-paper'
+  | 'birds-eye-maple'
+  | 'canvas'
+  | 'canvas-02'
+  | 'cotton'
+  | 'fine-textured'
+  | 'rough-textured'
+  | 'drawing-paper-c'
+  | 'dappled-cloud';
+export type TextureMode = 'subtract' | 'multiply' | 'height' | 'outline';
+export type DualBlendMode = 'multiply' | 'subtract' | 'darken' | 'lighten';
+export type ThicknessDirection = 'horizontal' | 'vertical';
 
 export type { PressureCurveMode, PressureCurveSettings } from '../brush/pressureResponse';
 import type { PressureCurveSettings } from '../brush/pressureResponse';
@@ -40,8 +74,10 @@ export interface BrushSettings {
   spacing: number;
   tipShape: TipShape;
   tipRoundness: number;
+  thicknessDirection?: ThicknessDirection;
   tipAngle: number;
   followDirection: boolean;
+  randomSizeRatio?: number;
   taperStart: number;
   taperEnd: number;
   stabilization: number;
@@ -52,9 +88,18 @@ export interface BrushSettings {
   tipTexture?: TipTextureId;
   tipTextures?: TipTextureId[];
   tipCycleMode?: TipCycleMode;
+  ribbon?: boolean;
   paperTexture?: PaperTextureId;
   textureDensity?: number;
   textureScale?: number;
+  textureMode?: TextureMode;
+  textureInvert?: boolean;
+  textureApplyPerTip?: boolean;
+  dualBrushEnabled?: boolean;
+  dualTipShape?: TipShape;
+  dualTipTexture?: TipTextureId;
+  dualSizeRatio?: number;
+  dualBlendMode?: DualBlendMode;
   colorMix?: number;
   colorMixAlpha?: number;
   smudge?: number;
@@ -94,6 +139,7 @@ export type BrushPropKey =
   | 'colorMix'
   | 'paperTexture'
   | 'textureDensity'
+  | 'dualBrush'
   | 'spray'
   | 'sprayRadius'
   | 'sprayDensity'
@@ -144,7 +190,7 @@ export interface ToolState {
 
 export const DEFAULT_BRUSH: BrushSettings = {
   size: 6,
-  minSizeRatio: 0.15,
+  minSizeRatio: 0.03,
   pressureSize: true,
   pressureCurve: 1.2,
   opacity: 1,
@@ -156,11 +202,13 @@ export const DEFAULT_BRUSH: BrushSettings = {
   spacing: 0.06,
   tipShape: 'circle',
   tipRoundness: 1,
+  thicknessDirection: 'vertical',
   tipAngle: 0,
   followDirection: false,
-  taperStart: 6,
-  taperEnd: 12,
-  stabilization: 5,
+  randomSizeRatio: 1.0,
+  taperStart: 0,
+  taperEnd: 0,
+  stabilization: 4,
   tolerance: 20,
   shapeType: 'rectangle',
   shapeFill: 'stroke',
@@ -168,9 +216,18 @@ export const DEFAULT_BRUSH: BrushSettings = {
   tipTexture: 'default',
   tipTextures: [],
   tipCycleMode: 'random',
+  ribbon: false,
   paperTexture: 'none',
   textureDensity: 0.0,
   textureScale: 1.0,
+  textureMode: 'height',
+  textureInvert: false,
+  textureApplyPerTip: true,
+  dualBrushEnabled: false,
+  dualTipShape: 'circle',
+  dualTipTexture: 'brush02',
+  dualSizeRatio: 1.0,
+  dualBlendMode: 'multiply',
   colorMix: 0.0,
   colorMixAlpha: 0.0,
   smudge: 0.0,
@@ -182,7 +239,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   closeGap: 0,
   areaScaling: 1,
   referMode: 'all',
-  velocitySize: true,
+  velocitySize: false,
   velocityMinRatio: 0.35,
   velocityCurve: 1.0,
   velocityFlow: false,
@@ -195,21 +252,25 @@ export const DEFAULT_VISIBLE_PROPS: BrushPropKey[] = [
   'stabilization',
   'pressureSize',
   'velocitySize',
+  'tipShape',
+  'roundness',
+  'angle',
   'colorMix',
   'paperTexture',
+  'textureDensity',
 ];
 
 export const DEFAULT_TABLET: TabletSettings = {
-  pressure: { mode: 'linear', gamma: 1 },
-  tiltEnabled: false,
-  tiltAmount: 0.8,
+  pressure: { mode: 'soft', gamma: 0.88 },
+  tiltEnabled: true,
+  tiltAmount: 0.85,
 };
 
 // ---------------------------------------------------------------------------
 // Tablet (device) persistence
 // ---------------------------------------------------------------------------
 
-const TABLET_KEY = 'oniri.tablet.v1';
+const TABLET_KEY = 'oniri.tablet.v2';
 
 const PRESSURE_MODES: PressureCurveSettings['mode'][] = ['linear', 'soft', 'hard', 'custom'];
 
@@ -230,7 +291,7 @@ function loadTabletSettings(): TabletSettings {
           pressure: validPressure
             ? { mode: pressure.mode, gamma: Math.min(2.5, Math.max(0.3, pressure.gamma)) }
             : { ...DEFAULT_TABLET.pressure },
-          tiltEnabled: parsed.tiltEnabled === true,
+          tiltEnabled: parsed.tiltEnabled !== undefined ? parsed.tiltEnabled === true : DEFAULT_TABLET.tiltEnabled,
           tiltAmount:
             typeof parsed.tiltAmount === 'number' && Number.isFinite(parsed.tiltAmount)
               ? Math.min(1, Math.max(0, parsed.tiltAmount))
@@ -256,7 +317,7 @@ function persistTabletSettings(settings: TabletSettings): void {
 // Sub Tool persistence (Clip Studio Paint "Sub Tool Detail" style)
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = 'oniri.subtools.v5';
+const STORAGE_KEY = 'oniri.subtools.v12';
 
 const TOOL_IDS: ToolId[] = ['pen', 'brush', 'effect', 'eraser', 'eyedropper', 'bucket', 'shape', 'bone', 'hand', 'select'];
 
@@ -292,7 +353,7 @@ function loadSubTools(): SubTool[] {
       const parsed = JSON.parse(raw) as Partial<SubToolStorage>;
       if (
         parsed &&
-        parsed.v === 4 &&
+        parsed.v === 10 &&
         Array.isArray(parsed.items) &&
         parsed.items.length > 0 &&
         parsed.items.every(isValidSubTool)
@@ -320,7 +381,7 @@ let subTools: SubTool[] = loadSubTools();
 
 function persistSubTools(): void {
   try {
-    const storage: SubToolStorage = { v: 4, items: subTools, deleted: [...deletedBaseIds] };
+    const storage: SubToolStorage = { v: 10, items: subTools, deleted: [...deletedBaseIds] };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(storage));
   } catch {
     // Storage full or unavailable: the in-memory session keeps working.
@@ -337,7 +398,7 @@ function factorySettingsFor(tool: ToolId): Partial<BrushSettings> {
 }
 
 function mergeBrush(sub: SubTool, color: string): BrushSettings {
-  const chosenColor = sub.settings.color && color === '#000000' ? sub.settings.color : (color || sub.settings.color || DEFAULT_BRUSH.color);
+  const chosenColor = color || sub.settings.color || DEFAULT_BRUSH.color;
   return { ...DEFAULT_BRUSH, ...sub.settings, color: chosenColor };
 }
 
@@ -346,7 +407,7 @@ function mergeBrush(sub: SubTool, color: string): BrushSettings {
 // ---------------------------------------------------------------------------
 
 const COLOR_SETS_KEY = 'oniri.colorsets.v1';
-const VISIBLE_PROPS_KEY = 'oniri.visibleprops.v1';
+const VISIBLE_PROPS_KEY = 'oniri.visibleprops.v2';
 
 function loadColorSets(): ColorSet[] {
   try {
@@ -377,7 +438,11 @@ function loadVisibleProps(): BrushPropKey[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed as BrushPropKey[];
+        // Ensure core props like 'paperTexture' and 'textureDensity' are present even with existing localStorage cache
+        const set = new Set<BrushPropKey>(parsed as BrushPropKey[]);
+        if (!set.has('paperTexture')) set.add('paperTexture');
+        if (!set.has('textureDensity')) set.add('textureDensity');
+        return Array.from(set);
       }
     }
   } catch {
@@ -433,6 +498,11 @@ export function activeTool(): ToolId {
   return state.tool;
 }
 
+function getCurrentSlotColor(s: ToolState = state): string {
+  if (s.isTransparentColor) return 'transparent';
+  return s.activeColorSlot === 'primary' ? s.primaryColor : s.secondaryColor;
+}
+
 export function setTool(tool: ToolId): void {
   if (state.tool === tool) return;
   const subtools = subTools.filter((s) => s.tool === tool);
@@ -446,12 +516,13 @@ export function setTool(tool: ToolId): void {
     else if (nextSubId === 'bone-pose-ik') nextBoneMode = 'pose_ik';
   }
 
+  const activeColor = getCurrentSlotColor(state);
   state = {
     ...state,
     tool,
     activeSubToolId: nextSubId,
     boneMode: nextBoneMode,
-    brush: firstSub ? mergeBrush(firstSub, state.brush.color) : state.brush,
+    brush: firstSub ? mergeBrush(firstSub, activeColor) : { ...state.brush, color: activeColor },
   };
   emit();
 }
@@ -464,12 +535,13 @@ export function selectSubTool(subToolId: string): void {
   else if (found.id === 'bone-pose-fk') nextBoneMode = 'pose_fk';
   else if (found.id === 'bone-pose-ik') nextBoneMode = 'pose_ik';
 
+  const activeColor = getCurrentSlotColor(state);
   state = {
     ...state,
     tool: found.tool,
     activeSubToolId: found.id,
     boneMode: nextBoneMode,
-    brush: mergeBrush(found, state.brush.color),
+    brush: mergeBrush(found, activeColor),
   };
   emit();
 }
@@ -575,7 +647,8 @@ export function setBrushSettings(patch: Partial<BrushSettings>): void {
     persistSubTools();
   }
 
-  if (patch.color && !state.isTransparentColor) {
+  if (patch.color && patch.color !== 'transparent') {
+    state.isTransparentColor = false;
     if (state.activeColorSlot === 'primary') {
       state.primaryColor = patch.color;
     } else {
@@ -710,19 +783,40 @@ export function resetSubTool(subToolId: string): void {
   emit();
 }
 
+export function moveSubToolToTool(subToolId: string, targetTool: ToolId): boolean {
+  const target = findSubTool(subToolId);
+  if (!target || target.tool === targetTool) return false;
+  if (!['pen', 'brush', 'effect', 'eraser'].includes(targetTool)) return false;
+
+  const siblings = subTools.filter((s) => s.tool === target.tool);
+  if (siblings.length <= 1) return false; // Never empty a tool category.
+
+  target.tool = targetTool;
+  persistSubTools();
+
+  if (state.activeSubToolId === subToolId) {
+    state = {
+      ...state,
+      tool: targetTool,
+    };
+  }
+  emit();
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Colors & Color Harmonies
 // ---------------------------------------------------------------------------
 
-export function setActiveColor(color: string): void {
+export function setActiveColor(color: string, recordHistory = true): void {
   if (state.activeColorSlot === 'primary') {
-    setPrimaryColor(color);
+    setPrimaryColor(color, recordHistory);
   } else {
-    setSecondaryColor(color);
+    setSecondaryColor(color, recordHistory);
   }
 }
 
-export function setPrimaryColor(color: string): void {
+export function setPrimaryColor(color: string, recordHistory = true): void {
   state = {
     ...state,
     primaryColor: color,
@@ -730,11 +824,13 @@ export function setPrimaryColor(color: string): void {
     activeColorSlot: 'primary',
     brush: { ...state.brush, color },
   };
-  addColorToHistory(color);
+  if (recordHistory) {
+    addColorToHistory(color);
+  }
   emit();
 }
 
-export function setSecondaryColor(color: string): void {
+export function setSecondaryColor(color: string, recordHistory = true): void {
   state = {
     ...state,
     secondaryColor: color,
@@ -742,6 +838,14 @@ export function setSecondaryColor(color: string): void {
     activeColorSlot: 'secondary',
     brush: { ...state.brush, color },
   };
+  if (recordHistory) {
+    addColorToHistory(color);
+  }
+  emit();
+}
+
+export function commitActiveColorToHistory(): void {
+  const color = state.activeColorSlot === 'primary' ? state.primaryColor : state.secondaryColor;
   addColorToHistory(color);
   emit();
 }

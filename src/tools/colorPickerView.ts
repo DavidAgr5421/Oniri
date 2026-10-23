@@ -2,6 +2,7 @@ import { createCustomScrollContainer, type CustomScrollContainer } from './custo
 import type { ColorTabId, ToolState } from './toolState';
 import {
   addColorToActiveSet,
+  commitActiveColorToHistory,
   computeColorHarmonies,
   getToolState,
   hexToRgb,
@@ -9,6 +10,7 @@ import {
   removeColorFromActiveSet,
   rgbToHex,
   rgbToHsv,
+  setActiveColor,
   setActiveColorSet,
   setColorTab,
   setPrimaryColor,
@@ -26,8 +28,37 @@ export function createColorPickerSection(): ColorPickerComponent {
   colorSection.className = 'dock-section color-section';
 
   const savedColorH = localStorage.getItem('oniri.color.height');
-  const currentColorH = savedColorH ? Math.max(120, Math.min(500, Number(savedColorH))) : 270;
+  const currentColorH = savedColorH ? Math.max(150, Math.min(500, Number(savedColorH))) : 295;
   colorSection.style.height = `${currentColorH}px`;
+
+  // Persistent HSV state so Hue and Saturation never collapse to 0 on black (#000000), white (#ffffff), or grays
+  let curH = 0;
+  let curS = 0;
+  let curV = 0;
+  let lastSyncedHex = '';
+  let isDraggingWheelHue = false;
+  let isDraggingWheelSV = false;
+  let isDraggingSlider = false;
+  let renderedTab: ColorTabId | null = null;
+
+  const syncHsvFromHex = (hex: string): void => {
+    const norm = hex.toLowerCase();
+    if (norm === lastSyncedHex && (isDraggingWheelHue || isDraggingWheelSV || isDraggingSlider)) {
+      return;
+    }
+    const { r, g, b } = hexToRgb(norm);
+    const { h, s, v } = rgbToHsv(r, g, b);
+    if (s > 0.004 && v > 0.004) {
+      curH = h;
+    }
+    if (v > 0.004) {
+      curS = s;
+    } else if (!isDraggingWheelHue && !isDraggingSlider && norm !== lastSyncedHex) {
+      curS = s;
+    }
+    curV = v;
+    lastSyncedHex = norm;
+  };
 
   const colorHeader = document.createElement('div');
   colorHeader.className = 'dock-section-header';
@@ -60,7 +91,10 @@ export function createColorPickerSection(): ColorPickerComponent {
     const btn = document.createElement('button');
     btn.className = 'csp-color-tab-btn';
     btn.textContent = t.label;
-    btn.addEventListener('click', () => setColorTab(t.id));
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      setColorTab(t.id);
+    });
     colorTabsBar.appendChild(btn);
     tabButtons.set(t.id, btn);
   }
@@ -82,12 +116,11 @@ export function createColorPickerSection(): ColorPickerComponent {
   colorInput.className = 'csp-color-input';
   colorInput.title = 'Selector nativo del sistema';
   colorInput.addEventListener('input', () => {
-    const st = getToolState();
-    if (st.activeColorSlot === 'primary') {
-      setPrimaryColor(colorInput.value);
-    } else {
-      setSecondaryColor(colorInput.value);
-    }
+    syncHsvFromHex(colorInput.value);
+    setActiveColor(colorInput.value, false);
+  });
+  colorInput.addEventListener('change', () => {
+    commitActiveColorToHistory();
   });
 
   const hexInput = document.createElement('input');
@@ -99,12 +132,8 @@ export function createColorPickerSection(): ColorPickerComponent {
     let val = hexInput.value.trim();
     if (!val.startsWith('#')) val = '#' + val;
     if (/^#[0-9a-fA-F]{6}$/.test(val)) {
-      const st = getToolState();
-      if (st.activeColorSlot === 'primary') {
-        setPrimaryColor(val);
-      } else {
-        setSecondaryColor(val);
-      }
+      syncHsvFromHex(val);
+      setActiveColor(val, true);
     }
   });
 
@@ -130,16 +159,13 @@ export function createColorPickerSection(): ColorPickerComponent {
 
   const wheelCanvas = document.createElement('canvas');
   wheelCanvas.className = 'csp-color-wheel-canvas';
-  const WHEEL_SIZE = 176;
+  const WHEEL_SIZE = 168;
   const wheelDpr = Math.min(2, window.devicePixelRatio || 1);
   wheelCanvas.width = Math.round(WHEEL_SIZE * wheelDpr);
   wheelCanvas.height = Math.round(WHEEL_SIZE * wheelDpr);
   wheelWrap.appendChild(wheelCanvas);
 
-  let isDraggingWheelHue = false;
-  let isDraggingWheelSV = false;
-
-  const drawColorWheel = (curHex: string): void => {
+  const drawColorWheel = (): void => {
     const ctx = wheelCanvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(wheelDpr, 0, 0, wheelDpr, 0, 0);
@@ -161,17 +187,14 @@ export function createColorPickerSection(): ColorPickerComponent {
       ctx.fill();
     }
 
-    const { r, g, b } = hexToRgb(curHex);
-    const { h, s, v } = rgbToHsv(r, g, b);
-
-    const sqHalf = (rInner - 8) / Math.SQRT2;
+    const sqHalf = (rInner - 7) / Math.SQRT2;
     const sqX0 = cx - sqHalf;
     const sqY0 = cy - sqHalf;
     const sqSide = sqHalf * 2;
 
     const gradH = ctx.createLinearGradient(sqX0, 0, sqX0 + sqSide, 0);
     gradH.addColorStop(0, '#ffffff');
-    gradH.addColorStop(1, `hsl(${Math.round(h)}, 100%, 50%)`);
+    gradH.addColorStop(1, `hsl(${Math.round(curH)}, 100%, 50%)`);
     ctx.fillStyle = gradH;
     ctx.fillRect(sqX0, sqY0, sqSide, sqSide);
 
@@ -181,11 +204,11 @@ export function createColorPickerSection(): ColorPickerComponent {
     ctx.fillStyle = gradV;
     ctx.fillRect(sqX0, sqY0, sqSide, sqSide);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
     ctx.lineWidth = 1;
     ctx.strokeRect(sqX0, sqY0, sqSide, sqSide);
 
-    const hRad = (h * Math.PI) / 180;
+    const hRad = (curH * Math.PI) / 180;
     const hMarkerR = (rOuter + rInner) / 2;
     const hmx = cx + Math.cos(hRad) * hMarkerR;
     const hmy = cy + Math.sin(hRad) * hMarkerR;
@@ -200,77 +223,96 @@ export function createColorPickerSection(): ColorPickerComponent {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    const smx = sqX0 + s * sqSide;
-    const smy = sqY0 + (1 - v) * sqSide;
+    const smx = sqX0 + curS * sqSide;
+    const smy = sqY0 + (1 - curV) * sqSide;
     ctx.beginPath();
     ctx.arc(smx, smy, 4, 0, Math.PI * 2);
-    ctx.strokeStyle = v > 0.5 ? '#111111' : '#ffffff';
+    ctx.strokeStyle = curV > 0.5 && curS < 0.5 ? '#111111' : '#ffffff';
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(smx, smy, 5, 0, Math.PI * 2);
-    ctx.strokeStyle = v > 0.5 ? '#ffffff' : '#111111';
+    ctx.strokeStyle = curV > 0.5 && curS < 0.5 ? '#ffffff' : '#111111';
     ctx.lineWidth = 1;
     ctx.stroke();
   };
 
-  const handleWheelPointer = (e: PointerEvent): void => {
+  const handleWheelPointer = (e: PointerEvent, isInitialDown = false): void => {
     const rect = wheelCanvas.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
+    const scaleX = rect.width > 0 ? WHEEL_SIZE / rect.width : 1;
+    const scaleY = rect.height > 0 ? WHEEL_SIZE / rect.height : 1;
+    const px = (e.clientX - rect.left) * scaleX;
+    const py = (e.clientY - rect.top) * scaleY;
     const cx = WHEEL_SIZE / 2;
     const cy = WHEEL_SIZE / 2;
     const dist = Math.hypot(px - cx, py - cy);
 
     const rOuter = WHEEL_SIZE / 2 - 4;
     const rInner = rOuter - 18;
-    const sqHalf = (rInner - 8) / Math.SQRT2;
+    const sqHalf = (rInner - 7) / Math.SQRT2;
     const sqX0 = cx - sqHalf;
     const sqY0 = cy - sqHalf;
     const sqSide = sqHalf * 2;
 
-    const st = getToolState();
-    const curHex = st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor;
-    const { r, g, b } = hexToRgb(curHex);
-    let { h, s, v } = rgbToHsv(r, g, b);
+    if (isInitialDown) {
+      if (dist >= rInner - 3 && dist <= rOuter + 10) {
+        isDraggingWheelHue = true;
+        isDraggingWheelSV = false;
+      } else if (dist < rInner - 3) {
+        isDraggingWheelSV = true;
+        isDraggingWheelHue = false;
+      } else {
+        return;
+      }
+    }
 
-    if (isDraggingWheelHue || (!isDraggingWheelSV && dist >= rInner - 4 && dist <= rOuter + 6)) {
-      isDraggingWheelHue = true;
+    if (isDraggingWheelHue) {
       const angle = (Math.atan2(py - cy, px - cx) * 180) / Math.PI;
-      h = (angle + 360) % 360;
-    } else if (
-      isDraggingWheelSV ||
-      (!isDraggingWheelHue && px >= sqX0 - 4 && px <= sqX0 + sqSide + 4 && py >= sqY0 - 4 && py <= sqY0 + sqSide + 4)
-    ) {
-      isDraggingWheelSV = true;
-      s = Math.max(0, Math.min(1, (px - sqX0) / sqSide));
-      v = Math.max(0, Math.min(1, 1 - (py - sqY0) / sqSide));
+      curH = (angle + 360) % 360;
+    } else if (isDraggingWheelSV) {
+      curS = Math.max(0, Math.min(1, (px - sqX0) / sqSide));
+      curV = Math.max(0, Math.min(1, 1 - (py - sqY0) / sqSide));
+    } else {
+      return;
     }
 
-    const nextHex = hsvToHex(h, s, v);
-    if (st.activeColorSlot === 'primary') {
-      setPrimaryColor(nextHex);
-    } else {
-      setSecondaryColor(nextHex);
-    }
+    const nextHex = hsvToHex(curH, curS, curV);
+    lastSyncedHex = nextHex.toLowerCase();
+    // Always redraw wheel immediately so Hue Ring rotation is visible even when curS=0 or curV=0
+    drawColorWheel();
+    setActiveColor(nextHex, false);
   };
 
   wheelCanvas.addEventListener('pointerdown', (e) => {
-    wheelCanvas.setPointerCapture(e.pointerId);
-    handleWheelPointer(e);
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      wheelCanvas.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    handleWheelPointer(e, true);
   });
   wheelCanvas.addEventListener('pointermove', (e) => {
     if (isDraggingWheelHue || isDraggingWheelSV) {
-      handleWheelPointer(e);
+      e.preventDefault();
+      e.stopPropagation();
+      handleWheelPointer(e, false);
     }
   });
   const stopWheelDrag = (e: PointerEvent) => {
+    const wasDragging = isDraggingWheelHue || isDraggingWheelSV;
     isDraggingWheelHue = false;
     isDraggingWheelSV = false;
     try {
-      wheelCanvas.releasePointerCapture(e.pointerId);
+      if (wheelCanvas.hasPointerCapture(e.pointerId)) {
+        wheelCanvas.releasePointerCapture(e.pointerId);
+      }
     } catch {
       // ignore
+    }
+    if (wasDragging) {
+      commitActiveColorToHistory();
     }
   };
   wheelCanvas.addEventListener('pointerup', stopWheelDrag);
@@ -307,7 +349,21 @@ export function createColorPickerSection(): ColorPickerComponent {
     numInput.min = String(min);
     numInput.max = String(max);
 
+    slider.addEventListener('pointerdown', () => {
+      isDraggingSlider = true;
+    });
+    const endSliderDrag = () => {
+      if (isDraggingSlider) {
+        isDraggingSlider = false;
+        commitActiveColorToHistory();
+      }
+    };
+    slider.addEventListener('pointerup', endSliderDrag);
+    slider.addEventListener('pointercancel', endSliderDrag);
+    slider.addEventListener('change', endSliderDrag);
+
     slider.addEventListener('input', () => {
+      isDraggingSlider = true;
       const v = Number(slider.value);
       numInput.value = String(v);
       onChange(v);
@@ -318,6 +374,7 @@ export function createColorPickerSection(): ColorPickerComponent {
       v = Math.max(min, Math.min(max, v));
       slider.value = String(v);
       onChange(v);
+      commitActiveColorToHistory();
     });
 
     row.append(tagEl, slider, numInput);
@@ -328,47 +385,44 @@ export function createColorPickerSection(): ColorPickerComponent {
     const st = getToolState();
     const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
     const hex = rgbToHex(rVal, cur.g, cur.b);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
+    lastSyncedHex = '';
+    syncHsvFromHex(hex);
+    setActiveColor(hex, false);
   });
   const greenRow = createChannelSliderRow('G', 0, 255, (gVal) => {
     const st = getToolState();
     const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
     const hex = rgbToHex(cur.r, gVal, cur.b);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
+    lastSyncedHex = '';
+    syncHsvFromHex(hex);
+    setActiveColor(hex, false);
   });
   const blueRow = createChannelSliderRow('B', 0, 255, (bVal) => {
     const st = getToolState();
     const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
     const hex = rgbToHex(cur.r, cur.g, bVal);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
+    lastSyncedHex = '';
+    syncHsvFromHex(hex);
+    setActiveColor(hex, false);
   });
 
   const hueRow = createChannelSliderRow('H', 0, 360, (hVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const { s, v } = rgbToHsv(cur.r, cur.g, cur.b);
-    const hex = hsvToHex(hVal, s, v);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
+    curH = hVal;
+    const hex = hsvToHex(curH, curS, curV);
+    lastSyncedHex = hex.toLowerCase();
+    setActiveColor(hex, false);
   });
   const satRow = createChannelSliderRow('S', 0, 100, (sVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const { h, v } = rgbToHsv(cur.r, cur.g, cur.b);
-    const hex = hsvToHex(h, sVal / 100, v);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
+    curS = sVal / 100;
+    const hex = hsvToHex(curH, curS, curV);
+    lastSyncedHex = hex.toLowerCase();
+    setActiveColor(hex, false);
   });
   const valRow = createChannelSliderRow('V', 0, 100, (vVal) => {
-    const st = getToolState();
-    const cur = hexToRgb(st.activeColorSlot === 'primary' ? st.primaryColor : st.secondaryColor);
-    const { h, s } = rgbToHsv(cur.r, cur.g, cur.b);
-    const hex = hsvToHex(h, s, vVal / 100);
-    if (st.activeColorSlot === 'primary') setPrimaryColor(hex);
-    else setSecondaryColor(hex);
+    curV = vVal / 100;
+    const hex = hsvToHex(curH, curS, curV);
+    lastSyncedHex = hex.toLowerCase();
+    setActiveColor(hex, false);
   });
 
   hueRow.slider.style.background =
@@ -429,8 +483,12 @@ export function createColorPickerSection(): ColorPickerComponent {
   const sync = (state: ToolState): void => {
     const currentActiveColor =
       state.activeColorSlot === 'primary' ? state.primaryColor : state.secondaryColor;
+    syncHsvFromHex(currentActiveColor);
+
     colorInput.value = currentActiveColor;
-    hexInput.value = currentActiveColor.toUpperCase();
+    if (document.activeElement !== hexInput) {
+      hexInput.value = currentActiveColor.toUpperCase();
+    }
     slotBadge.textContent = state.activeColorSlot === 'primary' ? 'Principal' : 'Secundario';
     if (state.isTransparentColor) {
       slotBadge.textContent = 'Transparente';
@@ -440,48 +498,58 @@ export function createColorPickerSection(): ColorPickerComponent {
       btn.classList.toggle('active', state.colorTab === id);
     }
 
-    tabPanelsContainer.innerHTML = '';
+    // Only swap child DOM nodes when the active tab actually changes so pointer capture and active sliders are never broken
+    if (renderedTab !== state.colorTab) {
+      renderedTab = state.colorTab;
+      tabPanelsContainer.replaceChildren();
+      if (state.colorTab === 'picker') {
+        tabPanelsContainer.appendChild(wheelWrap);
+      } else if (state.colorTab === 'rgb') {
+        tabPanelsContainer.appendChild(rgbSlidersPanel);
+      } else if (state.colorTab === 'set') {
+        tabPanelsContainer.appendChild(colorSetPanel);
+      } else if (state.colorTab === 'harmony') {
+        tabPanelsContainer.appendChild(harmonyPanel);
+      }
+    }
 
     if (state.colorTab === 'picker') {
-      tabPanelsContainer.appendChild(wheelWrap);
-      drawColorWheel(currentActiveColor);
+      drawColorWheel();
     } else if (state.colorTab === 'rgb') {
-      tabPanelsContainer.appendChild(rgbSlidersPanel);
       const { r, g, b } = hexToRgb(currentActiveColor);
-      const { h, s, v } = rgbToHsv(r, g, b);
 
       redRow.slider.value = String(r);
-      redRow.numInput.value = String(r);
+      if (document.activeElement !== redRow.numInput) redRow.numInput.value = String(r);
       redRow.slider.style.background = `linear-gradient(90deg, rgb(0,${g},${b}), rgb(255,${g},${b}))`;
 
       greenRow.slider.value = String(g);
-      greenRow.numInput.value = String(g);
+      if (document.activeElement !== greenRow.numInput) greenRow.numInput.value = String(g);
       greenRow.slider.style.background = `linear-gradient(90deg, rgb(${r},0,${b}), rgb(${r},255,${b}))`;
 
       blueRow.slider.value = String(b);
-      blueRow.numInput.value = String(b);
+      if (document.activeElement !== blueRow.numInput) blueRow.numInput.value = String(b);
       blueRow.slider.style.background = `linear-gradient(90deg, rgb(${r},${g},0), rgb(${r},${g},255))`;
 
-      hueRow.slider.value = String(Math.round(h));
-      hueRow.numInput.value = String(Math.round(h));
+      hueRow.slider.value = String(Math.round(curH));
+      if (document.activeElement !== hueRow.numInput) hueRow.numInput.value = String(Math.round(curH));
 
-      satRow.slider.value = String(Math.round(s * 100));
-      satRow.numInput.value = String(Math.round(s * 100));
-      satRow.slider.style.background = `linear-gradient(90deg, ${hsvToHex(h, 0, v)}, ${hsvToHex(h, 1, v)})`;
+      satRow.slider.value = String(Math.round(curS * 100));
+      if (document.activeElement !== satRow.numInput) satRow.numInput.value = String(Math.round(curS * 100));
+      satRow.slider.style.background = `linear-gradient(90deg, ${hsvToHex(curH, 0, Math.max(0.25, curV))}, ${hsvToHex(curH, 1, Math.max(0.5, curV))})`;
 
-      valRow.slider.value = String(Math.round(v * 100));
-      valRow.numInput.value = String(Math.round(v * 100));
-      valRow.slider.style.background = `linear-gradient(90deg, #000000, ${hsvToHex(h, s, 1)})`;
+      valRow.slider.value = String(Math.round(curV * 100));
+      if (document.activeElement !== valRow.numInput) valRow.numInput.value = String(Math.round(curV * 100));
+      valRow.slider.style.background = `linear-gradient(90deg, #000000, ${hsvToHex(curH, curS, 1)})`;
     } else if (state.colorTab === 'set') {
-      tabPanelsContainer.appendChild(colorSetPanel);
-
-      setSelect.innerHTML = '';
-      for (const cs of state.colorSets) {
-        const opt = document.createElement('option');
-        opt.value = cs.id;
-        opt.textContent = `${cs.name} (${cs.colors.length})`;
-        if (cs.id === state.activeColorSetId) opt.selected = true;
-        setSelect.appendChild(opt);
+      if (document.activeElement !== setSelect) {
+        setSelect.innerHTML = '';
+        for (const cs of state.colorSets) {
+          const opt = document.createElement('option');
+          opt.value = cs.id;
+          opt.textContent = `${cs.name} (${cs.colors.length})`;
+          if (cs.id === state.activeColorSetId) opt.selected = true;
+          setSelect.appendChild(opt);
+        }
       }
 
       const curSet =
@@ -494,10 +562,14 @@ export function createColorPickerSection(): ColorPickerComponent {
           chip.style.backgroundColor = c;
           chip.title = `${c.toUpperCase()} (Clic para elegir, Shift+clic para borrar)`;
           chip.classList.toggle('active', c.toLowerCase() === currentActiveColor.toLowerCase());
-          chip.addEventListener('click', (e) => {
+          chip.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             if (e.shiftKey) {
               removeColorFromActiveSet(idx);
             } else {
+              lastSyncedHex = '';
+              syncHsvFromHex(c);
               if (state.activeColorSlot === 'primary') setPrimaryColor(c);
               else setSecondaryColor(c);
             }
@@ -506,7 +578,6 @@ export function createColorPickerSection(): ColorPickerComponent {
         });
       }
     } else if (state.colorTab === 'harmony') {
-      tabPanelsContainer.appendChild(harmonyPanel);
       harmonyPanel.innerHTML = '';
 
       const harmonies = computeColorHarmonies(currentActiveColor);
@@ -528,7 +599,11 @@ export function createColorPickerSection(): ColorPickerComponent {
           sbtn.style.backgroundColor = item.hex;
           sbtn.title = `${item.tag}: ${item.hex.toUpperCase()}`;
           sbtn.innerHTML = `<span class="csp-harmony-swatch-tag">${item.tag}</span>`;
-          sbtn.addEventListener('click', () => {
+          sbtn.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            lastSyncedHex = '';
+            syncHsvFromHex(item.hex);
             if (state.activeColorSlot === 'primary') setPrimaryColor(item.hex);
             else setSecondaryColor(item.hex);
           });
@@ -548,7 +623,11 @@ export function createColorPickerSection(): ColorPickerComponent {
       chip.style.backgroundColor = c;
       chip.title = c.toUpperCase();
       chip.classList.toggle('active', c.toLowerCase() === currentActiveColor.toLowerCase());
-      chip.addEventListener('click', () => {
+      chip.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        lastSyncedHex = '';
+        syncHsvFromHex(c);
         if (state.activeColorSlot === 'primary') {
           setPrimaryColor(c);
         } else {
@@ -557,6 +636,10 @@ export function createColorPickerSection(): ColorPickerComponent {
       });
       historyGrid.appendChild(chip);
     }
+
+    requestAnimationFrame(() => {
+      colorScroll.update();
+    });
   };
 
   return {

@@ -14,6 +14,7 @@ import { mountFileMenu } from './storage/fileMenu';
 import { viewportNav } from './canvas/viewportNavigation';
 import { mountNavigatorPalette } from './canvas/navigatorView';
 import { cameraFrameOverlay } from './canvas/cameraFrameOverlay';
+import { brushDiagnostics } from './brush/brushDiagnostics';
 
 // --- Viewport & Three.js Setup ---
 const viewport = document.getElementById('viewport') ?? document.body;
@@ -74,6 +75,7 @@ if (timeline.tracks.length === 0) {
 }
 
 let canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
+canvasTexture.colorSpace = THREE.SRGBColorSpace;
 canvasTexture.minFilter = THREE.LinearFilter;
 canvasTexture.magFilter = THREE.LinearFilter;
 canvasTexture.generateMipmaps = false;
@@ -171,6 +173,7 @@ engine.onDocumentResize = (w: number, h: number) => {
   // so the GPU allocates fresh textures matching the new dimensions, preventing GL_INVALID_VALUE / glTexSubImage2D overflow.
   canvasTexture.dispose();
   canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
+  canvasTexture.colorSpace = THREE.SRGBColorSpace;
   canvasTexture.minFilter = THREE.LinearFilter;
   canvasTexture.magFilter = THREE.LinearFilter;
   canvasTexture.generateMipmaps = false;
@@ -273,3 +276,11 @@ function animate(): void {
 animate();
 
 console.log('Oniri Studio Paint: Command Bar, Lateral Toolbar, Layers Panel, Timeline and Brush Engine mounted.');
+void brushDiagnostics;
+console.log(
+  '%c🔍 [Oniri Diagnóstico Activo]%c El perfilador de rendimiento está midiendo trazos en tiempo real.\n • Dibuja cualquier trazo con Lápiz de Boceto para ver el informe en consola.\n • Ejecuta %cwindow.oniriDiagnostics.toggleHud()%c para activar el panel flotante en pantalla.',
+  'background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;',
+  'color: inherit;',
+  'color: #38bdf8; font-weight: bold;',
+  'color: inherit;'
+);

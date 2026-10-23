@@ -1,5 +1,9 @@
-import { brushDiameterAt, brushStampAlpha } from '../brush/brushEngine';
-import { samplePaperGrain } from '../brush/brushTextureAssets';
+import {
+  brushDiameterAt,
+  brushStampAlpha,
+  selectTipAtStamp,
+} from '../brush/brushEngine';
+import { getPaperGrainPattern } from '../brush/brushTextureAssets';
 import { getStampTexture } from '../brush/stampTexture';
 import type { PreviewBgMode } from './toolState';
 import { getToolState, hexToRgb, setPreviewBgMode } from './toolState';
@@ -76,7 +80,6 @@ export function createBrushPreview(): BrushPreviewComponent {
     const amp = PREVIEW_H / 2 - pad;
     const pathWidth = PREVIEW_W - pad * 2;
     const fit = Math.min(1, 30 / Math.max(1, b.size));
-    const spacing = Math.min(0.5, Math.max(0.03, b.spacing));
 
     const N = 120;
     const pathX: number[] = [];
@@ -111,12 +114,18 @@ export function createBrushPreview(): BrushPreviewComponent {
 
     let pos = 0;
     let guard = 0;
+    let stampIdx = 0;
+    const effSpacing = b.ribbon
+      ? Math.min(0.85, Math.max(0.18, b.spacing))
+      : Math.min(0.75, Math.max(0.03, b.spacing));
+
     while (pos <= totalLen && guard++ < 3000) {
       const t = pos / totalLen;
       const pt = sampleAt(pos);
       const pressure = 0.25 + 0.75 * Math.pow(Math.sin(Math.PI * t), 0.7);
-      const realDiameter = brushDiameterAt(b, pressure, pos / Math.max(fit, 0.001));
+      const realDiameter = brushDiameterAt(b, pressure, pos / Math.max(fit, 0.001), 0, false, stampIdx);
       const diameter = Math.max(0.4, realDiameter * fit);
+      const activeTip = selectTipAtStamp(b, stampIdx++) ?? b.tipTexture;
       const stamp = getStampTexture({
         diameter,
         hardness: b.hardness,
@@ -124,35 +133,31 @@ export function createBrushPreview(): BrushPreviewComponent {
         antiAliasing: b.antiAliasing,
         tipShape: b.tipShape,
         tipRoundness: b.tipRoundness,
-        tipTexture: b.tipTexture,
+        thicknessDirection: b.thicknessDirection,
+        tipTexture: activeTip,
+        dualBrushEnabled: !!b.dualBrushEnabled && !!b.dualTipTexture && b.dualTipTexture !== 'default',
+        dualTipShape: b.dualTipShape,
+        dualTipTexture: b.dualTipTexture,
+        dualSizeRatio: b.dualSizeRatio,
+        dualBlendMode: b.dualBlendMode,
       });
       let alpha = brushStampAlpha(b, pressure);
-      if (b.paperTexture && b.paperTexture !== 'none' && (b.textureDensity ?? 0) > 0) {
-        const density = Math.min(1, Math.max(0, b.textureDensity ?? 0.85));
-        const grain = samplePaperGrain(b.paperTexture, pt.x, pt.y, b.textureScale ?? 0.35);
-        const thresh = density * (0.85 - pressure * 0.45);
-        if (grain < thresh) {
-          const margin = 0.12;
-          if (grain < thresh - margin) {
-            alpha = 0;
-          } else {
-            const tr = (grain - (thresh - margin)) / margin;
-            alpha *= tr * tr * (1 - density * 0.9);
-          }
-        } else {
-          const tr = (grain - thresh) / Math.max(0.01, 1 - thresh);
-          alpha *= (0.45 + 0.55 * tr);
-        }
+      if (b.dualBrushEnabled) {
+        alpha *= b.dualBlendMode === 'subtract' ? 0.65 : 0.85;
       }
-
       if (alpha <= 0.005) {
-        pos += Math.max(0.3, diameter * spacing);
+        pos += Math.max(0.3, diameter * effSpacing);
         continue;
       }
 
-      const follows = b.followDirection && b.tipShape !== 'calligraphic';
+      const follows =
+        (b.ribbon || b.followDirection || (activeTip && activeTip !== 'default')) &&
+        b.tipShape !== 'calligraphic';
       const angleDeg = (follows ? (Math.atan2(pt.dy, pt.dx) * 180) / Math.PI : 0) + b.tipAngle;
-      const symmetric = b.tipShape !== 'square' && b.tipRoundness >= 0.999 && (!b.tipTexture || b.tipTexture === 'default');
+      const symmetric =
+        b.tipShape === 'circle' &&
+        b.tipRoundness >= 0.999 &&
+        (!activeTip || activeTip === 'default');
 
       if (b.spray) {
         ctx.save();
@@ -187,9 +192,25 @@ export function createBrushPreview(): BrushPreviewComponent {
           ctx.drawImage(stamp, pt.x - stamp.width / 2, pt.y - stamp.height / 2);
         }
       }
-      pos += Math.max(0.3, diameter * spacing);
+      pos += Math.max(0.3, diameter * effSpacing);
     }
     ctx.globalAlpha = 1;
+
+    // Apply true 2D spatial paper grain across the rendered preview stroke via GPU pattern
+    if (b.paperTexture && b.paperTexture !== 'none' && (b.textureDensity ?? 0) > 0) {
+      const density = Math.min(1, Math.max(0, b.textureDensity ?? 0.85));
+      const scale = b.textureScale ?? 0.35;
+      const texMode = b.textureMode ?? 'height';
+      const texInvert = !!b.textureInvert;
+      const pattern = getPaperGrainPattern(ctx, b.paperTexture, scale, density, texMode, texInvert);
+      if (pattern) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-in';
+        ctx.fillStyle = pattern;
+        ctx.fillRect(0, 0, PREVIEW_W, PREVIEW_H);
+        ctx.restore();
+      }
+    }
   };
 
   let previewQueued = false;

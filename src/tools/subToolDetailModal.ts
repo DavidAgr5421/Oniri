@@ -14,6 +14,8 @@ import {
   toggleVisibleProperty,
 } from './toolState';
 import { openPressureCalibrationModal } from './pressureCalibrationModal';
+import { openMaterialPickerModal } from './materialPickerModal';
+import { PAPER_MATERIAL_CATALOG, TIP_MATERIAL_CATALOG } from '../brush/brushTextureAssets';
 
 export const TIP_SHAPES: { id: TipShape; label: string }[] = [
   { id: 'circle', label: 'Círculo' },
@@ -257,6 +259,35 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       main3.append(chkVWrap, sliderV);
       row3.append(eye3, main3);
       contentCol.appendChild(row3);
+
+      // 4. Random Size Dynamics (CSP ランダムによるサイズ影響)
+      const row4 = document.createElement('div');
+      row4.className = 'csp-detail-prop-row';
+      const eye4 = makeEyeButton('size');
+      const main4 = document.createElement('div');
+      main4.className = 'csp-detail-prop-main';
+      const curRandPct = Math.round((b.randomSizeRatio ?? 1.0) * 100);
+      main4.innerHTML = `
+        <div class="prop-row-header">
+          <span class="prop-label">Tamaño mínimo aleatorio (Random)</span>
+          <span class="prop-value" id="dt-rsize-val">${curRandPct === 100 ? 'Desact. (100%)' : `${curRandPct}%`}</span>
+        </div>
+      `;
+      const sliderR = document.createElement('input');
+      sliderR.type = 'range';
+      sliderR.className = 'csp-slider';
+      sliderR.min = '10';
+      sliderR.max = '100';
+      sliderR.value = String(curRandPct);
+      sliderR.addEventListener('input', () => {
+        const valNum = Number(sliderR.value);
+        setBrushSettings({ randomSizeRatio: valNum / 100 });
+        const valNode = main4.querySelector('#dt-rsize-val');
+        if (valNode) valNode.textContent = valNum === 100 ? 'Desact. (100%)' : `${valNum}%`;
+      });
+      main4.appendChild(sliderR);
+      row4.append(eye4, main4);
+      contentCol.appendChild(row4);
     } else if (cat === 'ink') {
       const row1 = document.createElement('div');
       row1.className = 'csp-detail-prop-row';
@@ -476,6 +507,38 @@ export function openSubToolDetailModal(subTool: SubTool): void {
         matGroup.appendChild(btn);
       }
       mainMat.appendChild(matGroup);
+
+      // Visual CSP Material Picker Trigger Button
+      const curTipItem = TIP_MATERIAL_CATALOG.find((c) => c.id === (b.tipTexture || 'default'));
+      const pickTipBtn = document.createElement('button');
+      pickTipBtn.className = 'csp-seg-btn';
+      pickTipBtn.style.marginTop = '6px';
+      pickTipBtn.style.display = 'flex';
+      pickTipBtn.style.alignItems = 'center';
+      pickTipBtn.style.gap = '8px';
+      pickTipBtn.style.padding = '5px 10px';
+      pickTipBtn.innerHTML = `
+        <span style="width:24px;height:24px;background:#e5e7eb;border:1px solid #555;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;">
+          ${curTipItem?.dataUrl ? `<img src="${curTipItem.dataUrl}" style="max-width:100%;max-height:100%;filter:invert(0.85) contrast(1.4);"/>` : '<b style="color:#222">●</b>'}
+        </span>
+        <span>📂 Seleccionar material de punta (${curTipItem?.name ?? 'Círculo'})...</span>
+      `;
+      pickTipBtn.addEventListener('click', () => {
+        openMaterialPickerModal({
+          category: 'tip',
+          currentId: b.tipTexture || 'default',
+          onSelect: (id) => {
+            const typedId = id as TipTextureId;
+            setBrushSettings({
+              tipTexture: typedId,
+              tipTextures: typedId === 'default' ? [] : [typedId],
+            });
+            renderCategory('tip');
+          },
+        });
+      });
+      mainMat.appendChild(pickTipBtn);
+
       rowMaterials.append(eyeMat, mainMat);
       contentCol.appendChild(rowMaterials);
 
@@ -565,20 +628,49 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       const eye1 = makeEyeButton('paperTexture');
       const main1 = document.createElement('div');
       main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `<span class="prop-label">Grano de papel / Textura</span>`;
-      const pGroup = document.createElement('div');
-      pGroup.className = 'csp-seg-group';
-      for (const pt of PAPER_TEXTURES) {
-        const btn = document.createElement('button');
-        btn.className = `csp-seg-btn${(b.paperTexture ?? 'none') === pt.id ? ' active' : ''}`;
-        btn.textContent = pt.label;
-        btn.addEventListener('click', () => {
-          setBrushSettings({ paperTexture: pt.id });
-          renderCategory('texture');
+      main1.innerHTML = `<span class="prop-label">Textura (Material de papel CSP)</span>`;
+
+      const curPaperItem = PAPER_MATERIAL_CATALOG.find((c) => c.id === (b.paperTexture ?? 'none'));
+      const pickPaperCard = document.createElement('div');
+      Object.assign(pickPaperCard.style, {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '10px',
+        padding: '6px 10px',
+        backgroundColor: '#222222',
+        border: '1px solid #454545',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        marginTop: '4px',
+      });
+      pickPaperCard.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:38px;height:38px;background:#e5e7eb;border:1px solid #666;border-radius:3px;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+            ${curPaperItem?.dataUrl ? `<img src="${curPaperItem.dataUrl}" style="width:100%;height:100%;object-fit:cover;"/>` : '<span style="color:#444;font-weight:bold;">∅</span>'}
+          </div>
+          <div>
+            <div style="font-weight:600;color:#f3f4f6;font-size:12px;">${curPaperItem?.name ?? 'Ninguna'}</div>
+            <div style="font-size:10.5px;color:#9ca3af;">Haz clic para abrir el catálogo de materiales de CSP</div>
+          </div>
+        </div>
+        <button class="csp-seg-btn" style="padding:4px 8px;">Cambiar...</button>
+      `;
+      pickPaperCard.addEventListener('click', () => {
+        openMaterialPickerModal({
+          category: 'paper',
+          currentId: b.paperTexture ?? 'none',
+          onSelect: (id) => {
+            const nextId = id as PaperTextureId;
+            setBrushSettings({
+              paperTexture: nextId,
+              ...(nextId !== 'none' && (b.textureDensity ?? 0) === 0 ? { textureDensity: 0.75 } : {}),
+            });
+            renderCategory('texture');
+          },
         });
-        pGroup.appendChild(btn);
-      }
-      main1.appendChild(pGroup);
+      });
+      main1.appendChild(pickPaperCard);
       row1.append(eye1, main1);
       contentCol.appendChild(row1);
 
@@ -589,7 +681,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       main2.className = 'csp-detail-prop-main';
       main2.innerHTML = `
         <div class="prop-row-header">
-          <span class="prop-label">Densidad de textura</span>
+          <span class="prop-label">Densidad de textura (Texture density)</span>
           <span class="prop-value" id="dt-td-val">${Math.round((b.textureDensity ?? 0) * 100)}%</span>
         </div>
       `;
@@ -604,7 +696,29 @@ export function openSubToolDetailModal(subTool: SubTool): void {
         const val = main2.querySelector('#dt-td-val');
         if (val) val.textContent = `${slider2.value}%`;
       });
-      main2.appendChild(slider2);
+
+      const scaleHeader = document.createElement('div');
+      scaleHeader.className = 'prop-row-header';
+      scaleHeader.style.marginTop = '6px';
+      const curScalePct = Math.round((b.textureScale ?? 0.35) * 100);
+      scaleHeader.innerHTML = `
+        <span class="prop-label">Escala de textura (Scale ratio)</span>
+        <span class="prop-value" id="dt-ts-val">${curScalePct}%</span>
+      `;
+      const sliderScale = document.createElement('input');
+      sliderScale.type = 'range';
+      sliderScale.className = 'csp-slider';
+      sliderScale.min = '10';
+      sliderScale.max = '200';
+      sliderScale.step = '5';
+      sliderScale.value = String(curScalePct);
+      sliderScale.addEventListener('input', () => {
+        setBrushSettings({ textureScale: Number(sliderScale.value) / 100 });
+        const val = scaleHeader.querySelector('#dt-ts-val');
+        if (val) val.textContent = `${sliderScale.value}%`;
+      });
+
+      main2.append(slider2, scaleHeader, sliderScale);
       row2.append(eye2, main2);
       contentCol.appendChild(row2);
     } else if (cat === 'spray') {

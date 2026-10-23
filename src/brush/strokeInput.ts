@@ -17,6 +17,8 @@ import { transformManager } from '../selection/transformGizmo';
 import { isTransformModalLocked, warnTransformModalBlocked } from '../selection/transformModal';
 import { viewportNav } from '../canvas/viewportNavigation';
 import { brushSizeOverlay, eyedropperLoupeOverlay } from '../ui/canvasOverlays';
+import { createBrushCursorOverlay } from './brushCursorOverlay';
+import { brushDiagnostics } from './brushDiagnostics';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
@@ -49,7 +51,6 @@ interface SmoothPoint {
 }
 
 const MIN_SAMPLE_DISTANCE = 0.25;
-const CURVE_SUBDIVISIONS = 6;
 
 function coalescedSamples(event: PointerEvent): PointerEvent[] {
   const fn = (event as PointerEvent & { getCoalescedEvents?: () => PointerEvent[] }).getCoalescedEvents;
@@ -181,29 +182,100 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   let rawLastX = 0;
   let rawLastY = 0;
 
-  // Stroke shaping state (quadratic Bezier smoothing + ending tail)
+  // Stroke shaping state (quadratic Bezier smoothing)
   let smoothHist: SmoothPoint[] = [];
+  let totalStrokeDist = 0;
+  let peakStrokePressure = 0;
   let velX = 0;
   let velY = 0;
   let lastSamplePressure = 1;
+  let lastHeadingAngle = 0;
+  let lastKnownClientX = 0;
+  let lastKnownClientY = 0;
+
+  const cursorOverlay = createBrushCursorOverlay(canvas.parentElement || document.body);
+
+  const getDocToScreenScale = (): number => {
+    const viewHeight = (camera.top - camera.bottom) / camera.zoom;
+    const rectH = canvas.getBoundingClientRect().height || window.innerHeight || 1;
+    const unitsPerPixel = viewHeight / rectH;
+    const docAspect = currentDocW / Math.max(1, currentDocH);
+    const planeH = docAspect >= 1 ? 16.0 / docAspect : 12.0;
+    return (planeH / Math.max(1, currentDocH)) / unitsPerPixel;
+  };
+
+  const updateBrushCursor = (event: PointerLike): void => {
+    const tool = activeTool();
+    const isBrushTool = (tool === 'pen' || tool === 'brush' || tool === 'eraser' || tool === 'effect') && !activePan && !activeRotate && !isSamplingEyedropper && !isSpacePressed;
+    if (!isBrushTool || event.clientX === undefined || event.clientY === undefined) {
+      cursorOverlay.setVisible(false);
+      return;
+    }
+    const b = getToolState().brush;
+    const docToScreenScale = getDocToScreenScale();
+    const screenDiameter = b.size * docToScreenScale;
+    const rotDeg = viewportNav.getState().rotationDeg || 0;
+
+    const isCustomTip = !!(b.tipTexture && b.tipTexture !== 'default');
+    const followsStroke = (b.followDirection || isCustomTip) && b.tipShape !== 'calligraphic';
+    let dynamicAngleDeg = b.tipAngle - rotDeg;
+    if ((activeStroke === 'brush' || activeStroke === 'eraser') && followsStroke && (velX !== 0 || velY !== 0)) {
+      dynamicAngleDeg = (Math.atan2(velY, velX) * 180) / Math.PI + b.tipAngle - rotDeg;
+    } else if (
+      event.pointerType === 'pen' &&
+      getTabletSettings().tiltEnabled &&
+      b.tipRoundness < 0.95 &&
+      !b.followDirection &&
+      b.tipShape !== 'calligraphic'
+    ) {
+      const tf = tiltFootprint(event.tiltX ?? 0, event.tiltY ?? 0, getTabletSettings().tiltAmount);
+      if (tf) {
+        dynamicAngleDeg = (tf.azimuthRad * 180) / Math.PI + b.tipAngle - rotDeg;
+      }
+    }
+
+    cursorOverlay.update(
+      event.clientX,
+      event.clientY,
+      screenDiameter,
+      b.tipShape,
+      b.tipRoundness,
+      dynamicAngleDeg,
+      true,
+      b.tipTexture,
+    );
+  };
 
   function updateCursor(): void {
+    const tool = activeTool();
+    const isBrushTool = (tool === 'pen' || tool === 'brush' || tool === 'eraser' || tool === 'effect') && !activePan && !activeRotate && !isSamplingEyedropper && !isSpacePressed;
     if (activePan) {
       canvas.style.cursor = 'grabbing';
-    } else if (activeRotate || isRPressed || activeTool() === 'rotate') {
+      cursorOverlay.setVisible(false);
+    } else if (activeRotate || isRPressed || tool === 'rotate') {
       canvas.style.cursor = 'ew-resize';
+      cursorOverlay.setVisible(false);
     } else if (isResizingBrush || isCtrlAltPressed) {
-      canvas.style.cursor = 'crosshair';
-    } else if (isSamplingEyedropper || isAltPressed || activeTool() === 'eyedropper') {
+      canvas.style.cursor = 'none';
+      cursorOverlay.setVisible(true);
+    } else if (isSamplingEyedropper || isAltPressed || tool === 'eyedropper') {
       canvas.style.cursor = 'cell';
-    } else if (isSpacePressed || activeTool() === 'hand') {
+      cursorOverlay.setVisible(false);
+    } else if (isSpacePressed || tool === 'hand') {
       canvas.style.cursor = 'grab';
-    } else if (activeTool() === 'move') {
+      cursorOverlay.setVisible(false);
+    } else if (tool === 'move') {
       canvas.style.cursor = 'move';
-    } else if (activeTool() === 'bone') {
+      cursorOverlay.setVisible(false);
+    } else if (tool === 'bone') {
       canvas.style.cursor = 'pointer';
+      cursorOverlay.setVisible(false);
+    } else if (isBrushTool) {
+      canvas.style.cursor = 'none';
+      cursorOverlay.setVisible(true);
     } else {
       canvas.style.cursor = 'crosshair';
+      cursorOverlay.setVisible(false);
     }
   }
 
@@ -246,6 +318,10 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     engine.setStrokeTilt(tiltFootprint(event.tiltX ?? 0, event.tiltY ?? 0, tablet.tiltAmount));
   };
 
+  const enqueuePoint = (x: number, y: number, p: number): void => {
+    emitTo(x, y, p);
+  };
+
   /**
    * Keeps the last 3 smoothed points and emits a quadratic Bezier piece from
    * the midpoint of (p0,p1) to the midpoint of (p1,p2), with p1 as control.
@@ -268,13 +344,17 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const m2y = (p1.y + pt.y) / 2;
     const m2p = (p1.p + pt.p) / 2;
 
-    for (let i = 1; i <= CURVE_SUBDIVISIONS; i++) {
-      const t = i / CURVE_SUBDIVISIONS;
+    const segDist = Math.hypot(m2x - m1x, m2y - m1y);
+    // Adaptive Bezier subdivision (CSP SamplingBySpeed): avoids generating 6 sub-samples for 0.5px movements
+    const subdivisions = segDist > 24 ? 5 : segDist > 8 ? 3 : 2;
+
+    for (let i = 1; i <= subdivisions; i++) {
+      const t = i / subdivisions;
       const mt = 1 - t;
       const qx = mt * mt * m1x + 2 * mt * t * p1.x + t * t * m2x;
       const qy = mt * mt * m1y + 2 * mt * t * p1.y + t * t * m2y;
       const qp = m1p + (m2p - m1p) * t;
-      emitTo(qx, qy, qp);
+      enqueuePoint(qx, qy, qp);
     }
 
     smoothHist.push(pt);
@@ -284,15 +364,20 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   const handleStrokePoint = (doc: { x: number; y: number }, pressure: number): void => {
     const dxr = doc.x - rawLastX;
     const dyr = doc.y - rawLastY;
+    const stepDist = Math.hypot(dxr, dyr);
+    lastSamplePressure = pressure;
+    if (pressure > peakStrokePressure) peakStrokePressure = pressure;
+
     // Ignore sub-pixel jitter: otherwise a resting mouse keeps stacking
     // stamps in the same spot (the "repeated seal" artifact).
-    if (Math.hypot(dxr, dyr) < MIN_SAMPLE_DISTANCE) return;
+    const minDist = lastPointerType === 'pen' ? 0.08 : MIN_SAMPLE_DISTANCE;
+    if (stepDist < minDist) return;
 
+    totalStrokeDist += stepDist;
     velX = velX * 0.55 + dxr * 0.45;
     velY = velY * 0.55 + dyr * 0.45;
     rawLastX = doc.x;
     rawLastY = doc.y;
-    lastSamplePressure = pressure;
 
     const speed = Math.hypot(velX, velY);
     engine.setStrokeSpeed(speed);
@@ -302,8 +387,12 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       smoothedX = doc.x;
       smoothedY = doc.y;
     } else {
-      // Exponential moving average filter for smooth stroke interpolation
-      const alpha = 1 / (1 + stab * 0.35);
+      // CSP Velocity-Adaptive Stabilization (SmoothStroke / SamplingBySpeed in iswCoreTG.dll):
+      // Slow precision work gets strong stabilization, while fast sweeping curves catch up
+      // smoothly without rubber-band lag.
+      const baseAlpha = 1 / (1 + stab * 0.42);
+      const speedNorm = Math.min(1.0, Math.max(0, (speed - 2.0) / 36.0));
+      const alpha = baseAlpha + (Math.min(0.82, baseAlpha * 2.4) - baseAlpha) * (speedNorm * speedNorm);
       smoothedX += (doc.x - smoothedX) * alpha;
       smoothedY += (doc.y - smoothedY) * alpha;
     }
@@ -311,7 +400,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     pushSmoothed(smoothedX, smoothedY, pressure);
   };
 
-  const finish = (pointerId?: number): void => {
+  const finish = (pointerId?: number, endEvent?: PointerEvent): void => {
     if (activeStroke === 'bucket-enclose') {
       activeStroke = null;
       marchingAnts.overlayCtx.clearRect(0, 0, docW, docH);
@@ -440,29 +529,59 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
     const wasBone = activeStroke === 'bone';
     if (activeStroke === 'brush' || activeStroke === 'eraser') {
-      // Stabilizer catch-up: smoothly pull the smoothed curve toward the raw release
-      // point so the stroke doesn't stop short of the cursor, tapering pressure
-      // naturally for stylus pen lifts ("抜き" - Nuki, sharp ending).
+      const isMouse = lastPointerType !== 'pen';
+      if (!isMouse && endEvent) {
+        const releaseDoc = pointerToDoc(endEvent);
+        if (releaseDoc) {
+          const rdx = releaseDoc.x - rawLastX;
+          const rdy = releaseDoc.y - rawLastY;
+          const rdist = Math.hypot(rdx, rdy);
+          if (rdist > 0.05 && rdist < 120) {
+            velX = velX * 0.5 + rdx * 0.5;
+            velY = velY * 0.5 + rdy * 0.5;
+            rawLastX = releaseDoc.x;
+            rawLastY = releaseDoc.y;
+            totalStrokeDist += rdist;
+          }
+        }
+      }
+
+      const cp = isMouse ? 1.0 : lastSamplePressure;
+      const catchUpDist = Math.hypot(rawLastX - smoothedX, rawLastY - smoothedY);
       const stab = getToolState().brush.stabilization;
-      if (stab > 0) {
-        const steps = 3;
+      if (stab > 0 && catchUpDist > 0.2) {
+        const steps = Math.max(3, Math.min(8, Math.ceil(catchUpDist / 2)));
         const startX = smoothedX;
         const startY = smoothedY;
-        const startP = lastSamplePressure;
         for (let i = 1; i <= steps; i++) {
           const t = i / steps;
           const cx = startX + (rawLastX - startX) * t;
           const cy = startY + (rawLastY - startY) * t;
-          const cp = lastPointerType === 'pen' ? startP * Math.pow(1 - t, 1.5) : startP;
           pushSmoothed(cx, cy, cp);
         }
         smoothedX = rawLastX;
         smoothedY = rawLastY;
-      } else {
+      } else if (catchUpDist > 0.05) {
         smoothedX = rawLastX;
         smoothedY = rawLastY;
-        const cp = lastPointerType === 'pen' ? 0 : lastSamplePressure;
         pushSmoothed(smoothedX, smoothedY, cp);
+      }
+
+      // Flush the final half-segment from the last midpoint in smoothHist to (rawLastX, rawLastY)
+      const lastEmitted = smoothHist[smoothHist.length - 1];
+      if (lastEmitted) {
+        const tailDist = Math.hypot(rawLastX - lastEmitted.x, rawLastY - lastEmitted.y);
+        if (tailDist > 0.1) {
+          const subSteps = Math.max(2, Math.min(6, Math.ceil(tailDist / 1.5)));
+          for (let i = 1; i <= subSteps; i++) {
+            const t = i / subSteps;
+            emitTo(
+              lastEmitted.x + (rawLastX - lastEmitted.x) * t,
+              lastEmitted.y + (rawLastY - lastEmitted.y) * t,
+              cp,
+            );
+          }
+        }
       }
     }
 
@@ -483,6 +602,15 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const onPointerDown = (event: PointerEvent): void => {
+    // Prevent browser/Windows Ink from opening the virtual touch keyboard or handwriting panel,
+    // and blur any focused UI widget so single-key tool shortcuts always work after drawing.
+    event.preventDefault();
+    lastKnownClientX = event.clientX;
+    lastKnownClientY = event.clientY;
+    if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
+
     // 0a. Dynamic Brush Sizing (Ctrl+Alt+Drag)
     if ((event.ctrlKey || event.metaKey) && event.altKey) {
       isResizingBrush = true;
@@ -496,9 +624,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
         // ignore
       }
 
-      const viewHeight = (camera.top - camera.bottom) / camera.zoom;
-      const unitsPerPixel = viewHeight / window.innerHeight;
-      const docToScreenScale = (9.0 / docH) / unitsPerPixel;
+      const docToScreenScale = getDocToScreenScale();
       const screenRadius = (resizeStartSize / 2) * docToScreenScale;
       brushSizeOverlay.show(resizeStartX, resizeStartY, screenRadius, resizeStartSize);
       updateCursor();
@@ -623,6 +749,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       rawLastX = doc.x;
       rawLastY = doc.y;
       lastSamplePressure = erasePressure;
+      peakStrokePressure = erasePressure;
+      totalStrokeDist = 0;
       velX = 0;
       velY = 0;
       smoothHist = [{ x: doc.x, y: doc.y, p: erasePressure }];
@@ -910,6 +1038,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     rawLastX = doc.x;
     rawLastY = doc.y;
     lastSamplePressure = pressure;
+    peakStrokePressure = pressure;
+    totalStrokeDist = 0;
     velX = 0;
     velY = 0;
     smoothHist = [{ x: doc.x, y: doc.y, p: pressure }];
@@ -918,13 +1048,15 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     activeStroke = isErase ? 'eraser' : 'brush';
     applyTiltFrom(event);
     if (isErase) {
-      engine.beginErase(doc.x, doc.y, pressure);
+      engine.beginErase(doc.x, doc.y, pressure, lastPointerType !== 'pen');
     } else {
-      engine.beginStroke(doc.x, doc.y, pressure);
+      engine.beginStroke(doc.x, doc.y, pressure, lastPointerType !== 'pen');
     }
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    lastKnownClientX = event.clientX;
+    lastKnownClientY = event.clientY;
     if (isMovingLayer) {
       const doc = pointerToDoc(event);
       if (doc) {
@@ -947,11 +1079,22 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       const newSize = Math.max(0.5, Math.min(500, Math.round((resizeStartSize + dx * step) * 2) / 2));
       setBrushSettings({ size: newSize });
 
-      const viewHeight = (camera.top - camera.bottom) / camera.zoom;
-      const unitsPerPixel = viewHeight / window.innerHeight;
-      const docToScreenScale = (9.0 / docH) / unitsPerPixel;
+      const docToScreenScale = getDocToScreenScale();
       const screenRadius = (newSize / 2) * docToScreenScale;
       brushSizeOverlay.show(resizeStartX, resizeStartY, screenRadius, newSize);
+      const b = getToolState().brush;
+      const rotDeg = viewportNav.getState().rotationDeg || 0;
+      cursorOverlay.update(
+        event.clientX,
+        event.clientY,
+        screenRadius * 2,
+        b.tipShape,
+        b.tipRoundness,
+        b.tipAngle - rotDeg,
+        true,
+        b.tipTexture,
+      );
+      cursorOverlay.showBadge(`Ø ${newSize.toFixed(1)} px`);
       return;
     }
 
@@ -1000,6 +1143,18 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       viewportNav.panByScreenDelta(dx, dy);
       return;
     }
+
+    // If Space is held down while stylus pen is already in contact/moving, engage pan seamlessly:
+    if (isSpacePressed && !activeStroke && (event.buttons > 0 || event.pressure > 0)) {
+      activePan = true;
+      lastPanX = event.clientX;
+      lastPanY = event.clientY;
+      activePointerId = event.pointerId;
+      updateCursor();
+      return;
+    }
+
+    updateBrushCursor(event);
 
     if (!activeStroke) return;
 
@@ -1124,46 +1279,99 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
     // High-frequency samples (coalesced) are fed one by one so no input
     // resolution is lost between two pointermove events.
-    for (const sample of coalescedSamples(event)) {
+    const tMove0 = performance.now();
+    const samples = coalescedSamples(event);
+    for (const sample of samples) {
       applyTiltFrom(sample);
       const doc = pointerToDoc(sample);
       if (!doc) continue;
       handleStrokePoint(doc, pressureOf(sample));
     }
 
-    // Zero-latency prediction (W3C getPredictedEvents + velocity projection):
-    // Renders the predicted next 1-2 points right under the physical pen nib
-    // on a live overlay without altering the permanent stroke buffer.
+    // Zero-latency curved prediction (W3C getPredictedEvents + tangent-aligned Bézier):
+    // Curves seamlessly toward the physical nib without straight chords or square corners.
     if (activeStroke === 'brush' || activeStroke === 'eraser') {
       const pred = predictedSamples(event);
       const predictedPoints: { x: number; y: number; pressure: number }[] = [];
+
+      let targetX = rawLastX;
+      let targetY = rawLastY;
+      let targetP = lastSamplePressure;
+
+      const speed = Math.hypot(velX, velY);
+      const heading = Math.atan2(velY, velX);
+      const angularDiff = Math.abs(Math.atan2(Math.sin(heading - lastHeadingAngle), Math.cos(heading - lastHeadingAngle)));
+      lastHeadingAngle = heading;
+
       if (pred.length > 0) {
         for (const p of pred) {
           const pdoc = pointerToDoc(p);
           if (pdoc) {
-            predictedPoints.push({ x: pdoc.x, y: pdoc.y, pressure: pressureOf(p) });
+            targetX = pdoc.x;
+            targetY = pdoc.y;
+            targetP = pressureOf(p);
+            break;
           }
         }
-      } else if (Math.hypot(velX, velY) > 1.5) {
-        // Micro-prediction along velocity vector (1 step) for mouse and standard styluses
-        predictedPoints.push({
-          x: rawLastX + velX * 0.5,
-          y: rawLastY + velY * 0.5,
-          pressure: lastSamplePressure,
-        });
+      } else if (speed > 1.5 && angularDiff < 0.40) {
+        // Forward extrapolation only when moving stably (damping on corners to prevent spikes)
+        const forwardStep = Math.min(16, speed * 0.35);
+        targetX = rawLastX + (velX / speed) * forwardStep;
+        targetY = rawLastY + (velY / speed) * forwardStep;
       }
+
+      const startPredX = smoothedX;
+      const startPredY = smoothedY;
+      const startPredP = lastSamplePressure;
+
+      // Generate a smooth quadratic Bézier curve connecting startPredX/Y to targetX/Y
+      const dx = targetX - startPredX;
+      const dy = targetY - startPredY;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > 1.5) {
+        let tanX = velX;
+        let tanY = velY;
+        const tanLen = Math.hypot(tanX, tanY);
+        if (tanLen > 0.01) {
+          tanX /= tanLen;
+          tanY /= tanLen;
+        } else {
+          tanX = dx / dist;
+          tanY = dy / dist;
+        }
+
+        // Control point extending along tangent to guarantee C1 tangent continuity from the smoothed stroke
+        const lead = Math.min(dist * 0.5, 30);
+        const ctrlX = startPredX + tanX * lead;
+        const ctrlY = startPredY + tanY * lead;
+
+        // Subdivide quadratic Bézier into smooth arc points (max 3 points to eliminate latency without overhead)
+        const steps = dist > 30 ? 3 : 2;
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          const mt = 1 - t;
+          const bx = mt * mt * startPredX + 2 * mt * t * ctrlX + t * t * targetX;
+          const by = mt * mt * startPredY + 2 * mt * t * ctrlY + t * t * targetY;
+          const bp = startPredP + (targetP - startPredP) * t;
+          predictedPoints.push({ x: bx, y: by, pressure: bp });
+        }
+      }
+
       if (predictedPoints.length > 0) {
         engine.renderPredictedStroke(predictedPoints);
       } else {
         engine.clearPredictedStroke();
       }
     }
+    brushDiagnostics.recordPointerMove(samples.length, performance.now() - tMove0);
   };
 
   const onPointerEnd = (event: PointerEvent): void => {
     if (isResizingBrush) {
       isResizingBrush = false;
       brushSizeOverlay.hide();
+      cursorOverlay.hideBadge();
       if (canvas.hasPointerCapture(event.pointerId)) {
         try {
           canvas.releasePointerCapture(event.pointerId);
@@ -1220,7 +1428,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     if (!activeStroke) return;
-    finish(event.pointerId);
+    finish(event.pointerId, event);
   };
 
   // Wheel Zoom (Focal Zoom at cursor)
@@ -1233,14 +1441,36 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
   // Keyboard Shortcuts (Ctrl+Z, Ctrl+Y, Space, B, E, I, G, U, H, J, Ctrl+0)
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+    const target = event.target as HTMLElement | null;
+    const isTextInput =
+      ((target instanceof HTMLInputElement &&
+        target.type !== 'range' &&
+        target.type !== 'checkbox' &&
+        target.type !== 'button' &&
+        target.type !== 'color') ||
+        target instanceof HTMLTextAreaElement) &&
+      target.id !== 'oniri-clipboard-helper' &&
+      target.id !== 'modal-paste-catcher';
+    if (isTextInput || target?.isContentEditable) {
       return;
     }
 
-    if (event.code === 'Space' && !event.repeat) {
+    if (event.code === 'Space' || event.key === ' ') {
       event.preventDefault();
-      isSpacePressed = true;
-      updateCursor();
+      if (!isSpacePressed) {
+        isSpacePressed = true;
+        // If stylus nib just touched the glass right as Space was pressed (< 8px),
+        // cancel the accidental dot and transition immediately into Space-pan:
+        if ((activeStroke === 'brush' || activeStroke === 'eraser') && totalStrokeDist < 8) {
+          engine.cancelStroke();
+          activeStroke = null;
+          smoothHist = [];
+          activePan = true;
+          lastPanX = lastKnownClientX;
+          lastPanY = lastKnownClientY;
+        }
+        updateCursor();
+      }
       return;
     }
 
@@ -1406,14 +1636,42 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
   };
 
+  const onWindowBlur = (): void => {
+    isSpacePressed = false;
+    isRPressed = false;
+    isAltPressed = false;
+    isCtrlAltPressed = false;
+    activePan = false;
+    activeRotate = false;
+    updateCursor();
+  };
+
+  const onContextMenu = (e: Event): void => {
+    e.preventDefault();
+  };
+
+  const onPointerLeave = (): void => {
+    cursorOverlay.setVisible(false);
+  };
+
+  const onPointerEnter = (e: PointerEvent): void => {
+    updateCursor();
+    updateBrushCursor(e);
+  };
+
+  canvas.setAttribute('inputmode', 'none');
+  canvas.addEventListener('contextmenu', onContextMenu);
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerEnd);
   canvas.addEventListener('pointercancel', onPointerEnd);
+  canvas.addEventListener('pointerleave', onPointerLeave);
+  canvas.addEventListener('pointerenter', onPointerEnter);
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('blur', onWindowBlur);
 
   return {
     setDocDimensions: (w: number, h: number) => {
@@ -1422,15 +1680,20 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     },
     dispose: () => {
       unsubscribe();
+      cursorOverlay.destroy();
       if (activeStroke) finish(activePointerId ?? undefined);
+      canvas.removeEventListener('contextmenu', onContextMenu);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerEnd);
       canvas.removeEventListener('pointercancel', onPointerEnd);
+      canvas.removeEventListener('pointerleave', onPointerLeave);
+      canvas.removeEventListener('pointerenter', onPointerEnter);
       canvas.removeEventListener('dblclick', onDblClick);
       canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onWindowBlur);
     },
   };
 }

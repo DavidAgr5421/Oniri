@@ -279,10 +279,9 @@ export class TransformManager {
     const activeLayer = this.engine.layerManager.layers.find((l) => l.id === this.targetLayerId);
     if (activeLayer && activeLayer.context && this.snapshotBeforeTransform) {
       // Register the pre-transform pixels in the undo history before rasterizing
-      this.engine.pushUndoRecord(this.targetLayerId, this.snapshotBeforeTransform);
-
       const docW = this.engine.docW;
       const docH = this.engine.docH;
+      this.engine.pushUndoRecord(this.targetLayerId, { x: 0, y: 0, w: docW, h: docH }, this.snapshotBeforeTransform);
       const cx = this.currentX + this.currentWidth / 2;
       const cy = this.currentY + this.currentHeight / 2;
       const sx = (this.flipH ? -1 : 1) * (this.currentWidth / Math.max(1, this.origWidth));

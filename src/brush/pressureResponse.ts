@@ -14,11 +14,11 @@ export interface PressureCurveSettings {
   gamma: number;
 }
 
-/** Preset exponents from the study: soft 0.6-0.8, hard 1.3-1.6. */
+/** Preset exponents from the study: soft 0.85-0.90, hard 1.3-1.5. */
 const PRESET_GAMMA: Record<PressureCurveMode, number> = {
   linear: 1,
-  soft: 0.7,
-  hard: 1.4,
+  soft: 0.88,
+  hard: 1.35,
   custom: 1,
 };
 
@@ -48,7 +48,14 @@ export function evaluatePressure(rawPressure: number, settings: PressureCurveSet
   if (rawPressure >= 0.999) return 1;
 
   const clamped = Math.max(0, Math.min(1, rawPressure));
-  return Math.pow(clamped, gammaFor(settings));
+  // Smooth low-pressure toe so hardware nib release thresholds (0.01..0.20)
+  // taper cleanly to zero at the end of a stroke without a blunt step:
+  let adjusted = clamped;
+  if (clamped < 0.22) {
+    const t = clamped / 0.22;
+    adjusted = clamped * (0.35 + 0.65 * t);
+  }
+  return Math.pow(adjusted, gammaFor(settings));
 }
 
 /**
@@ -70,7 +77,7 @@ export interface TiltFootprint {
   squash: number;
 }
 
-const MIN_TILT_DEG = 4;
+const MIN_TILT_DEG = 45;
 const SQUASH_STEP = 0.05;
 const MIN_SQUASH = 0.55;
 

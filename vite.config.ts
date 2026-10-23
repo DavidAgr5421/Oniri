@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: '.',
@@ -7,7 +7,10 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 1420,
+    port: 5173,
     strictPort: true,
+    watch: {
+      ignored: ['**/src-tauri/**', '**/dist/**', '**/.git/**'],
+    },
   },
-})
+});

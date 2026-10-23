@@ -256,8 +256,7 @@ body {
   box-shadow: 3px 0 12px rgba(0, 0, 0, 0.45);
   display: none;
   flex-direction: column;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
+  overflow: hidden !important;
   pointer-events: auto;
   z-index: 15;
 }
@@ -290,17 +289,20 @@ body {
 }
 
 .dock-section.prop-section {
-  flex: 1 0 auto;
-  min-height: 120px;
+  flex: 1 1 0;
+  min-height: 90px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .dock-section.color-section {
   flex-shrink: 0;
-  min-height: 140px;
+  min-height: 150px;
+  max-height: 55vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .dock-section-header {
@@ -1464,10 +1466,12 @@ body {
 
 .csp-color-wheel-canvas {
   display: block;
-  width: 176px;
-  height: 176px;
+  width: 168px;
+  height: 168px;
   cursor: crosshair;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .csp-rgb-sliders-wrap {

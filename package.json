@@ -6,7 +6,11 @@
   "main": "src-tauri/src/main.rs",
   "scripts": {
     "dev": "vite",
-    "build": "tauri build",
+    "build": "vite build",
+    "build:exe": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && tauri build\"",
+    "build:tauri": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && tauri build\"",
+    "preview": "vite preview",
+    "app": "cmd /c start msedge --app=http://localhost:5173/",
     "tauri": "tauri"
   },
   "keywords": [

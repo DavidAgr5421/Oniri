@@ -100,7 +100,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
 
   // 1. Initial Paper Layer (Bottom white background)
   const paperCanvas = makeCanvas(docW, docH);
-  const paperCtx = paperCanvas.getContext('2d', { willReadFrequently: true })!;
+  const paperCtx = paperCanvas.getContext('2d')!;
   paperCtx.fillStyle = '#ffffff';
   paperCtx.fillRect(0, 0, docW, docH);
 
