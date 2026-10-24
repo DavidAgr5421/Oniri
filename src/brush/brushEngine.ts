@@ -1290,61 +1290,71 @@ export function createBrushEngine(): BrushEngine {
 
     // 2. Render Onion Skinning if enabled (Papel Cebolla con mesa de luz integrada)
     if (timelineManager && timelineManager.onionSkin.enabled && timelineManager.tracks.length > 0) {
+      const cx = curDocW / 2;
+      const cy = curDocH / 2;
+
+      function applyOnionTransforms(ctx: CanvasRenderingContext2D, item: any): void {
+        if (
+          item.transform &&
+          (item.transform.x !== 0 ||
+            item.transform.y !== 0 ||
+            item.transform.scaleX !== 1 ||
+            item.transform.scaleY !== 1 ||
+            item.transform.rotation !== 0)
+        ) {
+          ctx.translate(cx + item.transform.x, cy + item.transform.y);
+          ctx.rotate((item.transform.rotation * Math.PI) / 180);
+          ctx.scale(item.transform.scaleX, item.transform.scaleY);
+          ctx.translate(-cx, -cy);
+        }
+
+        if (item.onionTransform) {
+          const ot = item.onionTransform;
+          const rot = (ot.rotation * Math.PI) / 180;
+          const sx = ot.scaleX * (ot.flipX ? -1 : 1);
+          const sy = ot.scaleY * (ot.flipY ? -1 : 1);
+
+          ctx.translate(cx + ot.x, cy + ot.y);
+          if (rot !== 0) ctx.rotate(rot);
+          if (sx !== 1 || sy !== 1) ctx.scale(sx, sy);
+          ctx.translate(-cx, -cy);
+        }
+      }
+
       for (const track of timelineManager.tracks) {
         if (!track.visible) continue;
         const onionCels = timelineManager.getOnionSkinCels(track.id, timelineManager.settings.currentFrame);
         for (const item of onionCels) {
           if (!item.layer.canvas) continue;
-          onionContext.clearRect(0, 0, curDocW, curDocH);
-          onionContext.save();
+          const effectiveAlpha = item.opacity * (item.transform?.opacity ?? 1);
+          const isTint = timelineManager.onionSkin.mode === 'tint' && !!item.tintColor;
 
-          const cx = curDocW / 2;
-          const cy = curDocH / 2;
+          if (!isTint) {
+            // Direct draw fast-path: avoids intermediate onionCanvas entirely!
+            compositeContext.save();
+            compositeContext.globalAlpha = effectiveAlpha;
+            applyOnionTransforms(compositeContext, item);
+            compositeContext.drawImage(item.layer.canvas, 0, 0);
+            compositeContext.restore();
+          } else {
+            // Tint path: isolated through auxiliary onion canvas
+            onionContext.clearRect(0, 0, curDocW, curDocH);
+            onionContext.save();
+            applyOnionTransforms(onionContext, item);
+            onionContext.drawImage(item.layer.canvas, 0, 0);
+            onionContext.restore();
 
-          // Track animated keyframe transform
-          if (
-            item.transform &&
-            (item.transform.x !== 0 ||
-              item.transform.y !== 0 ||
-              item.transform.scaleX !== 1 ||
-              item.transform.scaleY !== 1 ||
-              item.transform.rotation !== 0)
-          ) {
-            onionContext.translate(cx + item.transform.x, cy + item.transform.y);
-            onionContext.rotate((item.transform.rotation * Math.PI) / 180);
-            onionContext.scale(item.transform.scaleX, item.transform.scaleY);
-            onionContext.translate(-cx, -cy);
-          }
-
-          // Onion skin manual calibration transform (Light Table alignment: offset, rotate, scale, flip)
-          if (item.onionTransform) {
-            const ot = item.onionTransform;
-            const rot = (ot.rotation * Math.PI) / 180;
-            const sx = ot.scaleX * (ot.flipX ? -1 : 1);
-            const sy = ot.scaleY * (ot.flipY ? -1 : 1);
-
-            onionContext.translate(cx + ot.x, cy + ot.y);
-            if (rot !== 0) onionContext.rotate(rot);
-            if (sx !== 1 || sy !== 1) onionContext.scale(sx, sy);
-            onionContext.translate(-cx, -cy);
-          }
-
-          onionContext.drawImage(item.layer.canvas, 0, 0);
-          onionContext.restore();
-
-          // Apply tint color if monochrome tint mode is active
-          if (timelineManager.onionSkin.mode === 'tint' && item.tintColor) {
             onionContext.save();
             onionContext.globalCompositeOperation = 'source-in';
-            onionContext.fillStyle = item.tintColor;
+            onionContext.fillStyle = item.tintColor!;
             onionContext.fillRect(0, 0, curDocW, curDocH);
             onionContext.restore();
-          }
 
-          compositeContext.save();
-          compositeContext.globalAlpha = item.opacity * (item.transform?.opacity ?? 1);
-          compositeContext.drawImage(onionCanvas, 0, 0);
-          compositeContext.restore();
+            compositeContext.save();
+            compositeContext.globalAlpha = effectiveAlpha;
+            compositeContext.drawImage(onionCanvas, 0, 0);
+            compositeContext.restore();
+          }
         }
       }
     }
