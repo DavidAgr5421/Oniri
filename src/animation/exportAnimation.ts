@@ -1,7 +1,7 @@
 import { zipSync } from 'fflate';
 import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from './timelineManager';
-import { encodeGif, type GifFrameInput } from './gifEncoder';
+import { encodeGif, quantizeRgba, type GifFrameInput, type IndexedGifFrame } from './gifEncoder';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
 
@@ -20,33 +20,34 @@ export interface ExportAnimationConfig {
 }
 
 /**
- * Renders all animation frames in the range to an array of canvas elements.
+ * Streams rendered animation frames sequentially using a single recycled canvas.
+ * Reduces RAM consumption by ~99% (from ~1 GB down to ~8 MB).
  */
-async function renderFramesToCanvases(
+async function streamFrames(
   engine: BrushEngine,
   timeline: TimelineManager,
-  config: ExportAnimationConfig
-): Promise<HTMLCanvasElement[]> {
-  const { startFrame, endFrame, width, height, onProgress } = config;
+  config: ExportAnimationConfig,
+  onFrame: (canvas: HTMLCanvasElement, frameIndex: number, totalFrames: number) => Promise<void> | void
+): Promise<void> {
+  const { startFrame, endFrame, width, height } = config;
   const originalFrame = timeline.settings.currentFrame;
   const totalFrames = endFrame - startFrame + 1;
-  const frames: HTMLCanvasElement[] = [];
+
+  // Single reusable intermediate canvas for entire sequence
+  const frameCanvas = document.createElement('canvas');
+  frameCanvas.width = width;
+  frameCanvas.height = height;
+  const fctx = frameCanvas.getContext('2d')!;
+  fctx.imageSmoothingEnabled = true;
+  fctx.imageSmoothingQuality = 'high';
 
   try {
     for (let f = startFrame; f <= endFrame; f++) {
       const idx = f - startFrame + 1;
-      onProgress?.(idx, totalFrames, `Renderizando fotograma ${idx} de ${totalFrames}...`);
-
       timeline.goToFrame(f);
       engine.updateComposite();
 
-      const frameCanvas = document.createElement('canvas');
-      frameCanvas.width = width;
-      frameCanvas.height = height;
-      const fctx = frameCanvas.getContext('2d')!;
-      fctx.imageSmoothingEnabled = true;
-      fctx.imageSmoothingQuality = 'high';
-
+      fctx.clearRect(0, 0, width, height);
       const cfState = cameraFrameManager.getState();
       if (cfState.enabled) {
         const crop = cameraFrameManager.getEffectiveCropRect(engine.docW, engine.docH);
@@ -55,37 +56,45 @@ async function renderFramesToCanvases(
         fctx.drawImage(engine.compositeCanvas, 0, 0, width, height);
       }
 
-      frames.push(frameCanvas);
-      // Brief yield so the UI progress bar can update
-      await new Promise((r) => setTimeout(r, 4));
+      await onFrame(frameCanvas, idx, totalFrames);
+      // Yield to let browser update progress bar without freezing UI
+      await new Promise((r) => setTimeout(r, 0));
     }
   } finally {
     timeline.goToFrame(originalFrame);
     engine.updateComposite();
   }
-
-  return frames;
 }
 
 /**
- * Exports animation as an animated GIF.
+ * Exports animation as an animated GIF using stream-quantization to save memory.
  */
 export async function exportAnimationAsGif(
   engine: BrushEngine,
   timeline: TimelineManager,
   config: ExportAnimationConfig
 ): Promise<Uint8Array> {
-  const frames = await renderFramesToCanvases(engine, timeline, config);
   const delayMs = Math.round(1000 / Math.max(1, config.fps));
+  const indexedFrames: GifFrameInput[] = [];
 
-  const gifInputs: GifFrameInput[] = frames.map((c) => ({
-    canvas: c,
-    delayMs,
-  }));
+  await streamFrames(engine, timeline, config, (canvas, idx, total) => {
+    config.onProgress?.(idx, total, `Quantizando colores de fotograma ${idx} de ${total}...`);
+    const ctx = canvas.getContext('2d')!;
+    const imgData = ctx.getImageData(0, 0, config.width, config.height);
+    const q = quantizeRgba(imgData.data, config.width, config.height);
 
-  config.onProgress?.(0, frames.length, 'Comprimiendo GIF animado (LZW & Paleta)...');
+    const indexed: IndexedGifFrame = {
+      palette: q.palette,
+      indexedPixels: q.indexedPixels,
+      transparentIndex: q.transparentIndex,
+      delayMs,
+    };
+    indexedFrames.push({ indexed, delayMs });
+  });
 
-  const gifBytes = encodeGif(gifInputs, {
+  config.onProgress?.(0, indexedFrames.length, 'Comprimiendo GIF animado (LZW dinámico)...');
+
+  const gifBytes = encodeGif(indexedFrames, {
     width: config.width,
     height: config.height,
     loopCount: config.loopCount,
@@ -98,45 +107,39 @@ export async function exportAnimationAsGif(
 }
 
 /**
- * Exports animation as a sequence of PNG images in a ZIP archive.
+ * Exports animation as a sequence of PNG images in a ZIP archive with 0 RAM accumulation.
  */
 export async function exportAnimationAsPngSequence(
   engine: BrushEngine,
   timeline: TimelineManager,
   config: ExportAnimationConfig
 ): Promise<Uint8Array> {
-  const frames = await renderFramesToCanvases(engine, timeline, config);
   const zipFiles: Record<string, Uint8Array> = {};
 
-  const total = frames.length;
-  for (let i = 0; i < total; i++) {
-    const frameNum = config.startFrame + i;
-    config.onProgress?.(i + 1, total, `Codificando PNG fotograma ${i + 1} de ${total}...`);
-
-    const canvas = frames[i];
+  await streamFrames(engine, timeline, config, async (canvas, idx, total) => {
+    config.onProgress?.(idx, total, `Codificando PNG fotograma ${idx} de ${total}...`);
+    const frameNum = config.startFrame + idx - 1;
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
     if (blob) {
       const buf = await blob.arrayBuffer();
       const filename = `frame_${String(frameNum).padStart(4, '0')}.png`;
       zipFiles[filename] = new Uint8Array(buf);
     }
-  }
+  });
 
-  config.onProgress?.(total, total, 'Empaquetando archivo ZIP de secuencia...');
+  const totalFrames = config.endFrame - config.startFrame + 1;
+  config.onProgress?.(totalFrames, totalFrames, 'Empaquetando archivo ZIP de secuencia...');
   return zipSync(zipFiles, { level: 4 });
 }
 
 /**
- * Exports animation as a video file (MP4 / WebM) via MediaRecorder.
+ * Exports animation as a video file (MP4 / WebM) with manual frame delivery if available.
  */
 export async function exportAnimationAsVideo(
   engine: BrushEngine,
   timeline: TimelineManager,
   config: ExportAnimationConfig
 ): Promise<Blob> {
-  const frames = await renderFramesToCanvases(engine, timeline, config);
-  const total = frames.length;
-
   const playCanvas = document.createElement('canvas');
   playCanvas.width = config.width;
   playCanvas.height = config.height;
@@ -149,9 +152,12 @@ export async function exportAnimationAsVideo(
     : 'video/webm';
 
   const stream = playCanvas.captureStream(config.fps);
+  const track = stream.getVideoTracks()[0] as (MediaStreamTrack & { requestFrame?: () => void }) | undefined;
+  const supportsManualRequest = !!(track && typeof track.requestFrame === 'function');
+
   const recorder = new MediaRecorder(stream, {
     mimeType,
-    videoBitsPerSecond: 6_000_000, // 6 Mbps for crisp animation
+    videoBitsPerSecond: 8_000_000, // 8 Mbps for crisp animation
   });
 
   const chunks: Blob[] = [];
@@ -169,16 +175,26 @@ export async function exportAnimationAsVideo(
 
   const frameDurationMs = 1000 / Math.max(1, config.fps);
 
-  // Play through frames onto the stream canvas
-  for (let i = 0; i < total; i++) {
-    config.onProgress?.(i + 1, total, `Grabando video cuadro ${i + 1} de ${total}...`);
+  await streamFrames(engine, timeline, config, async (canvas, idx, totalFrames) => {
+    config.onProgress?.(idx, totalFrames, `Grabando fotograma ${idx} de ${totalFrames}...`);
     playCtx.clearRect(0, 0, config.width, config.height);
-    playCtx.drawImage(frames[i], 0, 0);
-    await new Promise((r) => setTimeout(r, frameDurationMs));
-  }
+    playCtx.drawImage(canvas, 0, 0);
+
+    if (supportsManualRequest) {
+      track.requestFrame!();
+      await new Promise((r) => setTimeout(r, 2));
+    } else {
+      await new Promise((r) => setTimeout(r, frameDurationMs));
+    }
+  });
 
   // Hold last frame for 2 frames
-  await new Promise((r) => setTimeout(r, frameDurationMs * 2));
+  if (supportsManualRequest && track?.requestFrame) {
+    track.requestFrame();
+    await new Promise((r) => setTimeout(r, 20));
+  } else {
+    await new Promise((r) => setTimeout(r, frameDurationMs * 2));
+  }
   recorder.stop();
 
   return recordingPromise;

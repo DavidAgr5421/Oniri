@@ -3,8 +3,61 @@
  * Zero external dependencies, fast in-memory LZW compression and color quantization.
  */
 
+export class ByteArrayWriter {
+  private buffer: Uint8Array;
+  private len = 0;
+
+  constructor(initialCapacity = 512 * 1024) {
+    this.buffer = new Uint8Array(initialCapacity);
+  }
+
+  private ensure(additional: number): void {
+    if (this.len + additional > this.buffer.length) {
+      const newCap = Math.max(this.buffer.length * 2, this.len + additional + 65536);
+      const next = new Uint8Array(newCap);
+      next.set(this.buffer.subarray(0, this.len));
+      this.buffer = next;
+    }
+  }
+
+  writeByte(b: number): void {
+    this.ensure(1);
+    this.buffer[this.len++] = b & 0xff;
+  }
+
+  writeWord(w: number): void {
+    this.ensure(2);
+    this.buffer[this.len++] = w & 0xff;
+    this.buffer[this.len++] = (w >> 8) & 0xff;
+  }
+
+  writeBytes(bytes: number[] | Uint8Array): void {
+    this.ensure(bytes.length);
+    if (bytes instanceof Uint8Array) {
+      this.buffer.set(bytes, this.len);
+      this.len += bytes.length;
+    } else {
+      for (let i = 0; i < bytes.length; i++) {
+        this.buffer[this.len++] = bytes[i] & 0xff;
+      }
+    }
+  }
+
+  toUint8Array(): Uint8Array {
+    return this.buffer.subarray(0, this.len);
+  }
+}
+
+export interface IndexedGifFrame {
+  palette: [number, number, number][];
+  indexedPixels: Uint8Array;
+  transparentIndex: number;
+  delayMs: number;
+}
+
 export interface GifFrameInput {
-  canvas: HTMLCanvasElement;
+  canvas?: HTMLCanvasElement;
+  indexed?: IndexedGifFrame;
   delayMs: number;
 }
 
@@ -16,110 +69,99 @@ export interface GifEncodeOptions {
 }
 
 /**
- * Builds an animated GIF Uint8Array from a series of canvas frames.
+ * Builds an animated GIF Uint8Array from a series of canvas frames or indexed frames.
  */
 export function encodeGif(frames: GifFrameInput[], options: GifEncodeOptions): Uint8Array {
   const { width, height, loopCount = 0, onProgress } = options;
-  const out: number[] = [];
-
-  function writeByte(b: number): void {
-    out.push(b & 0xff);
-  }
-
-  function writeWord(w: number): void {
-    out.push(w & 0xff);
-    out.push((w >> 8) & 0xff);
-  }
-
-  function writeBytes(bytes: number[] | Uint8Array): void {
-    for (let i = 0; i < bytes.length; i++) {
-      out.push(bytes[i]);
-    }
-  }
+  const writer = new ByteArrayWriter();
 
   // 1. GIF89a Header
-  // 'G', 'I', 'F', '8', '9', 'a'
-  writeBytes([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+  writer.writeBytes([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
 
   // 2. Logical Screen Descriptor
-  writeWord(width);
-  writeWord(height);
-  // Packed field: no global color table (0), color resolution 7 (8 bits), not sorted (0), GCT size 0
-  writeByte(0x70);
-  writeByte(0); // Background color index
-  writeByte(0); // Pixel aspect ratio
+  writer.writeWord(width);
+  writer.writeWord(height);
+  writer.writeByte(0x70);
+  writer.writeByte(0);
+  writer.writeByte(0);
 
-  // 3. Netscape 2.0 Loop Extension (for looping)
-  writeBytes([0x21, 0xff, 0x0b]); // Extension Introducer, App Extension, block size 11
-  writeBytes([0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30]); // "NETSCAPE2.0"
-  writeByte(0x03); // Sub-block length
-  writeByte(0x01); // Sub-block ID
-  writeWord(loopCount); // Loop count (0 = infinite)
-  writeByte(0x00); // Block Terminator
+  // 3. Netscape 2.0 Loop Extension
+  writer.writeBytes([0x21, 0xff, 0x0b]);
+  writer.writeBytes([0x4e, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2e, 0x30]);
+  writer.writeByte(0x03);
+  writer.writeByte(0x01);
+  writer.writeWord(loopCount);
+  writer.writeByte(0x00);
 
   // 4. Encode each frame
   for (let f = 0; f < frames.length; f++) {
     onProgress?.(f + 1, frames.length);
-    const { canvas, delayMs } = frames[f];
-    const ctx = canvas.getContext('2d')!;
-    const imgData = ctx.getImageData(0, 0, width, height);
-    const rgba = imgData.data;
+    const frame = frames[f];
 
-    // Quantize 32-bit RGBA pixels into <= 256 colors
-    const { palette, indexedPixels, transparentIndex } = quantizeRgba(rgba, width, height);
+    let palette: [number, number, number][];
+    let indexedPixels: Uint8Array;
+    let transparentIndex: number;
 
-    // Graphic Control Extension (delay & transparency)
+    if (frame.indexed) {
+      palette = frame.indexed.palette;
+      indexedPixels = frame.indexed.indexedPixels;
+      transparentIndex = frame.indexed.transparentIndex;
+    } else if (frame.canvas) {
+      const ctx = frame.canvas.getContext('2d')!;
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const q = quantizeRgba(imgData.data, width, height);
+      palette = q.palette;
+      indexedPixels = q.indexedPixels;
+      transparentIndex = q.transparentIndex;
+    } else {
+      continue;
+    }
+
+    const delayMs = frame.delayMs;
     const delayHundredths = Math.max(1, Math.round(delayMs / 10));
-    writeBytes([0x21, 0xf9, 0x04]); // GCE, block size 4
+    writer.writeBytes([0x21, 0xf9, 0x04]);
     const hasTransparency = transparentIndex !== -1;
-    // Packed field: disposal method 2 (restore to background), user input 0, transparent color flag
     const gcePacked = (2 << 2) | (hasTransparency ? 1 : 0);
-    writeByte(gcePacked);
-    writeWord(delayHundredths);
-    writeByte(hasTransparency ? transparentIndex : 0);
-    writeByte(0x00); // Block Terminator
+    writer.writeByte(gcePacked);
+    writer.writeWord(delayHundredths);
+    writer.writeByte(hasTransparency ? transparentIndex : 0);
+    writer.writeByte(0x00);
 
-    // Image Descriptor
-    writeByte(0x2c); // ','
-    writeWord(0); // Image Left
-    writeWord(0); // Image Top
-    writeWord(width);
-    writeWord(height);
+    writer.writeByte(0x2c);
+    writer.writeWord(0);
+    writer.writeWord(0);
+    writer.writeWord(width);
+    writer.writeWord(height);
 
-    // Local Color Table flag: 1, interlace: 0, sort: 0, size of table: palette.length
-    // Palette size must be power of 2 between 2 and 256 (1 to 8 bits)
     const colorDepth = Math.max(2, Math.ceil(Math.log2(Math.max(4, palette.length))));
     const lctSize = 1 << colorDepth;
     const idPacked = 0x80 | (colorDepth - 1);
-    writeByte(idPacked);
+    writer.writeByte(idPacked);
 
-    // Write Local Color Table (RGB triplets)
     for (let i = 0; i < lctSize; i++) {
       if (i < palette.length) {
-        writeByte(palette[i][0]);
-        writeByte(palette[i][1]);
-        writeByte(palette[i][2]);
+        writer.writeByte(palette[i][0]);
+        writer.writeByte(palette[i][1]);
+        writer.writeByte(palette[i][2]);
       } else {
-        writeByte(0);
-        writeByte(0);
-        writeByte(0);
+        writer.writeByte(0);
+        writer.writeByte(0);
+        writer.writeByte(0);
       }
     }
 
-    // LZW Raster Data
-    encodeLzw(indexedPixels, colorDepth, writeByte);
+    encodeLzw(indexedPixels, colorDepth, (b) => writer.writeByte(b));
   }
 
   // 5. GIF Trailer
-  writeByte(0x3b); // ';'
-
-  return new Uint8Array(out);
+  writer.writeByte(0x3b);
+  return writer.toUint8Array();
 }
 
 /**
  * Fast octree / popularity color quantizer for RGBA frames.
  */
-function quantizeRgba(
+export function quantizeRgba(
   rgba: Uint8ClampedArray,
   width: number,
   height: number
