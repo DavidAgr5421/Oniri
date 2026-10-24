@@ -733,8 +733,36 @@ export function createBrushEngine(): BrushEngine {
       strokeContext.clearRect(0, 0, curDocW, curDocH);
     }
 
-    if (preStrokeSnapshot && preStrokeRect) {
-      history.push(preStrokeLayerId, preStrokeRect, preStrokeSnapshot.data);
+    if (preStrokeSnapshot) {
+      if (
+        strokeBoundsMaxX > strokeBoundsMinX &&
+        strokeBoundsMaxY > strokeBoundsMinY
+      ) {
+        // High-efficiency bounded crop: store ONLY the modified stroke rectangle in RAM
+        // saves 99% RAM per undo step (e.g. 30 KB instead of 8.3 MB on 1080p canvas)
+        const pad = 6;
+        const cropX = Math.max(0, strokeBoundsMinX - pad);
+        const cropY = Math.max(0, strokeBoundsMinY - pad);
+        const cropMaxX = Math.min(curDocW, strokeBoundsMaxX + pad);
+        const cropMaxY = Math.min(curDocH, strokeBoundsMaxY + pad);
+        const cropW = cropMaxX - cropX;
+        const cropH = cropMaxY - cropY;
+
+        if (cropW > 0 && cropH > 0) {
+          const croppedData = new Uint8ClampedArray(cropW * cropH * 4);
+          for (let y = 0; y < cropH; y++) {
+            const srcOffset = ((cropY + y) * curDocW + cropX) * 4;
+            const dstOffset = y * cropW * 4;
+            croppedData.set(
+              preStrokeSnapshot.data.subarray(srcOffset, srcOffset + cropW * 4),
+              dstOffset
+            );
+          }
+          history.push(preStrokeLayerId, { x: cropX, y: cropY, w: cropW, h: cropH }, croppedData);
+        }
+      } else if (preStrokeRect) {
+        history.push(preStrokeLayerId, preStrokeRect, preStrokeSnapshot.data);
+      }
       meshCache.delete(preStrokeLayerId);
       preStrokeSnapshot = null;
       preStrokeRect = null;
