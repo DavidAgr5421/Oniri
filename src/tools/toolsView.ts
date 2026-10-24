@@ -39,6 +39,13 @@ import {
   swapColors,
   toggleProperties,
   toggleTransparentColor,
+  setDockLayout,
+  setActiveSubToolGroup,
+  getSubToolGroupsForTool,
+  reorderSubTools,
+  renameSubTool,
+  toggleVisibleProperty,
+  getSubToolGroup,
 } from './toolState';
 import { GAMMA_MAX, GAMMA_MIN, gammaForMode } from '../brush/pressureResponse';
 import type { TimelineManager } from '../animation/timelineManager';
@@ -140,6 +147,181 @@ import { openMaterialPickerModal } from './materialPickerModal';
 import { PAPER_MATERIAL_CATALOG, TIP_MATERIAL_CATALOG } from '../brush/brushTextureAssets';
 
 const QUICK_SIZES = [3, 5, 8, 12, 18, 28, 45, 70];
+
+function openSubToolContextMenu(x: number, y: number, sub: any): void {
+  const existing = document.querySelector('.csp-dynamics-popover');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'csp-dynamics-popover csp-subtool-context-menu';
+  menu.style.top = `${y}px`;
+  menu.style.left = `${Math.min(window.innerWidth - 180, x)}px`;
+
+  const addOption = (text: string, icon: string, action: () => void, danger = false) => {
+    const btn = document.createElement('button');
+    btn.className = `csp-subtool-action-btn ${danger ? 'danger' : ''}`;
+    btn.style.width = '100%';
+    btn.style.justifyContent = 'flex-start';
+    btn.style.padding = '5px 8px';
+    btn.style.fontSize = '11.5px';
+    btn.innerHTML = `<span style="margin-right:6px;">${icon}</span> ${text}`;
+    btn.addEventListener('click', () => {
+      menu.remove();
+      action();
+    });
+    menu.appendChild(btn);
+  };
+
+  addOption('Cambiar nombre...', '✏️', () => {
+    const newName = prompt('Nombre de la subherramienta:', sub.name);
+    if (newName && newName.trim()) {
+      renameSubTool(sub.id, newName.trim());
+    }
+  });
+
+  addOption('Duplicar subherramienta', '📋', () => {
+    const copy = duplicateSubTool(sub.id);
+    if (copy) selectSubTool(copy.id);
+  });
+
+  addOption('Restablecer ajustes de fábrica', '↺', () => {
+    resetSubTool(sub.id);
+  });
+
+  if (sub.custom) {
+    addOption('Eliminar subherramienta', '🗑️', () => {
+      deleteSubTool(sub.id);
+    }, true);
+  }
+
+  addOption('Ajustes de subherramienta...', '⚙️', () => {
+    openSubToolDetailModal(sub);
+  });
+
+  document.body.appendChild(menu);
+  const close = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      window.removeEventListener('mousedown', close);
+    }
+  };
+  setTimeout(() => window.addEventListener('mousedown', close), 10);
+}
+
+function openDynamicsPopover(anchor: HTMLElement, dynamicType: 'size' | 'opacity' | 'flow'): void {
+  const existing = document.querySelector('.csp-dynamics-popover');
+  if (existing) existing.remove();
+
+  const state = getToolState();
+  const rect = anchor.getBoundingClientRect();
+  const popover = document.createElement('div');
+  popover.className = 'csp-dynamics-popover';
+  popover.style.top = `${rect.bottom + 4}px`;
+  popover.style.left = `${Math.max(10, rect.left - 130)}px`;
+
+  const title = document.createElement('div');
+  title.style.fontWeight = 'bold';
+  title.style.color = '#38bdf8';
+  title.style.borderBottom = '1px solid #333';
+  title.style.paddingBottom = '4px';
+  title.textContent = dynamicType === 'size'
+    ? 'Dinámica de tamaño'
+    : dynamicType === 'opacity'
+    ? 'Dinámica de opacidad'
+    : 'Dinámica de flujo';
+  popover.appendChild(title);
+
+  // Pressure checkbox
+  const pressRow = document.createElement('label');
+  pressRow.style.display = 'flex';
+  pressRow.style.alignItems = 'center';
+  pressRow.style.gap = '6px';
+  pressRow.style.cursor = 'pointer';
+
+  const pressBox = document.createElement('input');
+  pressBox.type = 'checkbox';
+  pressBox.className = 'csp-checkbox';
+  pressBox.checked = dynamicType === 'size' ? state.brush.pressureSize : state.brush.pressureFlow;
+
+  pressBox.addEventListener('change', () => {
+    if (dynamicType === 'size') setBrushSettings({ pressureSize: pressBox.checked });
+    else setBrushSettings({ pressureFlow: pressBox.checked });
+  });
+  pressRow.append(pressBox, document.createTextNode('Presión del lápiz'));
+  popover.appendChild(pressRow);
+
+  if (dynamicType === 'size') {
+    // Min Size Ratio
+    const minRatioRow = document.createElement('div');
+    minRatioRow.style.display = 'flex';
+    minRatioRow.style.flexDirection = 'column';
+    minRatioRow.style.gap = '2px';
+
+    const minRatioLabel = document.createElement('div');
+    minRatioLabel.style.display = 'flex';
+    minRatioLabel.style.justifyContent = 'space-between';
+    minRatioLabel.style.fontSize = '10px';
+    minRatioLabel.style.color = '#94a3b8';
+    minRatioLabel.innerHTML = `<span>Proporción mínima:</span><span>${Math.round(state.brush.minSizeRatio * 100)}%</span>`;
+
+    const minRatioSlider = document.createElement('input');
+    minRatioSlider.type = 'range';
+    minRatioSlider.className = 'csp-slider';
+    minRatioSlider.min = '0';
+    minRatioSlider.max = '100';
+    minRatioSlider.value = String(Math.round(state.brush.minSizeRatio * 100));
+    minRatioSlider.addEventListener('input', () => {
+      const val = Number(minRatioSlider.value) / 100;
+      setBrushSettings({ minSizeRatio: val });
+      minRatioLabel.querySelector('span:last-child')!.textContent = `${minRatioSlider.value}%`;
+    });
+    minRatioRow.append(minRatioLabel, minRatioSlider);
+    popover.appendChild(minRatioRow);
+
+    // Velocity checkbox
+    const velRow = document.createElement('label');
+    velRow.style.display = 'flex';
+    velRow.style.alignItems = 'center';
+    velRow.style.gap = '6px';
+    velRow.style.cursor = 'pointer';
+
+    const velBox = document.createElement('input');
+    velBox.type = 'checkbox';
+    velBox.className = 'csp-checkbox';
+    velBox.checked = !!state.brush.velocitySize;
+    velBox.addEventListener('change', () => {
+      setBrushSettings({ velocitySize: velBox.checked });
+    });
+    velRow.append(velBox, document.createTextNode('Velocidad'));
+    popover.appendChild(velRow);
+  }
+
+  // Tilt checkbox
+  const tiltRow = document.createElement('label');
+  tiltRow.style.display = 'flex';
+  tiltRow.style.alignItems = 'center';
+  tiltRow.style.gap = '6px';
+  tiltRow.style.cursor = 'pointer';
+
+  const tiltBox = document.createElement('input');
+  tiltBox.type = 'checkbox';
+  tiltBox.className = 'csp-checkbox';
+  tiltBox.checked = state.tablet.tiltEnabled;
+  tiltBox.addEventListener('change', () => {
+    setTabletSettings({ tiltEnabled: tiltBox.checked });
+  });
+  tiltRow.append(tiltBox, document.createTextNode('Inclinación'));
+  popover.appendChild(tiltRow);
+
+  document.body.appendChild(popover);
+  const close = (ev: MouseEvent) => {
+    if (!popover.contains(ev.target as Node) && ev.target !== anchor) {
+      popover.remove();
+      window.removeEventListener('mousedown', close);
+    }
+  };
+  setTimeout(() => window.addEventListener('mousedown', close), 10);
+}
 
 export interface ToolsViewOptions {
   onUndo?: () => void;
@@ -322,15 +504,80 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const colorPickerComp = createColorPickerSection();
   const colorSection = colorPickerComp.section;
 
-  // Load saved dock inner width (default 240px)
+  // Subtool column width (for side_by_side 2-column layout mode)
+  const savedSubColW = localStorage.getItem('oniri.subtool.col_width');
+  let currentSubColW = savedSubColW ? Math.max(160, Math.min(320, Number(savedSubColW))) : 200;
+
+  // Prop column / dock inner width (for stacked layout or prop column in side_by_side)
   const savedDockWidth = localStorage.getItem('oniri.dock.width');
-  let currentDockInnerW = savedDockWidth ? Math.max(220, Math.min(480, Number(savedDockWidth))) : 240;
-  document.documentElement.style.setProperty('--left-dock-inner-width', `${currentDockInnerW}px`);
+  let currentDockInnerW = savedDockWidth ? Math.max(210, Math.min(480, Number(savedDockWidth))) : 250;
+
+  function applyDockDimensions(): void {
+    const isTwoCols = getToolState().dockLayout === 'side_by_side';
+    dock.classList.toggle('two-columns', isTwoCols);
+    document.documentElement.style.setProperty('--left-dock-subtool-width', `${currentSubColW}px`);
+    if (isTwoCols) {
+      const totalW = currentSubColW + currentDockInnerW + 4;
+      document.documentElement.style.setProperty('--left-dock-inner-width', `${totalW}px`);
+      document.documentElement.style.setProperty(
+        '--left-dock-width',
+        getToolState().propertiesOpen ? `${totalW + 48}px` : '48px',
+      );
+    } else {
+      document.documentElement.style.setProperty('--left-dock-inner-width', `${currentDockInnerW}px`);
+      document.documentElement.style.setProperty(
+        '--left-dock-width',
+        getToolState().propertiesOpen ? `${currentDockInnerW + 48}px` : '48px',
+      );
+    }
+  }
+
+  // Vertical column splitter between Subtools and Properties (in side_by_side mode)
+  const colSplitter = document.createElement('div');
+  colSplitter.className = 'csp-column-splitter';
+  colSplitter.title = 'Arrastrar para cambiar el ancho de la columna de subherramientas';
+
+  let isDraggingColSplitter = false;
+  let startColSplitterX = 0;
+  let startSubColW = 200;
+
+  colSplitter.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isDraggingColSplitter = true;
+    startColSplitterX = e.clientX;
+    startSubColW = currentSubColW;
+    colSplitter.classList.add('dragging');
+    colSplitter.setPointerCapture(e.pointerId);
+  });
+
+  colSplitter.addEventListener('pointermove', (e) => {
+    if (!isDraggingColSplitter) return;
+    const dx = e.clientX - startColSplitterX;
+    currentSubColW = Math.max(160, Math.min(320, startSubColW + dx));
+    localStorage.setItem('oniri.subtool.col_width', String(currentSubColW));
+    applyDockDimensions();
+    subtoolScroll.update();
+    propScroll.update();
+  });
+
+  const stopColSplitter = (e: PointerEvent) => {
+    if (!isDraggingColSplitter) return;
+    isDraggingColSplitter = false;
+    colSplitter.classList.remove('dragging');
+    try {
+      colSplitter.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+  colSplitter.addEventListener('pointerup', stopColSplitter);
+  colSplitter.addEventListener('pointercancel', stopColSplitter);
 
   // Dock Width Resizer Handle on right border
   const dockWidthResizer = document.createElement('div');
   dockWidthResizer.className = 'csp-dock-width-resizer';
-  dockWidthResizer.title = 'Arrastrar para cambiar el ancho de la barra lateral';
+  dockWidthResizer.title = 'Arrastrar para cambiar el ancho del panel';
 
   let isDraggingDockW = false;
   let startDockX = 0;
@@ -349,10 +596,14 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   dockWidthResizer.addEventListener('pointermove', (e) => {
     if (!isDraggingDockW) return;
     const dx = e.clientX - startDockX;
-    currentDockInnerW = Math.max(220, Math.min(480, startDockW + dx));
-    document.documentElement.style.setProperty('--left-dock-inner-width', `${currentDockInnerW}px`);
-    document.documentElement.style.setProperty('--left-dock-width', `${currentDockInnerW + 48}px`);
+    const isTwoCols = getToolState().dockLayout === 'side_by_side';
+    if (isTwoCols) {
+      currentDockInnerW = Math.max(210, Math.min(480, startDockW - currentSubColW - 4 + dx));
+    } else {
+      currentDockInnerW = Math.max(220, Math.min(480, startDockW + dx));
+    }
     localStorage.setItem('oniri.dock.width', String(currentDockInnerW));
+    applyDockDimensions();
     subtoolScroll.update();
     propScroll.update();
     colorPickerComp.scroll.update();
@@ -370,7 +621,6 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   };
   dockWidthResizer.addEventListener('pointerup', stopDockWDrag);
   dockWidthResizer.addEventListener('pointercancel', stopDockWDrag);
-  dock.appendChild(dockWidthResizer);
 
   // =========================================================================
   // Section 1: Sub Tool Palette (with bounded height & custom draggable scrollbar)
@@ -385,13 +635,15 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const subtoolHeader = document.createElement('div');
   subtoolHeader.className = 'dock-section-header';
   subtoolHeader.innerHTML = `
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="3" y="3" width="7" height="7"/>
-      <rect x="14" y="3" width="7" height="7"/>
-      <rect x="14" y="14" width="7" height="7"/>
-      <rect x="3" y="14" width="7" height="7"/>
-    </svg>
-    <span class="subtool-section-title">Subherramientas</span>
+    <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"/>
+        <rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/>
+        <rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      <span class="subtool-section-title">Subherramientas</span>
+    </div>
   `;
 
   function actionBtn(text: string, title: string, danger = false): HTMLButtonElement {
@@ -401,6 +653,12 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     btn.title = title;
     return btn;
   }
+
+  const layoutModeBtn = actionBtn('◫', 'Alternar diseño: 2 Columnas (lado a lado) / 1 Columna (apilada)');
+  layoutModeBtn.addEventListener('click', () => {
+    const nextMode = getToolState().dockLayout === 'side_by_side' ? 'stacked' : 'side_by_side';
+    setDockLayout(nextMode);
+  });
 
   const createBtn = actionBtn('+', 'Crear un pincel nuevo a partir del actual (duplicar)');
   const moveCatBtn = actionBtn('⇄', 'Mover pincel activo a otra herramienta (Pluma ↔ Pincel ↔ Efectos ↔ Borrador)');
@@ -501,18 +759,24 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
   const subtoolActions = document.createElement('div');
   subtoolActions.className = 'subtool-header-actions';
-  subtoolActions.append(moveCatBtn, createBtn, resetBtn, deleteBtn);
+  subtoolActions.append(layoutModeBtn, moveCatBtn, createBtn, resetBtn, deleteBtn);
   subtoolHeader.appendChild(subtoolActions);
-  subtoolSection.appendChild(subtoolHeader);
+
+  // Subtool Group Tabs (CSP Style e.g. [Plumilla] [Marcador] [Lápiz])
+  const subtoolTabs = document.createElement('div');
+  subtoolTabs.className = 'csp-subtool-tabs';
 
   // Section 1 custom scroll container
   const subtoolScroll = createCustomScrollContainer('csp-subtool-scroll-wrap');
-  subtoolSection.appendChild(subtoolScroll.wrap);
-  dock.appendChild(subtoolSection);
+  subtoolSection.append(subtoolHeader, subtoolTabs, subtoolScroll.wrap);
 
-  // --- Splitter 1: Between Subtools & Tool Properties ---
+  const subtoolCol = document.createElement('div');
+  subtoolCol.className = 'csp-subtool-column';
+  subtoolCol.appendChild(subtoolSection);
+
+  // --- Splitter 1: Between Subtools & Tool Properties (in stacked mode) ---
   const splitterSubProp = document.createElement('div');
-  splitterSubProp.className = 'csp-dock-splitter';
+  splitterSubProp.className = 'csp-dock-splitter csp-splitter-subprop';
   splitterSubProp.title = 'Arrastrar para cambiar el tamaño de Subherramientas y Propiedades';
 
   let isDraggingSplitter1 = false;
@@ -551,7 +815,6 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   };
   splitterSubProp.addEventListener('pointerup', stopSplitter1);
   splitterSubProp.addEventListener('pointercancel', stopSplitter1);
-  dock.appendChild(splitterSubProp);
 
   // =========================================================================
   // Section 2: Tool Property Palette (with its own custom scrollbar & eye visibility)
@@ -600,17 +863,130 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
   const inkPropertyBoxes = new Map<BrushPropKey, HTMLElement>();
 
-  function makePropHeader(label: string, valueText: string): { header: HTMLDivElement; value: HTMLSpanElement } {
+  interface PropHeaderOptions {
+    propKey?: BrushPropKey;
+    dynamicType?: 'size' | 'opacity' | 'flow';
+    onEditValue?: (parsedValue: number) => void;
+    min?: number;
+    max?: number;
+    unit?: string;
+  }
+
+  interface PropHeaderResult {
+    header: HTMLDivElement;
+    value: HTMLSpanElement;
+    eyeBtn?: HTMLButtonElement;
+    dynamicBtn?: HTMLButtonElement;
+  }
+
+  const propHeaderRefs = new Map<BrushPropKey, { eyeBtn: HTMLButtonElement; dynamicBtn?: HTMLButtonElement }>();
+
+  function makePropHeader(
+    label: string,
+    valueText: string,
+    options?: PropHeaderOptions,
+  ): PropHeaderResult {
     const header = document.createElement('div');
     header.className = 'prop-row-header';
+
+    const leftCol = document.createElement('div');
+    leftCol.className = 'csp-prop-row-header-left';
+    leftCol.style.display = 'flex';
+    leftCol.style.alignItems = 'center';
+    leftCol.style.gap = '5px';
+    leftCol.style.minWidth = '0';
+
+    let eyeBtn: HTMLButtonElement | undefined;
+    if (options?.propKey) {
+      eyeBtn = document.createElement('button');
+      eyeBtn.className = 'csp-prop-eye-btn';
+      eyeBtn.title = 'Fijar/ocultar esta propiedad en la paleta rápida';
+      eyeBtn.innerHTML = '👁';
+      const key = options.propKey;
+      eyeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleVisibleProperty(key);
+      });
+      leftCol.appendChild(eyeBtn);
+    }
+
     const labelEl = document.createElement('span');
     labelEl.className = 'prop-label';
     labelEl.textContent = label;
+    leftCol.appendChild(labelEl);
+
+    const rightCol = document.createElement('div');
+    rightCol.style.display = 'flex';
+    rightCol.style.alignItems = 'center';
+    rightCol.style.gap = '5px';
+
+    let dynamicBtn: HTMLButtonElement | undefined;
+    if (options?.dynamicType) {
+      dynamicBtn = document.createElement('button');
+      dynamicBtn.className = 'csp-prop-dynamic-btn';
+      dynamicBtn.title = 'Ajustes de dinámica (presión de lápiz, velocidad, inclinación)';
+      dynamicBtn.innerHTML = '⤹';
+      const dtype = options.dynamicType;
+      dynamicBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDynamicsPopover(dynamicBtn!, dtype);
+      });
+      rightCol.appendChild(dynamicBtn);
+    }
+
     const value = document.createElement('span');
     value.className = 'prop-value';
     value.textContent = valueText;
-    header.append(labelEl, value);
-    return { header, value };
+
+    if (options?.onEditValue) {
+      value.classList.add('csp-editable-value');
+      value.title = 'Haz clic para escribir el valor numérico exacto';
+      value.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'csp-inline-num-input';
+        const numStr = value.textContent?.replace(/[^0-9.-]/g, '') || '0';
+        input.value = numStr;
+        if (options.min !== undefined) input.min = String(options.min);
+        if (options.max !== undefined) input.max = String(options.max);
+        value.replaceWith(input);
+        input.focus();
+        input.select();
+
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          let parsed = parseFloat(input.value);
+          if (isNaN(parsed)) parsed = parseFloat(numStr) || 0;
+          if (options.min !== undefined) parsed = Math.max(options.min, parsed);
+          if (options.max !== undefined) parsed = Math.min(options.max, parsed);
+          input.replaceWith(value);
+          options.onEditValue!(parsed);
+        };
+
+        input.addEventListener('blur', finish);
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            finish();
+          } else if (ev.key === 'Escape') {
+            finished = true;
+            input.replaceWith(value);
+          }
+        });
+      });
+    }
+
+    rightCol.appendChild(value);
+    header.append(leftCol, rightCol);
+
+    if (options?.propKey && eyeBtn) {
+      propHeaderRefs.set(options.propKey, { eyeBtn, dynamicBtn });
+    }
+
+    return { header, value, eyeBtn, dynamicBtn };
   }
 
   function makeSlider(min: string, max: string, step?: string): HTMLInputElement {
@@ -662,12 +1038,15 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   // 1. Brush Size Box
   const sizeBox = document.createElement('div');
   sizeBox.className = 'prop-row-box';
-  const sizeHeader = document.createElement('div');
-  sizeHeader.className = 'prop-row-header';
-  sizeHeader.innerHTML = `
-    <span class="prop-label">Tamaño del pincel</span>
-    <span class="prop-value" id="size-val">6.0 px</span>
-  `;
+  const sizeHeader = makePropHeader('Tamaño del pincel', '6.0 px', {
+    propKey: 'size',
+    dynamicType: 'size',
+    onEditValue: (num) => setBrushSettings({ size: num }),
+    min: 1,
+    max: 200,
+    unit: ' px',
+  });
+  sizeHeader.value.id = 'size-val';
   const sizeSlider = document.createElement('input');
   sizeSlider.type = 'range';
   sizeSlider.className = 'csp-slider';
@@ -688,19 +1067,22 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     });
     quickSizeRow.appendChild(qbtn);
   }
-  sizeBox.append(sizeHeader, sizeSlider, quickSizeRow);
+  sizeBox.append(sizeHeader.header, sizeSlider, quickSizeRow);
   propBody.appendChild(sizeBox);
   inkPropertyBoxes.set('size', sizeBox);
 
   // 2. Opacity Box
   const opacityBox = document.createElement('div');
   opacityBox.className = 'prop-row-box';
-  const opacityHeader = document.createElement('div');
-  opacityHeader.className = 'prop-row-header';
-  opacityHeader.innerHTML = `
-    <span class="prop-label">Opacidad</span>
-    <span class="prop-value" id="opacity-val">100%</span>
-  `;
+  const opacityHeader = makePropHeader('Opacidad', '100%', {
+    propKey: 'opacity',
+    dynamicType: 'opacity',
+    onEditValue: (pct) => setBrushSettings({ opacity: pct / 100 }),
+    min: 1,
+    max: 100,
+    unit: '%',
+  });
+  opacityHeader.value.id = 'opacity-val';
   const opacitySlider = document.createElement('input');
   opacitySlider.type = 'range';
   opacitySlider.className = 'csp-slider';
@@ -709,19 +1091,22 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   opacitySlider.addEventListener('input', () => {
     setBrushSettings({ opacity: Number(opacitySlider.value) / 100 });
   });
-  opacityBox.append(opacityHeader, opacitySlider);
+  opacityBox.append(opacityHeader.header, opacitySlider);
   propBody.appendChild(opacityBox);
   inkPropertyBoxes.set('opacity', opacityBox);
 
   // 3. Flow Box
   const flowBox = document.createElement('div');
   flowBox.className = 'prop-row-box';
-  const flowHeader = document.createElement('div');
-  flowHeader.className = 'prop-row-header';
-  flowHeader.innerHTML = `
-    <span class="prop-label">Densidad del pincel</span>
-    <span class="prop-value" id="flow-val">100%</span>
-  `;
+  const flowHeader = makePropHeader('Densidad del pincel', '100%', {
+    propKey: 'flow',
+    dynamicType: 'flow',
+    onEditValue: (pct) => setBrushSettings({ flow: pct / 100 }),
+    min: 1,
+    max: 100,
+    unit: '%',
+  });
+  flowHeader.value.id = 'flow-val';
   const flowSlider = document.createElement('input');
   flowSlider.type = 'range';
   flowSlider.className = 'csp-slider';
@@ -737,19 +1122,21 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   flowPressure.box.addEventListener('change', () => {
     setBrushSettings({ pressureFlow: flowPressure.box.checked });
   });
-  flowBox.append(flowHeader, flowSlider, flowPressureRow);
+  flowBox.append(flowHeader.header, flowSlider, flowPressureRow);
   propBody.appendChild(flowBox);
   inkPropertyBoxes.set('flow', flowBox);
 
   // 4. Hardness Box
   const hardnessBox = document.createElement('div');
   hardnessBox.className = 'prop-row-box';
-  const hardnessHeader = document.createElement('div');
-  hardnessHeader.className = 'prop-row-header';
-  hardnessHeader.innerHTML = `
-    <span class="prop-label">Dureza</span>
-    <span class="prop-value" id="hardness-val">100%</span>
-  `;
+  const hardnessHeader = makePropHeader('Dureza', '100%', {
+    propKey: 'hardness',
+    onEditValue: (pct) => setBrushSettings({ hardness: pct / 100 }),
+    min: 10,
+    max: 100,
+    unit: '%',
+  });
+  hardnessHeader.value.id = 'hardness-val';
   const hardnessDotsContainer = document.createElement('div');
   hardnessDotsContainer.className = 'csp-hardness-dots-container';
   const hardnessSteps = [
@@ -770,19 +1157,20 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     hardnessDotsContainer.appendChild(dbtn);
     return dbtn;
   });
-  hardnessBox.append(hardnessHeader, hardnessDotsContainer);
+  hardnessBox.append(hardnessHeader.header, hardnessDotsContainer);
   propBody.appendChild(hardnessBox);
   inkPropertyBoxes.set('hardness', hardnessBox);
 
   // 5. Stabilization Box
   const stabBox = document.createElement('div');
   stabBox.className = 'prop-row-box';
-  const stabHeader = document.createElement('div');
-  stabHeader.className = 'prop-row-header';
-  stabHeader.innerHTML = `
-    <span class="prop-label">Estabilización</span>
-    <span class="prop-value" id="stab-val">5</span>
-  `;
+  const stabHeader = makePropHeader('Estabilización', '5', {
+    propKey: 'stabilization',
+    onEditValue: (val) => setBrushSettings({ stabilization: val }),
+    min: 0,
+    max: 10,
+  });
+  stabHeader.value.id = 'stab-val';
   const stabSlider = document.createElement('input');
   stabSlider.type = 'range';
   stabSlider.className = 'csp-slider';
@@ -792,7 +1180,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   stabSlider.addEventListener('input', () => {
     setBrushSettings({ stabilization: Number(stabSlider.value) });
   });
-  stabBox.append(stabHeader, stabSlider);
+  stabBox.append(stabHeader.header, stabSlider);
   propBody.appendChild(stabBox);
   inkPropertyBoxes.set('stabilization', stabBox);
 
@@ -1582,11 +1970,10 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(propFooter);
 
   propSection.appendChild(propScroll.wrap);
-  dock.appendChild(propSection);
 
   // --- Splitter 2: Between Tool Properties & Color ---
   const splitterPropColor = document.createElement('div');
-  splitterPropColor.className = 'csp-dock-splitter';
+  splitterPropColor.className = 'csp-dock-splitter csp-splitter-propcolor';
   splitterPropColor.title = 'Arrastrar para cambiar el tamaño de Propiedades y Color';
 
   let isDraggingSplitter2 = false;
@@ -1625,14 +2012,13 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   };
   splitterPropColor.addEventListener('pointerup', stopSplitter2);
   splitterPropColor.addEventListener('pointercancel', stopSplitter2);
-  dock.appendChild(splitterPropColor);
 
-  dock.appendChild(colorSection);
+  const propCol = document.createElement('div');
+  propCol.className = 'csp-prop-column';
+  propCol.append(propSection, splitterPropColor, colorSection);
+
+  dock.append(subtoolCol, colSplitter, splitterSubProp, propCol, dockWidthResizer);
   container.appendChild(dock);
-
-
-
-
 
   // --- 3. Synchronize View with State ---
   const sync = (state: ToolState): void => {
@@ -1648,11 +2034,12 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>`
       : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`;
 
-    // 3. Update CSS variable on document for timeline docking offset
-    document.documentElement.style.setProperty(
-      '--left-dock-width',
-      state.propertiesOpen ? `${currentDockInnerW + 48}px` : '48px',
-    );
+    // 3. Update CSS variable on document for timeline docking offset and layout
+    applyDockDimensions();
+    layoutModeBtn.innerHTML = state.dockLayout === 'side_by_side' ? '◫' : '⊟';
+    layoutModeBtn.title = state.dockLayout === 'side_by_side'
+      ? 'Cambiar a diseño apilado (1 Columna)'
+      : 'Cambiar a diseño lado a lado (2 Columnas)';
 
     // 4. Color widgets in Column 1
     primarySwatch.style.background = state.primaryColor;
@@ -1667,8 +2054,37 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     );
     transparentTile.classList.toggle('active', state.isTransparentColor);
 
-    // 5. Render Subtools for active tool with custom scrollbar
-    const subtools = getSubToolsForTool(state.tool);
+    // 5. Render Subtools for active tool with custom scrollbar, tabs, drag & drop, and context menu
+    const groups = getSubToolGroupsForTool(state.tool);
+    if (groups.length > 1) {
+      subtoolTabs.style.display = 'flex';
+      subtoolTabs.innerHTML = '';
+
+      const allTab = document.createElement('button');
+      allTab.className = `csp-subtool-tab ${!state.activeSubToolGroup ? 'active' : ''}`;
+      allTab.textContent = 'Todas';
+      allTab.addEventListener('click', () => setActiveSubToolGroup(null));
+      subtoolTabs.appendChild(allTab);
+
+      for (const grp of groups) {
+        const tab = document.createElement('button');
+        tab.className = `csp-subtool-tab ${state.activeSubToolGroup === grp ? 'active' : ''}`;
+        tab.textContent = grp;
+        tab.addEventListener('click', () => setActiveSubToolGroup(grp));
+        subtoolTabs.appendChild(tab);
+      }
+    } else {
+      subtoolTabs.style.display = 'none';
+    }
+
+    const allSubtools = getSubToolsForTool(state.tool);
+    let subtools = allSubtools;
+    if (state.activeSubToolGroup) {
+      const filtered = allSubtools.filter((s) => getSubToolGroup(s) === state.activeSubToolGroup);
+      if (filtered.length > 0) {
+        subtools = filtered;
+      }
+    }
     const activeSub = subtools.find((s) => s.id === state.activeSubToolId);
     subtoolScroll.list.innerHTML = '';
 
@@ -1677,6 +2093,13 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       item.className = 'csp-subtool-item';
       item.classList.toggle('active', sub.id === state.activeSubToolId);
       item.classList.toggle('custom', !!sub.custom);
+      item.dataset.subId = sub.id;
+
+      const grip = document.createElement('span');
+      grip.className = 'csp-subtool-grip';
+      grip.title = 'Arrastrar para reordenar subherramientas';
+      grip.textContent = '⋮⋮';
+      item.appendChild(grip);
 
       const dot = document.createElement('span');
       dot.className = 'csp-subtool-dot';
@@ -1685,6 +2108,41 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       const name = document.createElement('span');
       name.className = 'csp-subtool-name';
       name.textContent = sub.name;
+      name.title = 'Doble clic para cambiar el nombre (o clic derecho)';
+
+      // Inline renaming on double click
+      name.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'csp-subtool-name-input';
+        input.value = sub.name;
+        name.replaceWith(input);
+        input.focus();
+        input.select();
+
+        let committed = false;
+        const commit = () => {
+          if (committed) return;
+          committed = true;
+          const val = input.value.trim();
+          if (val && val !== sub.name) {
+            renameSubTool(sub.id, val);
+          } else {
+            input.replaceWith(name);
+          }
+        };
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            commit();
+          } else if (ev.key === 'Escape') {
+            committed = true;
+            input.replaceWith(name);
+          }
+        });
+      });
       item.appendChild(name);
 
       if (sub.settings.size !== undefined) {
@@ -1709,16 +2167,55 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       });
       item.appendChild(gearBtn);
 
-      item.title = `${sub.description}\n(Arrastra este pincel sobre los iconos de Pluma, Pincel, Efectos o Borrador para moverlo de categoría)`;
-      if (state.tool === 'pen' || state.tool === 'brush' || state.tool === 'effect' || state.tool === 'eraser') {
-        item.draggable = true;
-        item.addEventListener('dragstart', (e) => {
-          if (e.dataTransfer) {
-            e.dataTransfer.setData('text/plain', sub.id);
-            e.dataTransfer.effectAllowed = 'move';
-          }
+      // Context menu on right click
+      item.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openSubToolContextMenu(e.clientX, e.clientY, sub);
+      });
+
+      // Drag and drop reordering
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        if (e.dataTransfer) {
+          e.dataTransfer.setData('text/plain', sub.id);
+          e.dataTransfer.effectAllowed = 'move';
+        }
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        subtoolScroll.list.querySelectorAll('.csp-subtool-item').forEach((el) => {
+          el.classList.remove('drop-target-before', 'drop-target-after');
         });
-      }
+      });
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        const rect = item.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (e.clientY < midY) {
+          item.classList.add('drop-target-before');
+          item.classList.remove('drop-target-after');
+        } else {
+          item.classList.add('drop-target-after');
+          item.classList.remove('drop-target-before');
+        }
+      });
+      item.addEventListener('dragleave', () => {
+        item.classList.remove('drop-target-before', 'drop-target-after');
+      });
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer?.getData('text/plain');
+        const rect = item.getBoundingClientRect();
+        const placement = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        item.classList.remove('drop-target-before', 'drop-target-after');
+        if (draggedId && draggedId !== sub.id) {
+          reorderSubTools(draggedId, sub.id, placement);
+        }
+      });
+
+      item.title = `${sub.description}\n(Doble clic para renombrar, clic derecho para menú de opciones)`;
       item.addEventListener('click', () => {
         selectSubTool(sub.id);
       });
@@ -1759,6 +2256,18 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
       : `${subtools.length} subherramientas`;
 
     if (isInkTool) queuePreview();
+
+    for (const [propKey, refs] of propHeaderRefs) {
+      const isPinned = state.visibleProperties.includes(propKey);
+      refs.eyeBtn.classList.toggle('unpinned', !isPinned);
+      if (refs.dynamicBtn) {
+        if (propKey === 'size') {
+          refs.dynamicBtn.classList.toggle('active', !!state.brush.pressureSize || !!state.brush.velocitySize);
+        } else if (propKey === 'opacity' || propKey === 'flow') {
+          refs.dynamicBtn.classList.toggle('active', !!state.brush.pressureFlow);
+        }
+      }
+    }
 
     sizeSlider.value = String(Math.round(state.brush.size));
     const sizeValNode = propBody.querySelector('#size-val');

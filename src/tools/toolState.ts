@@ -117,9 +117,10 @@ export interface BrushSettings {
   velocityFlow?: boolean;
 }
 
-export { type SubTool, SUBTOOLS } from './subtoolPresets';
-import { type SubTool, SUBTOOLS } from './subtoolPresets';
+export { type SubTool, SUBTOOLS, getSubToolGroup } from './subtoolPresets';
+import { type SubTool, SUBTOOLS, getSubToolGroup } from './subtoolPresets';
 
+export type DockLayoutMode = 'side_by_side' | 'stacked';
 export type ColorTabId = 'picker' | 'rgb' | 'set' | 'harmony';
 export type PreviewBgMode = 'paper' | 'checker' | 'dark';
 export type BrushPropKey =
@@ -170,9 +171,11 @@ import {
 export interface ToolState {
   tool: ToolId;
   activeSubToolId: string;
+  activeSubToolGroup: string | null;
   brush: BrushSettings;
   tablet: TabletSettings;
   propertiesOpen: boolean;
+  dockLayout: DockLayoutMode; // CSP Two-column (Side-by-Side) vs Single column (Stacked)
   // Sub Tool Detail: which properties are pinned/visible in the main Tool Property panel (CSP Eye icon)
   visibleProperties: BrushPropKey[];
   previewBgMode: PreviewBgMode;
@@ -321,7 +324,7 @@ function persistTabletSettings(settings: TabletSettings): void {
 // Sub Tool persistence (Clip Studio Paint "Sub Tool Detail" style)
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = 'oniri.subtools.v12';
+const STORAGE_KEY = 'oniri.subtools.v14';
 
 const TOOL_IDS: ToolId[] = ['pen', 'brush', 'effect', 'eraser', 'eyedropper', 'bucket', 'shape', 'bone', 'hand', 'select'];
 
@@ -345,19 +348,18 @@ interface SubToolStorage {
 }
 
 function cloneSubTools(list: SubTool[]): SubTool[] {
-  return list.map((s) => ({ ...s, settings: { ...s.settings } }));
+  return list.map((s) => ({ ...s, group: s.group || getSubToolGroup(s), settings: { ...s.settings } }));
 }
 
 let deletedBaseIds: string[] = [];
 
 function loadSubTools(): SubTool[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('oniri.subtools.v12');
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<SubToolStorage>;
       if (
         parsed &&
-        parsed.v === 10 &&
         Array.isArray(parsed.items) &&
         parsed.items.length > 0 &&
         parsed.items.every(isValidSubTool)
@@ -369,8 +371,11 @@ function loadSubTools(): SubTool[] {
         const present = new Set(items.map((s) => s.id));
         for (const base of SUBTOOLS) {
           if (!present.has(base.id) && !deletedBaseIds.includes(base.id)) {
-            items.push({ ...base, settings: { ...base.settings } });
+            items.push({ ...base, group: base.group || getSubToolGroup(base), settings: { ...base.settings } });
           }
+        }
+        for (const it of items) {
+          if (!it.group) it.group = getSubToolGroup(it);
         }
         return items;
       }
@@ -385,7 +390,7 @@ let subTools: SubTool[] = loadSubTools();
 
 function persistSubTools(): void {
   try {
-    const storage: SubToolStorage = { v: 10, items: subTools, deleted: [...deletedBaseIds] };
+    const storage: SubToolStorage = { v: 14, items: subTools, deleted: [...deletedBaseIds] };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(storage));
   } catch {
     // Storage full or unavailable: the in-memory session keeps working.
@@ -463,15 +468,27 @@ function persistVisibleProps(props: BrushPropKey[]): void {
   }
 }
 
+const DOCK_LAYOUT_KEY = 'oniri.dock.layout';
+
+function loadDockLayout(): DockLayoutMode {
+  try {
+    const raw = localStorage.getItem(DOCK_LAYOUT_KEY);
+    if (raw === 'stacked' || raw === 'side_by_side') return raw;
+  } catch {}
+  return 'side_by_side';
+}
+
 const initialSub = findSubTool('g-pen') ?? subTools[0];
 const initialSets = loadColorSets();
 
 let state: ToolState = {
   tool: 'pen',
   activeSubToolId: initialSub ? initialSub.id : 'g-pen',
+  activeSubToolGroup: initialSub?.group || 'Plumilla',
   brush: initialSub ? mergeBrush(initialSub, '#000000') : { ...DEFAULT_BRUSH },
   tablet: loadTabletSettings(),
   propertiesOpen: true,
+  dockLayout: loadDockLayout(),
   visibleProperties: loadVisibleProps(),
   previewBgMode: 'paper',
   boneMode: 'rig',
@@ -512,6 +529,7 @@ export function setTool(tool: ToolId): void {
   const subtools = subTools.filter((s) => s.tool === tool);
   const firstSub = subtools[0];
   const nextSubId = firstSub ? firstSub.id : state.activeSubToolId;
+  const nextGroup = firstSub ? (firstSub.group || getSubToolGroup(firstSub)) : null;
 
   let nextBoneMode = state.boneMode;
   if (tool === 'bone') {
@@ -525,6 +543,7 @@ export function setTool(tool: ToolId): void {
     ...state,
     tool,
     activeSubToolId: nextSubId,
+    activeSubToolGroup: nextGroup,
     boneMode: nextBoneMode,
     brush: firstSub ? mergeBrush(firstSub, activeColor) : { ...state.brush, color: activeColor },
   };
@@ -544,10 +563,73 @@ export function selectSubTool(subToolId: string): void {
     ...state,
     tool: found.tool,
     activeSubToolId: found.id,
+    activeSubToolGroup: found.group || getSubToolGroup(found),
     boneMode: nextBoneMode,
     brush: mergeBrush(found, activeColor),
   };
   emit();
+}
+
+export function setDockLayout(layout: DockLayoutMode): void {
+  if (state.dockLayout === layout) return;
+  state = { ...state, dockLayout: layout };
+  try {
+    localStorage.setItem(DOCK_LAYOUT_KEY, layout);
+  } catch {}
+  emit();
+}
+
+export function setActiveSubToolGroup(group: string | null): void {
+  if (state.activeSubToolGroup === group) return;
+  state = { ...state, activeSubToolGroup: group };
+  emit();
+}
+
+export function getSubToolGroupsForTool(tool: ToolId): string[] {
+  const list = subTools.filter((s) => s.tool === tool);
+  const groups = new Set<string>();
+  for (const s of list) {
+    const g = s.group || getSubToolGroup(s);
+    if (g) groups.add(g);
+  }
+  return Array.from(groups);
+}
+
+export function reorderSubTools(
+  fromId: string,
+  targetId: string,
+  placement: 'before' | 'after' = 'before'
+): boolean {
+  if (fromId === targetId) return false;
+  const fromIdx = subTools.findIndex((s) => s.id === fromId);
+  const targetIdx = subTools.findIndex((s) => s.id === targetId);
+  if (fromIdx === -1 || targetIdx === -1) return false;
+
+  const item = subTools[fromIdx];
+  const targetItem = subTools[targetIdx];
+  if (targetItem.group && item.group !== targetItem.group) {
+    item.group = targetItem.group;
+  }
+
+  subTools.splice(fromIdx, 1);
+  const newTargetIdx = subTools.findIndex((s) => s.id === targetId);
+  const insertIdx = placement === 'after' ? newTargetIdx + 1 : newTargetIdx;
+  subTools.splice(insertIdx, 0, item);
+
+  persistSubTools();
+  emit();
+  return true;
+}
+
+export function renameSubTool(subToolId: string, newName: string): boolean {
+  const target = findSubTool(subToolId);
+  if (!target) return false;
+  const clean = newName.trim();
+  if (!clean || clean === target.name) return false;
+  target.name = clean;
+  persistSubTools();
+  emit();
+  return true;
 }
 
 export function setBoneToolMode(mode: BoneToolMode): void {

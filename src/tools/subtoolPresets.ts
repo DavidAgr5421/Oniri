@@ -4,6 +4,7 @@ export interface SubTool {
   id: string;
   name: string;
   tool: ToolId;
+  group?: string; // Tab/Category in Subtool palette (e.g. 'Plumilla', 'Marcador', 'Lápiz')
   description: string;
   settings: Partial<BrushSettings>;
   custom?: boolean;
@@ -1382,3 +1383,97 @@ export const SUBTOOLS: SubTool[] = [
     settings: {},
   },
 ];
+
+export const DEFAULT_SUBTOOL_GROUPS: Record<string, string> = {
+  // Pen
+  'g-pen': 'Plumilla',
+  'real-g-pen': 'Plumilla',
+  'maru-pen': 'Plumilla',
+  'turnip-pen': 'Plumilla',
+  'calligraphy-pen': 'Plumilla',
+  'textured-pen': 'Plumilla',
+  'gasa-pen': 'Plumilla',
+  'lazy-line-pen': 'Plumilla',
+  'rough-pen': 'Plumilla',
+  'sketch-pencil': 'Plumilla',
+
+  'millipen': 'Marcador',
+  'felt-pen': 'Marcador',
+  'flat-marker': 'Marcador',
+  'dot-pen': 'Marcador',
+  'brush-pen': 'Marcador',
+  'dry-ink': 'Marcador',
+
+  'csp-pencil': 'Lápiz',
+  'real-pencil': 'Lápiz',
+  'mechanical-pencil': 'Lápiz',
+  'charcoal-pencil': 'Lápiz',
+
+  // Brush
+  'watercolor': 'Acuarela',
+  'blend-brush': 'Acuarela',
+  'rough-round-brush': 'Acuarela',
+  'thick-paint': 'Pintura espesa',
+  'gouache-brush': 'Pintura espesa',
+  'flat-brush': 'Pintura espesa',
+  'lazy-brush': 'Pintura espesa',
+  'rough-dry-brush': 'Pintura espesa',
+  'airbrush': 'Aerógrafo',
+  'airbrush-highlight': 'Aerógrafo',
+
+  // Bucket
+  'bucket-reference': 'Rellenar',
+  'bucket-layer': 'Rellenar',
+  'bucket-all': 'Rellenar',
+  'bucket-below': 'Rellenar',
+  'bucket-enclose': 'Rodear y pintar',
+  'bucket-unfilled': 'Rodear y pintar',
+
+  // Select
+  'select-lasso': 'Selección',
+  'select-rect': 'Selección',
+  'select-ellipse': 'Selección',
+  'select-poly': 'Selección',
+
+  // Eraser
+  'hard-eraser': 'Borrador',
+  'soft-eraser': 'Borrador',
+  'kneaded-eraser': 'Borrador',
+
+  // Shape
+  'straight-line': 'Figura',
+  'rect': 'Figura',
+  'ellipse': 'Figura',
+
+  // Bone
+  'bone-rig': 'Esqueleto',
+  'bone-pose-fk': 'Esqueleto',
+  'bone-pose-ik': 'Esqueleto',
+
+  // Effect
+  'effect-sparkle': 'Decoración',
+  'effect-stardust': 'Decoración',
+  'effect-bokeh': 'Decoración',
+  'manga-hatching': 'Decoración',
+  'effect-lightning': 'Decoración',
+  'effect-rain-1': 'Decoración',
+  'effect-rain-2': 'Decoración',
+};
+
+export function getSubToolGroup(sub: SubTool): string {
+  if (sub.group) return sub.group;
+  if (DEFAULT_SUBTOOL_GROUPS[sub.id]) return DEFAULT_SUBTOOL_GROUPS[sub.id];
+  if (sub.tool === 'pen') return 'Plumilla';
+  if (sub.tool === 'brush') return 'Pincel';
+  if (sub.tool === 'eraser') return 'Borrador';
+  if (sub.tool === 'bucket') return 'Rellenar';
+  if (sub.tool === 'select') return 'Selección';
+  if (sub.tool === 'shape') return 'Figura';
+  if (sub.tool === 'bone') return 'Esqueleto';
+  if (sub.tool === 'effect') return 'Decoración';
+  return 'General';
+}
+
+SUBTOOLS.forEach((s) => {
+  if (!s.group) s.group = getSubToolGroup(s);
+});
