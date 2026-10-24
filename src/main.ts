@@ -413,7 +413,7 @@ function animate(): void {
 
   if (renderNeeded) {
     renderer.render(scene, camera);
-    renderNeeded = marchingAnts.isAnimating() || (timeline && timeline.settings.isPlaying);
+    renderNeeded = !!(timeline && timeline.settings.isPlaying);
   }
 }
 animate();

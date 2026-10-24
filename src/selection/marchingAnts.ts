@@ -110,9 +110,16 @@ export class MarchingAntsRenderer {
     // Advance dash offset roughly every ~40ms for classic smooth marching cadence
     if (this.lastTime === 0) this.lastTime = now;
     const elapsed = now - this.lastTime;
-    if (elapsed > 40) {
+    let cadenceAdvanced = false;
+    if (elapsed >= 40) {
       this.dashOffset = (this.dashOffset + 1) % 16;
       this.lastTime = now;
+      cadenceAdvanced = true;
+    }
+
+    // Skip redundant repaints and GPU uploads when nothing has changed between frames
+    if (!cadenceAdvanced && !this.boundaryDirty && !hasPreview && !isTransforming) {
+      return false;
     }
 
     if (this.boundaryDirty) {
