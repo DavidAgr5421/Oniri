@@ -43,6 +43,16 @@ export interface BrushEngine {
   onDocumentResize?: (w: number, h: number) => void;
   onCompositeUpdated?: () => void;
   compositeDirty: boolean;
+  /** Inking Live Stroke Plane (fast scratchpad for active stroke) */
+  liveStrokeCanvas: HTMLCanvasElement;
+  liveStrokeDirty: boolean;
+  isLivePainting: boolean;
+  useOverlayPlanes: boolean;
+  liveStrokeOpacity: number;
+  /** Top Layers Overlay Plane (layers above active layer during painting) */
+  topLayersCanvas: HTMLCanvasElement;
+  hasTopLayers: boolean;
+  topLayersDirty: boolean;
   setTimelineManager(tm: TimelineManager): void;
   getTimelineManager(): TimelineManager | null;
   beginStroke(x: number, y: number, pressure: number, isMouse?: boolean): void;
@@ -72,7 +82,7 @@ export interface BrushEngine {
   canUndo(): boolean;
   canRedo(): boolean;
   clearHistory(): void;
-  updateComposite(): void;
+  updateComposite(planesOnly?: boolean): void;
 }
 
 function clamp01(v: number): number {
@@ -311,6 +321,8 @@ export function createBrushEngine(): BrushEngine {
   const liveMaskCanvas = makeCanvas(curDocW, curDocH);
   const predictedCanvas = makeCanvas(curDocW, curDocH);
   const layerColorCanvas = makeCanvas(curDocW, curDocH);
+  const liveStrokeCanvas = makeCanvas(curDocW, curDocH);
+  const topLayersCanvas = makeCanvas(curDocW, curDocH);
 
   const strokeContext = strokeCanvas.getContext('2d')!;
   const compositeContext = compositeCanvas.getContext('2d')!;
@@ -321,6 +333,15 @@ export function createBrushEngine(): BrushEngine {
   const liveMaskContext = liveMaskCanvas.getContext('2d')!;
   const predictedContext = predictedCanvas.getContext('2d')!;
   const layerColorContext = layerColorCanvas.getContext('2d')!;
+  const liveStrokeContext = liveStrokeCanvas.getContext('2d')!;
+  const topLayersContext = topLayersCanvas.getContext('2d')!;
+
+  let isLivePainting = false;
+  let useOverlayPlanes = false;
+  let liveStrokeDirty = false;
+  let hasTopLayers = false;
+  let topLayersDirty = false;
+  let liveStrokeOpacity = 1.0;
   let hasPredictions = false;
   let strokeBoundsMinX = 0;
   let strokeBoundsMinY = 0;
@@ -615,6 +636,59 @@ export function createBrushEngine(): BrushEngine {
     distanceSinceStamp = since;
   }
 
+  function updateLiveInkingCanvas(): void {
+    if (!useOverlayPlanes) return;
+    const hasPaperTooth =
+      mode === 'paint' &&
+      !!(
+        strokeSettings.paperTexture &&
+        strokeSettings.paperTexture !== 'none' &&
+        (strokeSettings.textureDensity ?? 0) > 0
+      );
+
+    let lmX = 0, lmY = 0, lmW = curDocW, lmH = curDocH;
+    const hasBounds = strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY;
+    if (hasBounds) {
+      const pad = 12;
+      const minBX = Math.min(strokeBoundsMinX, predBoundsMaxX > predBoundsMinX ? predBoundsMinX : strokeBoundsMinX);
+      const minBY = Math.min(strokeBoundsMinY, predBoundsMaxY > predBoundsMinY ? predBoundsMinY : strokeBoundsMinY);
+      const maxBX = Math.max(strokeBoundsMaxX, predBoundsMaxX > predBoundsMinX ? predBoundsMaxX : strokeBoundsMaxX);
+      const maxBY = Math.max(strokeBoundsMaxY, predBoundsMaxY > predBoundsMinY ? predBoundsMaxY : strokeBoundsMaxY);
+      lmX = Math.max(0, minBX - pad);
+      lmY = Math.max(0, minBY - pad);
+      lmW = Math.min(curDocW, maxBX + pad) - lmX;
+      lmH = Math.min(curDocH, maxBY + pad) - lmY;
+    }
+
+    liveStrokeContext.clearRect(lmX, lmY, lmW, lmH);
+    liveStrokeContext.drawImage(strokeCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
+    if (hasPredictions) {
+      liveStrokeContext.drawImage(predictedCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
+    }
+    if (hasPaperTooth) {
+      const density = clamp01(strokeSettings.textureDensity ?? 0.85);
+      const scale = strokeSettings.textureScale ?? 0.35;
+      const texMode = strokeSettings.textureMode ?? 'height';
+      const texInvert = !!strokeSettings.textureInvert;
+      const pattern = getPaperGrainPattern(
+        liveStrokeContext,
+        strokeSettings.paperTexture!,
+        scale,
+        density,
+        texMode,
+        texInvert
+      );
+      if (pattern) {
+        liveStrokeContext.save();
+        liveStrokeContext.globalCompositeOperation = 'destination-in';
+        liveStrokeContext.fillStyle = pattern;
+        liveStrokeContext.fillRect(lmX, lmY, lmW, lmH);
+        liveStrokeContext.restore();
+      }
+    }
+    liveStrokeDirty = true;
+  }
+
   function renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void {
     if (!mode || mode === 'shape' || points.length === 0) return;
     const t0 = performance.now();
@@ -671,7 +745,11 @@ export function createBrushEngine(): BrushEngine {
     distanceSinceStamp = savedSince;
     strokeStampIndex = savedStampIdx;
     lastAngleRad = savedAngle;
-    engine.compositeDirty = true;
+    if (useOverlayPlanes) {
+      updateLiveInkingCanvas();
+    } else {
+      engine.compositeDirty = true;
+    }
     brushDiagnostics.recordPredictedStroke(performance.now() - t0);
   }
 
@@ -692,7 +770,11 @@ export function createBrushEngine(): BrushEngine {
       predBoundsMinY = 0;
       predBoundsMaxX = 0;
       predBoundsMaxY = 0;
-      engine.compositeDirty = true;
+      if (useOverlayPlanes) {
+        updateLiveInkingCanvas();
+      } else {
+        engine.compositeDirty = true;
+      }
     }
   }
 
@@ -826,7 +908,12 @@ export function createBrushEngine(): BrushEngine {
       preStrokeSnapshot = null;
       preStrokeRect = null;
     }
+    isLivePainting = false;
+    useOverlayPlanes = false;
+    hasTopLayers = false;
+    liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
     engine.compositeDirty = true;
+    updateComposite();
     mode = null;
     brushDiagnostics.endStroke();
   }
@@ -926,12 +1013,32 @@ export function createBrushEngine(): BrushEngine {
     ctx.restore();
   }
 
-  function updateComposite(): void {
+  function updateComposite(planesOnly = false): void {
     const t0 = performance.now();
-    compositeContext.clearRect(0, 0, curDocW, curDocH);
 
     const layerMap = new Map(layerManager.layers.map((l) => [l.id, l]));
     const activeDrawable = layerManager.getActiveDrawableLayer();
+
+    if (planesOnly) {
+      if (
+        mode !== 'paint' ||
+        activeDrawable.lockAlpha ||
+        activeDrawable.useLayerColor ||
+        selectionModel.hasSelection()
+      ) {
+        useOverlayPlanes = false;
+        isLivePainting = false;
+        hasTopLayers = false;
+        return;
+      }
+      useOverlayPlanes = true;
+      isLivePainting = true;
+      liveStrokeOpacity = Math.max(0, Math.min(1, activeDrawable.opacity * getToolState().brush.opacity));
+      liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
+      liveStrokeDirty = false;
+    }
+
+    compositeContext.clearRect(0, 0, curDocW, curDocH);
     const evaluatedBones =
       timelineManager && timelineManager.bones.length > 0
         ? timelineManager.getEvaluatedBones(timelineManager.settings.currentFrame)
@@ -994,7 +1101,8 @@ export function createBrushEngine(): BrushEngine {
       const boundBoneId = !layer.isPaper && evaluatedBones ? getEffectiveBoundBoneId(layer) : null;
       const boundBoneEval = boundBoneId && evaluatedBones ? evaluatedBones.get(boundBoneId) : undefined;
 
-      const isLivePainting = layer.id === activeDrawable.id && (mode === 'paint' || mode === 'shape');
+      const isLivePainting =
+        !useOverlayPlanes && layer.id === activeDrawable.id && (mode === 'paint' || mode === 'shape');
       let sourceCanvasToDraw = layer.canvas;
       let liveStrokeDrawnInTint = false;
 
@@ -1261,57 +1369,81 @@ export function createBrushEngine(): BrushEngine {
       return true;
     });
 
-    let i = 0;
-    while (i < visibleLayers.length) {
-      const baseLayer = visibleLayers[i];
-      const baseOpacity = getEffectiveOpacity(baseLayer, layerMap);
+    function renderLayerListTo(targetCtx: CanvasRenderingContext2D, list: LayerNode[]): void {
+      let i = 0;
+      while (i < list.length) {
+        const baseLayer = list[i];
+        const baseOpacity = getEffectiveOpacity(baseLayer, layerMap);
 
-      // Check for consecutive clipped layers above baseLayer
-      const clippedGroup: LayerNode[] = [];
-      let j = i + 1;
-      while (j < visibleLayers.length && visibleLayers[j].clipped) {
-        clippedGroup.push(visibleLayers[j]);
-        j++;
-      }
-
-      if (clippedGroup.length === 0) {
-        renderLayerTo(compositeContext, baseLayer, baseOpacity);
-        i++;
-      } else {
-        // Clipping Mask Cluster: Mask each clipped layer with baseLayer's alpha
-        groupContext.clearRect(0, 0, curDocW, curDocH);
-        renderLayerTo(groupContext, baseLayer, 1);
-
-        for (const clipped of clippedGroup) {
-          const clippedOpacity = getEffectiveOpacity(clipped, layerMap);
-
-          clipContext.clearRect(0, 0, curDocW, curDocH);
-          renderLayerTo(clipContext, clipped, clippedOpacity);
-
-          clipContext.save();
-          clipContext.globalCompositeOperation = 'destination-in';
-          clipContext.drawImage(baseLayer.canvas!, 0, 0);
-          clipContext.restore();
-
-          groupContext.save();
-          groupContext.globalCompositeOperation = clipped.blendMode;
-          groupContext.drawImage(clipCanvas, 0, 0);
-          groupContext.restore();
+        const clippedGroup: LayerNode[] = [];
+        let j = i + 1;
+        while (j < list.length && list[j].clipped) {
+          clippedGroup.push(list[j]);
+          j++;
         }
 
-        compositeContext.save();
-        compositeContext.globalAlpha = baseOpacity;
-        compositeContext.globalCompositeOperation = baseLayer.blendMode;
-        compositeContext.drawImage(groupCanvas, 0, 0);
-        compositeContext.restore();
+        if (clippedGroup.length === 0) {
+          renderLayerTo(targetCtx, baseLayer, baseOpacity);
+          i++;
+        } else {
+          groupContext.clearRect(0, 0, curDocW, curDocH);
+          renderLayerTo(groupContext, baseLayer, 1);
 
-        i = j;
+          for (const clipped of clippedGroup) {
+            const clippedOpacity = getEffectiveOpacity(clipped, layerMap);
+
+            clipContext.clearRect(0, 0, curDocW, curDocH);
+            renderLayerTo(clipContext, clipped, clippedOpacity);
+
+            clipContext.save();
+            clipContext.globalCompositeOperation = 'destination-in';
+            clipContext.drawImage(baseLayer.canvas!, 0, 0);
+            clipContext.restore();
+
+            groupContext.save();
+            groupContext.globalCompositeOperation = clipped.blendMode;
+            groupContext.drawImage(clipCanvas, 0, 0);
+            groupContext.restore();
+          }
+
+          targetCtx.save();
+          targetCtx.globalAlpha = baseOpacity;
+          targetCtx.globalCompositeOperation = baseLayer.blendMode;
+          targetCtx.drawImage(groupCanvas, 0, 0);
+          targetCtx.restore();
+
+          i = j;
+        }
       }
     }
 
-    // 4. Render 2D Bone Armature Gizmo Overlay (when enabled or when Bone Tool is active)
-    if (timelineManager && evaluatedBones && evaluatedBones.size > 0 && !timelineManager.settings.isPlaying) {
-      drawBonesOverlay(compositeContext, evaluatedBones, timelineManager.selectedBoneId);
+    if (planesOnly) {
+      const activeIdx = visibleLayers.findIndex((l) => l.id === activeDrawable.id);
+      const bottomLayers = activeIdx >= 0 ? visibleLayers.slice(0, activeIdx + 1) : visibleLayers;
+      renderLayerListTo(compositeContext, bottomLayers);
+
+      const topLayers =
+        activeIdx >= 0 && activeIdx < visibleLayers.length - 1 ? visibleLayers.slice(activeIdx + 1) : [];
+      if (topLayers.length > 0) {
+        hasTopLayers = true;
+        topLayersContext.clearRect(0, 0, curDocW, curDocH);
+        renderLayerListTo(topLayersContext, topLayers);
+        if (timelineManager && evaluatedBones && evaluatedBones.size > 0 && !timelineManager.settings.isPlaying) {
+          drawBonesOverlay(topLayersContext, evaluatedBones, timelineManager.selectedBoneId);
+        }
+        topLayersDirty = true;
+      } else {
+        hasTopLayers = false;
+        topLayersDirty = false;
+        if (timelineManager && evaluatedBones && evaluatedBones.size > 0 && !timelineManager.settings.isPlaying) {
+          drawBonesOverlay(compositeContext, evaluatedBones, timelineManager.selectedBoneId);
+        }
+      }
+    } else {
+      renderLayerListTo(compositeContext, visibleLayers);
+      if (timelineManager && evaluatedBones && evaluatedBones.size > 0 && !timelineManager.settings.isPlaying) {
+        drawBonesOverlay(compositeContext, evaluatedBones, timelineManager.selectedBoneId);
+      }
     }
 
     engine.compositeDirty = false;
@@ -1386,7 +1518,12 @@ export function createBrushEngine(): BrushEngine {
         firstTip,
       );
     }
-    engine.compositeDirty = true;
+    updateComposite(true);
+    if (useOverlayPlanes) {
+      updateLiveInkingCanvas();
+    } else {
+      engine.compositeDirty = true;
+    }
   }
 
   // Subscribe to layer changes to trigger composite update
@@ -1419,6 +1556,10 @@ export function createBrushEngine(): BrushEngine {
     predictedCanvas.height = h;
     layerColorCanvas.width = w;
     layerColorCanvas.height = h;
+    liveStrokeCanvas.width = w;
+    liveStrokeCanvas.height = h;
+    topLayersCanvas.width = w;
+    topLayersCanvas.height = h;
 
     selectionModel.resize(w, h);
 
@@ -1438,6 +1579,16 @@ export function createBrushEngine(): BrushEngine {
     strokeCanvas,
     compositeCanvas,
     compositeDirty: true,
+    liveStrokeCanvas,
+    get liveStrokeDirty() { return liveStrokeDirty; },
+    set liveStrokeDirty(v: boolean) { liveStrokeDirty = v; },
+    get isLivePainting() { return isLivePainting; },
+    get useOverlayPlanes() { return useOverlayPlanes; },
+    get liveStrokeOpacity() { return liveStrokeOpacity; },
+    topLayersCanvas,
+    get hasTopLayers() { return hasTopLayers; },
+    get topLayersDirty() { return topLayersDirty; },
+    set topLayersDirty(v: boolean) { topLayersDirty = v; },
     setTimelineManager(tm: TimelineManager) {
       timelineManager = tm;
       tm.subscribe(() => {
@@ -1475,7 +1626,11 @@ export function createBrushEngine(): BrushEngine {
       lastX = x;
       lastY = y;
       lastPressure = pressure;
-      engine.compositeDirty = true;
+      if (useOverlayPlanes) {
+        updateLiveInkingCanvas();
+      } else {
+        engine.compositeDirty = true;
+      }
     },
     beginErase(x, y, pressure, isMouse) {
       currentStrokeSpeed = 0;
@@ -1493,7 +1648,11 @@ export function createBrushEngine(): BrushEngine {
       lastX = x;
       lastY = y;
       lastPressure = pressure;
-      engine.compositeDirty = true;
+      if (useOverlayPlanes) {
+        updateLiveInkingCanvas();
+      } else {
+        engine.compositeDirty = true;
+      }
     },
     beginShape(x, y) {
       finishStroke();
@@ -1534,7 +1693,12 @@ export function createBrushEngine(): BrushEngine {
       mode = null;
       strokeTilt = null;
       currentStrokeSpeed = 0;
+      isLivePainting = false;
+      useOverlayPlanes = false;
+      hasTopLayers = false;
+      liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
       engine.compositeDirty = true;
+      updateComposite();
     },
     fill(x, y, colorHex, tolerance) {
       if (mode) finishStroke();

@@ -96,6 +96,40 @@ const canvasMat = new MeshBasicMaterial({ map: canvasTexture, side: DoubleSide }
 const canvasMesh = new Mesh(canvasGeo, canvasMat);
 scene.add(canvasMesh);
 
+// 2. In-Flight Live Inking Stroke Mesh (CSP-style ultra-fast GPU overlay quad)
+let liveStrokeTexture = new CanvasTexture(engine.liveStrokeCanvas);
+liveStrokeTexture.minFilter = LinearFilter;
+liveStrokeTexture.magFilter = LinearFilter;
+liveStrokeTexture.generateMipmaps = false;
+
+const liveStrokeMat = new MeshBasicMaterial({
+  map: liveStrokeTexture,
+  transparent: true,
+  depthTest: false,
+  side: DoubleSide,
+});
+const liveStrokeMesh = new Mesh(canvasGeo, liveStrokeMat);
+liveStrokeMesh.position.set(0, 0, 0.002);
+liveStrokeMesh.visible = false;
+scene.add(liveStrokeMesh);
+
+// 3. Top Layers Mesh (Layers above active layer during painting)
+let topLayersTexture = new CanvasTexture(engine.topLayersCanvas);
+topLayersTexture.minFilter = LinearFilter;
+topLayersTexture.magFilter = LinearFilter;
+topLayersTexture.generateMipmaps = false;
+
+const topLayersMat = new MeshBasicMaterial({
+  map: topLayersTexture,
+  transparent: true,
+  depthTest: false,
+  side: DoubleSide,
+});
+const topLayersMesh = new Mesh(canvasGeo, topLayersMat);
+topLayersMesh.position.set(0, 0, 0.004);
+topLayersMesh.visible = false;
+scene.add(topLayersMesh);
+
 // Selection Overlay (Marching Ants)
 let selectionTexture = new CanvasTexture(marchingAnts.overlayCanvas);
 selectionTexture.minFilter = LinearFilter;
@@ -109,7 +143,7 @@ const selectionMat = new MeshBasicMaterial({
   side: DoubleSide,
 });
 const selectionMesh = new Mesh(canvasGeo, selectionMat);
-selectionMesh.position.set(0, 0, 0.005);
+selectionMesh.position.set(0, 0, 0.006);
 scene.add(selectionMesh);
 
 // Camera Frame & Overscan Mask Overlay (Clip Studio Paint style)
@@ -125,14 +159,17 @@ const cameraFrameMat = new MeshBasicMaterial({
   side: DoubleSide,
 });
 const cameraFrameMesh = new Mesh(canvasGeo, cameraFrameMat);
-cameraFrameMesh.position.set(0, 0, 0.007);
+cameraFrameMesh.position.set(0, 0, 0.008);
 scene.add(cameraFrameMesh);
 
 // Initialize Viewport Navigation System (Pan, Zoom, 2D Rotation, Display Mirroring)
 viewportNav.init({
   camera,
   canvas,
-  meshes: [canvasMesh, borderMesh, selectionMesh, cameraFrameMesh],
+  meshes: [canvasMesh, borderMesh, liveStrokeMesh, topLayersMesh, selectionMesh, cameraFrameMesh],
+  onUpdate: () => {
+    requestRender();
+  },
 });
 
 // Mount CSP Navigator Palette
@@ -174,6 +211,8 @@ engine.onDocumentResize = (w: number, h: number) => {
   canvasMesh.geometry.dispose();
   const newCanvasGeo = new PlaneGeometry(planeW, planeH);
   canvasMesh.geometry = newCanvasGeo;
+  liveStrokeMesh.geometry = newCanvasGeo;
+  topLayersMesh.geometry = newCanvasGeo;
   selectionMesh.geometry = newCanvasGeo;
   cameraFrameMesh.geometry = newCanvasGeo;
 
@@ -207,11 +246,29 @@ engine.onDocumentResize = (w: number, h: number) => {
   cameraFrameMat.map = cameraFrameTexture;
   cameraFrameMat.needsUpdate = true;
 
+  liveStrokeTexture.dispose();
+  liveStrokeTexture = new CanvasTexture(engine.liveStrokeCanvas);
+  liveStrokeTexture.minFilter = LinearFilter;
+  liveStrokeTexture.magFilter = LinearFilter;
+  liveStrokeTexture.generateMipmaps = false;
+  liveStrokeMat.map = liveStrokeTexture;
+  liveStrokeMat.needsUpdate = true;
+
+  topLayersTexture.dispose();
+  topLayersTexture = new CanvasTexture(engine.topLayersCanvas);
+  topLayersTexture.minFilter = LinearFilter;
+  topLayersTexture.magFilter = LinearFilter;
+  topLayersTexture.generateMipmaps = false;
+  topLayersMat.map = topLayersTexture;
+  topLayersMat.needsUpdate = true;
+
   viewportNav.resetView();
+  requestRender();
 };
 
 engine.onCompositeUpdated = () => {
   canvasTexture.needsUpdate = true;
+  requestRender();
 };
 
 // Mount Top Command Bar (File, Save, Open, Export, Undo, Redo, Navigation, Drop listener)
@@ -263,26 +320,57 @@ if (timelineContainer) {
 // Mount CSP-style floating launchers (Selection Launcher + Transform Launcher)
 mountSelectionLauncher({ camera, canvas, engine });
 
-// Render Loop
+let renderNeeded = true;
+export function requestRender(): void {
+  renderNeeded = true;
+}
+
+// Render Loop (CSP-style Render-on-Demand + 2-Plane Inking Overlay)
 function animate(): void {
   requestAnimationFrame(animate);
 
-  if (engine.compositeDirty) {
-    engine.updateComposite();
-    canvasTexture.needsUpdate = true;
+  if (engine.isLivePainting && engine.useOverlayPlanes) {
+    if (engine.topLayersDirty) {
+      topLayersTexture.needsUpdate = true;
+      engine.topLayersDirty = false;
+      renderNeeded = true;
+    }
+    topLayersMesh.visible = engine.hasTopLayers;
+    liveStrokeMesh.visible = true;
+    liveStrokeMat.opacity = engine.liveStrokeOpacity;
+
+    if (engine.liveStrokeDirty) {
+      liveStrokeTexture.needsUpdate = true;
+      engine.liveStrokeDirty = false;
+      renderNeeded = true;
+    }
+  } else {
+    liveStrokeMesh.visible = false;
+    topLayersMesh.visible = false;
+
+    if (engine.compositeDirty) {
+      engine.updateComposite();
+      canvasTexture.needsUpdate = true;
+      renderNeeded = true;
+    }
   }
 
   const antsDirty = marchingAnts.render();
   if (antsDirty) {
     selectionTexture.needsUpdate = true;
+    renderNeeded = true;
   }
 
   const frameDirty = cameraFrameOverlay.render();
   if (frameDirty) {
     cameraFrameTexture.needsUpdate = true;
+    renderNeeded = true;
   }
 
-  renderer.render(scene, camera);
+  if (renderNeeded) {
+    renderer.render(scene, camera);
+    renderNeeded = marchingAnts.isAnimating() || (timeline && timeline.settings.isPlaying);
+  }
 }
 animate();
 

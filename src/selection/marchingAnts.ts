@@ -85,6 +85,10 @@ export class MarchingAntsRenderer {
     this.boundaryCtx.restore();
   }
 
+  public isAnimating(): boolean {
+    return selectionModel.hasSelection() || this.activeDragPreview !== null || transformManager.isTransforming();
+  }
+
   /**
    * Advances the animation of the marching ants and repaints the overlay canvas.
    * Returns true if the overlay canvas was updated and needs a texture sync.
