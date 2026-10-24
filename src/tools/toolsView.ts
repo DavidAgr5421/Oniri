@@ -1260,15 +1260,37 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     <span class="prop-label">Cerrar hueco (Close Gap)</span>
     <span class="prop-value" id="gap-val">2 px</span>
   `;
+  const closeGapSteps = [
+    { val: 0, label: 'Off' },
+    { val: 1, label: '1' },
+    { val: 3, label: '3' },
+    { val: 5, label: '5' },
+    { val: 10, label: '10' },
+    { val: 20, label: '20' },
+  ];
+  const closeGapBtnRow = document.createElement('div');
+  closeGapBtnRow.className = 'csp-quick-size-row';
+  const closeGapBtns: HTMLButtonElement[] = [];
+  for (const step of closeGapSteps) {
+    const btn = document.createElement('button');
+    btn.className = 'csp-quick-size-btn';
+    btn.textContent = step.label;
+    btn.title = step.val === 0 ? 'Sin cierre de brechas' : `Cerrar brechas de hasta ${step.val} px`;
+    btn.addEventListener('click', () => {
+      setBrushSettings({ closeGap: step.val });
+    });
+    closeGapBtnRow.appendChild(btn);
+    closeGapBtns.push(btn);
+  }
   const closeGapSlider = document.createElement('input');
   closeGapSlider.type = 'range';
   closeGapSlider.className = 'csp-slider';
   closeGapSlider.min = '0';
-  closeGapSlider.max = '10';
+  closeGapSlider.max = '20';
   closeGapSlider.addEventListener('input', () => {
     setBrushSettings({ closeGap: Number(closeGapSlider.value) });
   });
-  closeGapBox.append(closeGapHeader, closeGapSlider);
+  closeGapBox.append(closeGapHeader, closeGapSlider, closeGapBtnRow);
   propBody.appendChild(closeGapBox);
 
   // Bucket: Escalado de Área (Area Scaling / Expand under lineart)
@@ -1277,13 +1299,13 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const areaScaleHeader = document.createElement('div');
   areaScaleHeader.className = 'prop-row-header';
   areaScaleHeader.innerHTML = `
-    <span class="prop-label">Escalado de área (Expandir)</span>
-    <span class="prop-value" id="scale-val">2 px</span>
+    <span class="prop-label">Escalado de área (Expandir / Contraer)</span>
+    <span class="prop-value" id="scale-val">+2 px</span>
   `;
   const areaScaleSlider = document.createElement('input');
   areaScaleSlider.type = 'range';
   areaScaleSlider.className = 'csp-slider';
-  areaScaleSlider.min = '0';
+  areaScaleSlider.min = '-10';
   areaScaleSlider.max = '10';
   areaScaleSlider.addEventListener('input', () => {
     setBrushSettings({ areaScaling: Number(areaScaleSlider.value) });
@@ -1301,12 +1323,13 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
   const referSegGroup = document.createElement('div');
   referSegGroup.className = 'csp-seg-group';
-  const referModes: { id: 'reference' | 'all' | 'editing'; label: string }[] = [
+  const referModes: { id: 'reference' | 'all' | 'editing' | 'below'; label: string }[] = [
     { id: 'reference', label: 'Faro (Ref)' },
     { id: 'all', label: 'Todas' },
     { id: 'editing', label: 'Editada' },
+    { id: 'below', label: 'Inferior' },
   ];
-  const referBtns = new Map<'reference' | 'all' | 'editing', HTMLButtonElement>();
+  const referBtns = new Map<'reference' | 'all' | 'editing' | 'below', HTMLButtonElement>();
   for (const rm of referModes) {
     const rbtn = document.createElement('button');
     rbtn.className = 'csp-seg-btn';
@@ -1720,9 +1743,11 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
     previewBox.style.display = isInkTool ? 'block' : 'none';
 
+    const isUnfilledBucket = state.tool === 'bucket' && state.activeSubToolId === 'bucket-unfilled';
+
     for (const [propKey, boxEl] of inkPropertyBoxes) {
-      if (isInkTool) {
-        const isPinned = state.visibleProperties.includes(propKey);
+      if (isInkTool || (isUnfilledBucket && propKey === 'size')) {
+        const isPinned = isUnfilledBucket && propKey === 'size' ? true : state.visibleProperties.includes(propKey);
         boxEl.style.display = isPinned ? 'block' : 'none';
       } else {
         boxEl.style.display = 'none';
@@ -1890,14 +1915,21 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     if (tolValNode) tolValNode.textContent = `${Math.round(state.brush.tolerance)}%`;
 
     closeGapBox.style.display = isBucket ? 'block' : 'none';
-    closeGapSlider.value = String(state.brush.closeGap ?? 0);
+    const curGap = state.brush.closeGap ?? 0;
+    closeGapSlider.value = String(curGap);
     const gapValNode = propBody.querySelector('#gap-val');
-    if (gapValNode) gapValNode.textContent = `${state.brush.closeGap ?? 0} px`;
+    if (gapValNode) gapValNode.textContent = curGap === 0 ? 'Desactivado' : `${curGap} px`;
+    closeGapBtns.forEach((btn, idx) => {
+      btn.classList.toggle('active', closeGapSteps[idx].val === curGap);
+    });
 
     areaScaleBox.style.display = isBucket ? 'block' : 'none';
-    areaScaleSlider.value = String(state.brush.areaScaling ?? 0);
+    const curScale = state.brush.areaScaling ?? 0;
+    areaScaleSlider.value = String(curScale);
     const scaleValNode = propBody.querySelector('#scale-val');
-    if (scaleValNode) scaleValNode.textContent = `${state.brush.areaScaling ?? 0} px`;
+    if (scaleValNode) {
+      scaleValNode.textContent = curScale > 0 ? `+${curScale} px` : `${curScale} px`;
+    }
 
     referBox.style.display = isBucket ? 'block' : 'none';
     const currentReferMode = state.brush.referMode ?? 'reference';

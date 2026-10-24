@@ -6,8 +6,8 @@ export interface SmartFillConfig {
   fillColorHex: string;
   tolerance: number; // 0 to 100
   closeGap: number; // 0 = off, 1 to 20 px
-  areaScaling: number; // 0 to 10 px
-  referMode: 'editing' | 'reference' | 'all';
+  areaScaling: number; // -10 to 10 px
+  referMode: 'editing' | 'reference' | 'all' | 'below';
   activeLayer: LayerNode;
   allLayers: LayerNode[];
   selectionMaskCanvas?: HTMLCanvasElement | null;
@@ -19,7 +19,7 @@ export interface SmartFillConfig {
  * High-performance morphological dilation using separable 2-pass horizontal & vertical
  * sliding window (O(N) time complexity).
  */
-function dilateBinaryMask(src: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+export function dilateBinaryMask(src: Uint8Array, w: number, h: number, radius: number): Uint8Array {
   if (radius <= 0) return src;
   const rad = Math.min(25, Math.max(1, Math.round(radius)));
   const total = w * h;
@@ -84,6 +84,24 @@ function dilateBinaryMask(src: Uint8Array, w: number, h: number, radius: number)
   return dst;
 }
 
+/**
+ * Morphological erosion using duality: Erosion(M) = 1 - Dilation(1 - M) in O(N).
+ */
+export function erodeBinaryMask(src: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius <= 0) return src;
+  const total = w * h;
+  const comp = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    comp[i] = src[i] === 0 ? 1 : 0;
+  }
+  const dilatedComp = dilateBinaryMask(comp, w, h, radius);
+  const dst = new Uint8Array(total);
+  for (let i = 0; i < total; i++) {
+    dst[i] = dilatedComp[i] === 0 ? 1 : 0;
+  }
+  return dst;
+}
+
 /** Parse hex '#rrggbb' to [r, g, b, 255] */
 function hexToRgba(hex: string): [number, number, number, number] {
   let c = hex.replace('#', '').trim();
@@ -98,9 +116,9 @@ function hexToRgba(hex: string): [number, number, number, number] {
 
 /**
  * Intelligent Flood Fill implementing Clip Studio Paint's core algorithms:
- * 1. Reference Layer boundary isolation.
- * 2. Morphological Close Gap (seals lines with small openings).
- * 3. Area Scaling (expands color under anti-aliased lineart, removing white halos).
+ * 1. Reference Layer boundary isolation (editing, reference lighthouse, all, or below).
+ * 2. Morphological Close Gap (seals lines with small openings without leaving unfilled margins).
+ * 3. Area Scaling (expands color under anti-aliased lineart, removing white halos, or contracts if negative).
  */
 export function executeSmartFill(config: SmartFillConfig): boolean {
   const {
@@ -146,7 +164,6 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
       }
       boundaryData = tCtx.getImageData(0, 0, docW, docH).data;
     } else {
-      // Fallback to active layer if no reference layer is assigned
       boundaryData = targetCtx.getImageData(0, 0, docW, docH).data;
     }
   } else if (referMode === 'all') {
@@ -162,6 +179,28 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
       }
     }
     boundaryData = tCtx.getImageData(0, 0, docW, docH).data;
+  } else if (referMode === 'below') {
+    const activeIdx = allLayers.findIndex((l) => l.id === activeLayer.id);
+    let belowLayer: LayerNode | undefined;
+    for (let i = activeIdx - 1; i >= 0; i--) {
+      const candidate = allLayers[i];
+      if (candidate.visible && candidate.canvas && !candidate.isPaper) {
+        belowLayer = candidate;
+        break;
+      }
+    }
+    if (belowLayer && belowLayer.canvas) {
+      isMultiLayerBoundary = true;
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = docW;
+      tempCanvas.height = docH;
+      const tCtx = tempCanvas.getContext('2d')!;
+      tCtx.globalAlpha = belowLayer.opacity;
+      tCtx.drawImage(belowLayer.canvas, 0, 0);
+      boundaryData = tCtx.getImageData(0, 0, docW, docH).data;
+    } else {
+      boundaryData = targetCtx.getImageData(0, 0, docW, docH).data;
+    }
   } else {
     // Mode 'editing' (only active layer)
     boundaryData = targetCtx.getImageData(0, 0, docW, docH).data;
@@ -186,21 +225,17 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
   }
 
   // 3. Build Obstacle / Boundary Mask
-  // When referencing lineart layers: pixels with significant ink (alpha > tolerance) are obstacles
   const obstacleMask = new Uint8Array(totalPixels);
   const tolSq = ((Math.max(1, tolerance) / 100) * 255) ** 2 * 3;
 
   if (isMultiLayerBoundary) {
-    // If seed was on an empty transparent pixel (the typical coloring workflow)
     const isSeedEmpty = seedA < 20;
     for (let i = 0; i < totalPixels; i++) {
       const p = i * 4;
       const a = boundaryData[p + 3];
       if (isSeedEmpty) {
-        // Lineart is an obstacle if it has opacity > 40
         if (a > 30) obstacleMask[i] = 1;
       } else {
-        // Seed is on a colored region: match color difference
         const dr = boundaryData[p] - seedR;
         const dg = boundaryData[p + 1] - seedG;
         const db = boundaryData[p + 2] - seedB;
@@ -211,7 +246,6 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
       }
     }
   } else {
-    // Single layer fill: obstacle if color distance exceeds tolerance
     for (let i = 0; i < totalPixels; i++) {
       const p = i * 4;
       const dr = boundaryData[p] - seedR;
@@ -231,10 +265,36 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
 
   // 4. Close Gap: Morphological Dilation of Obstacles
   // Bridges small line openings so paint does not leak outside
-  const effectiveObstacles = closeGap > 0 ? dilateBinaryMask(obstacleMask, docW, docH, closeGap) : obstacleMask;
+  let obstaclesForFlood: Uint8Array = obstacleMask;
+  const bridgeMask = new Uint8Array(totalPixels);
 
-  // If dilation accidentally covered the seed point, fall back to undilated
-  const obstaclesForFlood = effectiveObstacles[seedIdx] === 1 ? obstacleMask : effectiveObstacles;
+  if (closeGap > 0) {
+    const dilated = dilateBinaryMask(obstacleMask, docW, docH, closeGap);
+    for (let i = 0; i < totalPixels; i++) {
+      if (dilated[i] === 1 && obstacleMask[i] === 0) {
+        bridgeMask[i] = 1;
+      }
+    }
+    obstaclesForFlood = new Uint8Array(dilated);
+
+    // If seed was near a line and caught by dilated obstacle zone, free local seed neighborhood
+    if (obstaclesForFlood[seedIdx] === 1) {
+      const rad = Math.min(3, closeGap);
+      for (let dy = -rad; dy <= rad; dy++) {
+        const py = seedY + dy;
+        if (py < 0 || py >= docH) continue;
+        for (let dx = -rad; dx <= rad; dx++) {
+          const px = seedX + dx;
+          if (px < 0 || px >= docW) continue;
+          const pIdx = py * docW + px;
+          if (obstacleMask[pIdx] === 0) {
+            obstaclesForFlood[pIdx] = 0;
+            bridgeMask[pIdx] = 0;
+          }
+        }
+      }
+    }
+  }
 
   // 5. Scanline Flood Fill on bounded grid
   const visited = new Uint8Array(totalPixels);
@@ -259,7 +319,6 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
     for (let x = left; x <= right; x++) {
       const idx = lineY + x;
       visited[idx] = 1;
-      // Do not fill over the original un-dilated lineart
       if (obstacleMask[idx] === 0) {
         rawFillMask[idx] = 1;
       }
@@ -285,9 +344,25 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
     }
   }
 
-  // 6. Area Scaling: Expand fill mask outward to tuck underneath lineart
-  // This eliminates the anti-aliased white fringe/halo
-  const finalFillMask = areaScaling > 0 ? dilateBinaryMask(rawFillMask, docW, docH, areaScaling) : rawFillMask;
+  // Expand fill up to true obstacle border, strictly halted by closed gap bridges
+  if (closeGap > 0) {
+    const expanded = dilateBinaryMask(rawFillMask, docW, docH, closeGap);
+    for (let i = 0; i < totalPixels; i++) {
+      if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
+        rawFillMask[i] = 1;
+      }
+    }
+  }
+
+  // 6. Area Scaling: Expand outward to tuck under lineart (+), or shrink inward (-)
+  let finalFillMask: Uint8Array;
+  if (areaScaling > 0) {
+    finalFillMask = dilateBinaryMask(rawFillMask, docW, docH, areaScaling);
+  } else if (areaScaling < 0) {
+    finalFillMask = erodeBinaryMask(rawFillMask, docW, docH, Math.abs(areaScaling));
+  } else {
+    finalFillMask = rawFillMask;
+  }
 
   // 7. Apply Selection Mask if active
   let selectionData: Uint8ClampedArray | null = null;
@@ -329,7 +404,7 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
  * Helper to render reference/boundary layers for a bounding box region [rx, ry, rw, rh].
  */
 function getBoundaryDataForRect(
-  referMode: 'editing' | 'reference' | 'all',
+  referMode: 'editing' | 'reference' | 'all' | 'below',
   activeLayer: LayerNode,
   allLayers: LayerNode[],
   rx: number,
@@ -359,6 +434,23 @@ function getBoundaryDataForRect(
         tCtx.drawImage(l.canvas, 0, 0);
       }
     }
+  } else if (referMode === 'below') {
+    const activeIdx = allLayers.findIndex((l) => l.id === activeLayer.id);
+    let belowLayer: LayerNode | undefined;
+    for (let i = activeIdx - 1; i >= 0; i--) {
+      const cand = allLayers[i];
+      if (cand.visible && cand.canvas && !cand.isPaper) {
+        belowLayer = cand;
+        break;
+      }
+    }
+    const toDraw = belowLayer ? [belowLayer] : [activeLayer];
+    for (const bl of toDraw) {
+      if (bl.canvas) {
+        tCtx.globalAlpha = bl.opacity;
+        tCtx.drawImage(bl.canvas, 0, 0);
+      }
+    }
   } else {
     if (activeLayer.canvas) {
       tCtx.drawImage(activeLayer.canvas, 0, 0);
@@ -374,7 +466,7 @@ export interface EncloseAndFillConfig {
   tolerance: number;
   closeGap: number;
   areaScaling: number;
-  referMode: 'editing' | 'reference' | 'all';
+  referMode: 'editing' | 'reference' | 'all' | 'below';
   activeLayer: LayerNode;
   allLayers: LayerNode[];
   selectionMaskCanvas?: HTMLCanvasElement | null;
@@ -447,7 +539,17 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   }
 
   // 4. Close Gaps (morphological dilation of obstacles)
-  const effectiveObstacles = closeGap > 0 ? dilateBinaryMask(obstacleMask, rw, rh, closeGap) : obstacleMask;
+  let effectiveObstacles: Uint8Array = obstacleMask;
+  const bridgeMask = new Uint8Array(total);
+  if (closeGap > 0) {
+    const dilated = dilateBinaryMask(obstacleMask, rw, rh, closeGap);
+    for (let i = 0; i < total; i++) {
+      if (dilated[i] === 1 && obstacleMask[i] === 0) {
+        bridgeMask[i] = 1;
+      }
+    }
+    effectiveObstacles = dilated;
+  }
 
   // 5. Exterior flood fill: start from all outer edges of the bounding box
   const outsideVisited = new Uint8Array(total);
@@ -517,7 +619,7 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   // 6. Identify enclosed interior regions (Inside lasso, NOT outside, NOT lineart)
   const targetImg = activeLayer.context.getImageData(rx, ry, rw, rh);
   const targetData = targetImg.data;
-  const fillMask = new Uint8Array(total);
+  const rawFillMask = new Uint8Array(total);
 
   let filledCount = 0;
   for (let i = 0; i < total; i++) {
@@ -526,9 +628,8 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
     const isInkLine = obstacleMask[i] === 1;
 
     if (isInsideLasso && !isOutsideDrawing && !isInkLine) {
-      // Only fill unpainted or transparent pixels (CSP CloseFillReferColorType = 7)
       if (targetData[i * 4 + 3] < 60) {
-        fillMask[i] = 1;
+        rawFillMask[i] = 1;
         filledCount++;
       }
     }
@@ -538,8 +639,26 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
     return false;
   }
 
-  // 7. Area Scaling (expand to tuck underneath lineart)
-  const finalFillMask = areaScaling > 0 ? dilateBinaryMask(fillMask, rw, rh, areaScaling) : fillMask;
+  // Expand fill up to true obstacle border, strictly halted by closed gap bridges
+  if (closeGap > 0) {
+    const expanded = dilateBinaryMask(rawFillMask, rw, rh, closeGap);
+    for (let i = 0; i < total; i++) {
+      if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
+        rawFillMask[i] = 1;
+      }
+    }
+  }
+
+  // 7. Area Scaling (expand to tuck underneath lineart or shrink inward)
+  let finalFillMask: Uint8Array;
+  if (areaScaling > 0) {
+    finalFillMask = dilateBinaryMask(rawFillMask, rw, rh, areaScaling);
+  } else if (areaScaling < 0) {
+    finalFillMask = erodeBinaryMask(rawFillMask, rw, rh, Math.abs(areaScaling));
+  } else {
+    finalFillMask = rawFillMask;
+  }
+
   const [fillR, fillG, fillB, fillA] = hexToRgba(fillColorHex);
 
   // Optional Selection Mask clipping
@@ -580,7 +699,7 @@ export interface PaintUnfilledAreaConfig {
   tolerance: number;
   closeGap: number;
   areaScaling: number;
-  referMode: 'editing' | 'reference' | 'all';
+  referMode: 'editing' | 'reference' | 'all' | 'below';
   activeLayer: LayerNode;
   allLayers: LayerNode[];
   selectionMaskCanvas?: HTMLCanvasElement | null;
@@ -659,15 +778,26 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
     if (boundaryData[i * 4 + 3] > 30) obstacleMask[i] = 1;
   }
 
+  // Gap Closing bridges
+  const bridgeMask = new Uint8Array(total);
+  if (closeGap > 0) {
+    const dilated = dilateBinaryMask(obstacleMask, rw, rh, closeGap);
+    for (let i = 0; i < total; i++) {
+      if (dilated[i] === 1 && obstacleMask[i] === 0) {
+        bridgeMask[i] = 1;
+      }
+    }
+  }
+
   const targetImg = activeLayer.context.getImageData(rx, ry, rw, rh);
   const targetData = targetImg.data;
-  const fillMask = new Uint8Array(total);
+  const rawFillMask = new Uint8Array(total);
 
   let filledCount = 0;
   for (let i = 0; i < total; i++) {
     if (strokeData[i * 4 + 3] > 64 && obstacleMask[i] === 0) {
       if (targetData[i * 4 + 3] < 60) {
-        fillMask[i] = 1;
+        rawFillMask[i] = 1;
         filledCount++;
       }
     }
@@ -677,7 +807,25 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
     return false;
   }
 
-  const finalMask = areaScaling > 0 ? dilateBinaryMask(fillMask, rw, rh, areaScaling) : fillMask;
+  // Expand fill up to true obstacle border, halted by closed gap bridges
+  if (closeGap > 0) {
+    const expanded = dilateBinaryMask(rawFillMask, rw, rh, closeGap);
+    for (let i = 0; i < total; i++) {
+      if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
+        rawFillMask[i] = 1;
+      }
+    }
+  }
+
+  let finalMask: Uint8Array;
+  if (areaScaling > 0) {
+    finalMask = dilateBinaryMask(rawFillMask, rw, rh, areaScaling);
+  } else if (areaScaling < 0) {
+    finalMask = erodeBinaryMask(rawFillMask, rw, rh, Math.abs(areaScaling));
+  } else {
+    finalMask = rawFillMask;
+  }
+
   const [fillR, fillG, fillB, fillA] = hexToRgba(fillColorHex);
 
   let selectionData: Uint8ClampedArray | null = null;

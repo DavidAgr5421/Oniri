@@ -1289,6 +1289,18 @@ export const SUBTOOLS: SubTool[] = [
       referMode: 'all',
     },
   },
+  {
+    id: 'bucket-below',
+    name: 'Referir a Capa Inferior',
+    tool: 'bucket',
+    description: 'Toma como borde el lineart de la capa visible inmediatamente inferior.',
+    settings: {
+      tolerance: 25,
+      closeGap: 2,
+      areaScaling: 1,
+      referMode: 'below',
+    },
+  },
 
   // Eyedropper (I)
   {

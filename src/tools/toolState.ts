@@ -110,7 +110,7 @@ export interface BrushSettings {
   subColorMix?: boolean;
   closeGap?: number;
   areaScaling?: number;
-  referMode?: 'editing' | 'reference' | 'all';
+  referMode?: 'editing' | 'reference' | 'all' | 'below';
   velocitySize?: boolean;
   velocityMinRatio?: number;
   velocityCurve?: number;
@@ -143,7 +143,11 @@ export type BrushPropKey =
   | 'spray'
   | 'sprayRadius'
   | 'sprayDensity'
-  | 'compositeMode';
+  | 'compositeMode'
+  | 'tolerance'
+  | 'closeGap'
+  | 'areaScaling'
+  | 'referMode';
 
 export {
   type ColorSet,

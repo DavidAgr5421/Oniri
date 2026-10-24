@@ -91,20 +91,41 @@ export function openSubToolDetailModal(subTool: SubTool): void {
   const contentCol = document.createElement('div');
   contentCol.className = 'csp-subtool-detail-content';
 
-  type CatId = 'size' | 'ink' | 'smooth' | 'tip' | 'texture' | 'spray' | 'stroke' | 'taper' | 'correction';
-  const categories: { id: CatId; label: string }[] = [
-    { id: 'size', label: 'Tamaño del pincel' },
-    { id: 'ink', label: 'Tinta' },
-    { id: 'smooth', label: 'Suavizado' },
-    { id: 'tip', label: 'Punta del pincel' },
-    { id: 'texture', label: 'Textura del papel' },
-    { id: 'spray', label: 'Dispersión y Efecto (Spray)' },
-    { id: 'stroke', label: 'Trazo' },
-    { id: 'taper', label: 'Inicio y fin' },
-    { id: 'correction', label: 'Corrección' },
-  ];
+  type CatId =
+    | 'size'
+    | 'ink'
+    | 'smooth'
+    | 'tip'
+    | 'texture'
+    | 'spray'
+    | 'stroke'
+    | 'taper'
+    | 'correction'
+    | 'fill_ref'
+    | 'fill_gap'
+    | 'fill_scale';
 
-  let activeCat: CatId = 'size';
+  const isBucket = subTool.tool === 'bucket';
+  const categories: { id: CatId; label: string }[] = isBucket
+    ? [
+        ...(subTool.id === 'bucket-unfilled' ? [{ id: 'size' as CatId, label: 'Tamaño del pincel' }] : []),
+        { id: 'fill_ref', label: 'Referencia y Tolerancia' },
+        { id: 'fill_gap', label: 'Cerrar hueco (Close Gap)' },
+        { id: 'fill_scale', label: 'Escalado de área (Area Scaling)' },
+      ]
+    : [
+        { id: 'size', label: 'Tamaño del pincel' },
+        { id: 'ink', label: 'Tinta' },
+        { id: 'smooth', label: 'Suavizado' },
+        { id: 'tip', label: 'Punta del pincel' },
+        { id: 'texture', label: 'Textura del papel' },
+        { id: 'spray', label: 'Dispersión y Efecto (Spray)' },
+        { id: 'stroke', label: 'Trazo' },
+        { id: 'taper', label: 'Inicio y fin' },
+        { id: 'correction', label: 'Corrección' },
+      ];
+
+  let activeCat: CatId = isBucket ? (subTool.id === 'bucket-unfilled' ? 'size' : 'fill_ref') : 'size';
   const catButtons = new Map<CatId, HTMLButtonElement>();
 
   function makeEyeButton(propKey: BrushPropKey): HTMLButtonElement {
@@ -896,6 +917,154 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       main1.append(slider1, header2, slider2);
       row1.append(eye1, main1);
       contentCol.appendChild(row1);
+    } else if (cat === 'fill_ref') {
+      // Row 1: Color Tolerance
+      const row1 = document.createElement('div');
+      row1.className = 'csp-detail-prop-row';
+      const eye1 = makeEyeButton('tolerance');
+      const main1 = document.createElement('div');
+      main1.className = 'csp-detail-prop-main';
+      main1.innerHTML = `
+        <div class="prop-row-header">
+          <span class="prop-label">Tolerancia de color</span>
+          <span class="prop-value" id="dt-tol-val">${Math.round(b.tolerance)}%</span>
+        </div>
+      `;
+      const slider1 = document.createElement('input');
+      slider1.type = 'range';
+      slider1.className = 'csp-slider';
+      slider1.min = '0';
+      slider1.max = '100';
+      slider1.value = String(Math.round(b.tolerance));
+      slider1.addEventListener('input', () => {
+        setBrushSettings({ tolerance: Number(slider1.value) });
+        const val = main1.querySelector('#dt-tol-val');
+        if (val) val.textContent = `${slider1.value}%`;
+      });
+      main1.appendChild(slider1);
+      row1.append(eye1, main1);
+      contentCol.appendChild(row1);
+
+      // Row 2: Refer Mode
+      const row2 = document.createElement('div');
+      row2.className = 'csp-detail-prop-row';
+      const eye2 = makeEyeButton('referMode');
+      const main2 = document.createElement('div');
+      main2.className = 'csp-detail-prop-main';
+      main2.innerHTML = `
+        <div class="prop-row-header">
+          <span class="prop-label">Referencia múltiple (Capas)</span>
+        </div>
+      `;
+      const segGroup = document.createElement('div');
+      segGroup.className = 'csp-seg-group';
+      const modes: { id: 'reference' | 'all' | 'editing' | 'below'; label: string }[] = [
+        { id: 'reference', label: 'Faro (Ref)' },
+        { id: 'all', label: 'Todas' },
+        { id: 'editing', label: 'Editada' },
+        { id: 'below', label: 'Inferior' },
+      ];
+      const curMode = b.referMode ?? 'reference';
+      for (const m of modes) {
+        const btn = document.createElement('button');
+        btn.className = `csp-seg-btn${curMode === m.id ? ' active' : ''}`;
+        btn.textContent = m.label;
+        btn.addEventListener('click', () => {
+          setBrushSettings({ referMode: m.id });
+          segGroup.querySelectorAll('.csp-seg-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+        segGroup.appendChild(btn);
+      }
+      main2.appendChild(segGroup);
+      row2.append(eye2, main2);
+      contentCol.appendChild(row2);
+    } else if (cat === 'fill_gap') {
+      const row1 = document.createElement('div');
+      row1.className = 'csp-detail-prop-row';
+      const eye1 = makeEyeButton('closeGap');
+      const main1 = document.createElement('div');
+      main1.className = 'csp-detail-prop-main';
+      const curGap = b.closeGap ?? 0;
+      main1.innerHTML = `
+        <div class="prop-row-header">
+          <span class="prop-label">Cerrar hueco (Close Gap)</span>
+          <span class="prop-value" id="dt-gap-val">${curGap === 0 ? 'Desactivado' : `${curGap} px`}</span>
+        </div>
+      `;
+      const slider1 = document.createElement('input');
+      slider1.type = 'range';
+      slider1.className = 'csp-slider';
+      slider1.min = '0';
+      slider1.max = '20';
+      slider1.value = String(curGap);
+
+      const gapSteps = [
+        { val: 0, label: 'Off' },
+        { val: 1, label: '1' },
+        { val: 3, label: '3' },
+        { val: 5, label: '5' },
+        { val: 10, label: '10' },
+        { val: 20, label: '20' },
+      ];
+      const btnRow = document.createElement('div');
+      btnRow.className = 'csp-quick-size-row';
+      for (const step of gapSteps) {
+        const qbtn = document.createElement('button');
+        qbtn.className = `csp-quick-size-btn${curGap === step.val ? ' active' : ''}`;
+        qbtn.textContent = step.label;
+        qbtn.addEventListener('click', () => {
+          setBrushSettings({ closeGap: step.val });
+          slider1.value = String(step.val);
+          const val = main1.querySelector('#dt-gap-val');
+          if (val) val.textContent = step.val === 0 ? 'Desactivado' : `${step.val} px`;
+          btnRow.querySelectorAll('.csp-quick-size-btn').forEach((b) => b.classList.remove('active'));
+          qbtn.classList.add('active');
+        });
+        btnRow.appendChild(qbtn);
+      }
+
+      slider1.addEventListener('input', () => {
+        const num = Number(slider1.value);
+        setBrushSettings({ closeGap: num });
+        const val = main1.querySelector('#dt-gap-val');
+        if (val) val.textContent = num === 0 ? 'Desactivado' : `${num} px`;
+        btnRow.querySelectorAll('.csp-quick-size-btn').forEach((b, i) => {
+          b.classList.toggle('active', gapSteps[i].val === num);
+        });
+      });
+
+      main1.append(slider1, btnRow);
+      row1.append(eye1, main1);
+      contentCol.appendChild(row1);
+    } else if (cat === 'fill_scale') {
+      const row1 = document.createElement('div');
+      row1.className = 'csp-detail-prop-row';
+      const eye1 = makeEyeButton('areaScaling');
+      const main1 = document.createElement('div');
+      main1.className = 'csp-detail-prop-main';
+      const curScale = b.areaScaling ?? 0;
+      main1.innerHTML = `
+        <div class="prop-row-header">
+          <span class="prop-label">Escalado de área (Expandir / Contraer)</span>
+          <span class="prop-value" id="dt-scale-val">${curScale > 0 ? `+${curScale} px` : `${curScale} px`}</span>
+        </div>
+      `;
+      const slider1 = document.createElement('input');
+      slider1.type = 'range';
+      slider1.className = 'csp-slider';
+      slider1.min = '-10';
+      slider1.max = '10';
+      slider1.value = String(curScale);
+      slider1.addEventListener('input', () => {
+        const num = Number(slider1.value);
+        setBrushSettings({ areaScaling: num });
+        const val = main1.querySelector('#dt-scale-val');
+        if (val) val.textContent = num > 0 ? `+${num} px` : `${num} px`;
+      });
+      main1.appendChild(slider1);
+      row1.append(eye1, main1);
+      contentCol.appendChild(row1);
     } else {
       const row1 = document.createElement('div');
       row1.className = 'csp-detail-prop-row';
@@ -963,7 +1132,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
   document.body.appendChild(backdrop);
   activeDetailModal = backdrop;
 
-  renderCategory('size');
+  renderCategory(activeCat);
 
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {

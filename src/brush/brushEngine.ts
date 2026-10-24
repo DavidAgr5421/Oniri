@@ -1726,7 +1726,7 @@ export function createBrushEngine(): BrushEngine {
         tolerance,
         closeGap: bSettings.closeGap ?? 0,
         areaScaling: bSettings.areaScaling ?? 1,
-        referMode: bSettings.referMode ?? 'all',
+        referMode: bSettings.referMode ?? 'reference',
         activeLayer: active,
         allLayers: layerManager.layers,
         selectionMaskCanvas: selectionModel.hasSelection() ? selectionModel.maskCanvas : null,
@@ -1734,7 +1734,7 @@ export function createBrushEngine(): BrushEngine {
         docH: curDocH,
       });
 
-      if (!handled) {
+      if (!handled && (bSettings.referMode === 'editing')) {
         floodFill(active.context, x, y, colorHex, tolerance);
         if (selectionModel.hasSelection()) {
           // If selection is active, restore pixels outside selection using pre-fill snapshot
