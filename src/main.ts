@@ -325,6 +325,44 @@ export function requestRender(): void {
   renderNeeded = true;
 }
 
+const patchCanvas = document.createElement('canvas');
+const patchCtx = patchCanvas.getContext('2d')!;
+
+function syncLiveStrokeSubImage(
+  gl: WebGLRenderingContext | WebGL2RenderingContext,
+  bounds: { x: number; y: number; w: number; h: number }
+): void {
+  renderer.initTexture(liveStrokeTexture);
+  const webglTexture = (renderer.properties.get(liveStrokeTexture) as any)?.__webglTexture;
+  if (!webglTexture) {
+    liveStrokeTexture.needsUpdate = true;
+    return;
+  }
+
+  patchCanvas.width = bounds.w;
+  patchCanvas.height = bounds.h;
+  patchCtx.clearRect(0, 0, bounds.w, bounds.h);
+  patchCtx.drawImage(
+    engine.liveStrokeCanvas,
+    bounds.x, bounds.y, bounds.w, bounds.h,
+    0, 0, bounds.w, bounds.h
+  );
+
+  gl.bindTexture(gl.TEXTURE_2D, webglTexture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
+  const dstY = engine.docH - (bounds.y + bounds.h);
+  gl.texSubImage2D(
+    gl.TEXTURE_2D,
+    0,
+    bounds.x,
+    dstY,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    patchCanvas
+  );
+}
+
 // Render Loop (CSP-style Render-on-Demand + 2-Plane Inking Overlay)
 function animate(): void {
   requestAnimationFrame(animate);
@@ -340,7 +378,13 @@ function animate(): void {
     liveStrokeMat.opacity = engine.liveStrokeOpacity;
 
     if (engine.liveStrokeDirty) {
-      liveStrokeTexture.needsUpdate = true;
+      const bounds = engine.liveStrokeBounds;
+      const gl = renderer.getContext();
+      if (bounds && bounds.w > 0 && bounds.h > 0 && bounds.w < engine.docW && bounds.h < engine.docH) {
+        syncLiveStrokeSubImage(gl, bounds);
+      } else {
+        liveStrokeTexture.needsUpdate = true;
+      }
       engine.liveStrokeDirty = false;
       renderNeeded = true;
     }

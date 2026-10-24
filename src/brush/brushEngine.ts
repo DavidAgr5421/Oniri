@@ -49,6 +49,7 @@ export interface BrushEngine {
   isLivePainting: boolean;
   useOverlayPlanes: boolean;
   liveStrokeOpacity: number;
+  liveStrokeBounds: { x: number; y: number; w: number; h: number } | null;
   /** Top Layers Overlay Plane (layers above active layer during painting) */
   topLayersCanvas: HTMLCanvasElement;
   hasTopLayers: boolean;
@@ -342,6 +343,7 @@ export function createBrushEngine(): BrushEngine {
   let hasTopLayers = false;
   let topLayersDirty = false;
   let liveStrokeOpacity = 1.0;
+  let liveStrokeBounds: { x: number; y: number; w: number; h: number } | null = null;
   let hasPredictions = false;
   let strokeBoundsMinX = 0;
   let strokeBoundsMinY = 0;
@@ -686,6 +688,7 @@ export function createBrushEngine(): BrushEngine {
         liveStrokeContext.restore();
       }
     }
+    liveStrokeBounds = { x: lmX, y: lmY, w: lmW, h: lmH };
     liveStrokeDirty = true;
   }
 
@@ -911,6 +914,7 @@ export function createBrushEngine(): BrushEngine {
     isLivePainting = false;
     useOverlayPlanes = false;
     hasTopLayers = false;
+    liveStrokeBounds = null;
     liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
     engine.compositeDirty = true;
     updateComposite();
@@ -1481,6 +1485,7 @@ export function createBrushEngine(): BrushEngine {
     strokeBoundsMinY = curDocH;
     strokeBoundsMaxX = 0;
     strokeBoundsMaxY = 0;
+    liveStrokeBounds = null;
 
     strokePickedColor = null;
 
@@ -1585,6 +1590,7 @@ export function createBrushEngine(): BrushEngine {
     get isLivePainting() { return isLivePainting; },
     get useOverlayPlanes() { return useOverlayPlanes; },
     get liveStrokeOpacity() { return liveStrokeOpacity; },
+    get liveStrokeBounds() { return liveStrokeBounds; },
     topLayersCanvas,
     get hasTopLayers() { return hasTopLayers; },
     get topLayersDirty() { return topLayersDirty; },
@@ -1696,6 +1702,7 @@ export function createBrushEngine(): BrushEngine {
       isLivePainting = false;
       useOverlayPlanes = false;
       hasTopLayers = false;
+      liveStrokeBounds = null;
       liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
       engine.compositeDirty = true;
       updateComposite();
