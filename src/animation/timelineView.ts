@@ -628,14 +628,18 @@ export function mountTimelineView(
   // --- 3. Scrubbing Interaction ---
   let isScrubbing = false;
 
+  const getMinFrame = () => timeline.settings.minFrame ?? 0;
+  const frameToX = (f: number): number => (f - getMinFrame()) * cellWidth;
+
   function clientXToFrame(clientX: number, allowBeyondTotal = false): number {
     const rect = gridContainer.getBoundingClientRect();
     const clickX = clientX - rect.left + gridContainer.scrollLeft;
-    const rawFrame = Math.floor(clickX / cellWidth) + 1;
+    const minF = getMinFrame();
+    const rawFrame = minF + Math.floor(clickX / cellWidth);
     if (allowBeyondTotal) {
-      return Math.max(1, Math.min(2000, rawFrame));
+      return Math.max(minF - 200, Math.min(2000, rawFrame));
     }
-    return Math.max(1, Math.min(timeline.settings.totalFrames, rawFrame));
+    return Math.max(minF, Math.min(timeline.settings.totalFrames, rawFrame));
   }
 
   function handleScrub(e: MouseEvent): void {
@@ -674,7 +678,7 @@ export function mountTimelineView(
 
   function syncPlaybackUI(): void {
     if (activePlayheadEl) {
-      activePlayheadEl.style.left = `${(timeline.settings.currentFrame - 1) * cellWidth + cellWidth / 2}px`;
+      activePlayheadEl.style.left = `${frameToX(timeline.settings.currentFrame) + cellWidth / 2}px`;
     }
     frameDisplay.textContent = `${timeline.settings.currentFrame} / ${timeline.settings.totalFrames}`;
   }
@@ -813,9 +817,10 @@ export function mountTimelineView(
 
     // Render Right Content (Ruler + Track Rows + End-of-Timeline Drag Handle + Playhead)
     gridContent.innerHTML = '';
-    // Extra padding on the right so user has space to drag and extend totalFrames
+    const minF = getMinFrame();
     const totalFrames = timeline.settings.totalFrames;
-    const totalW = totalFrames * cellWidth;
+    const totalCols = totalFrames - minF + 1;
+    const totalW = totalCols * cellWidth;
     gridContent.style.width = `${totalW + 140}px`;
 
     // 1. Ruler (with Start/End Playback Brackets + Total Frames Drag Handle)
@@ -826,12 +831,23 @@ export function mountTimelineView(
     const division = timeline.settings.division ?? 5;
     const timeFormat = timeline.settings.timeFormat ?? 'frames';
 
-    for (let f = 1; f <= totalFrames; f++) {
+    for (let f = minF; f <= totalFrames; f++) {
       const cell = document.createElement('div');
       cell.className = 'timeline-ruler-cell';
-      if (f % division === 0 || f === 1) {
-        cell.classList.add('major');
-        cell.textContent = formatRulerTime(f, timeline.settings.fps, timeFormat);
+      if (f === 0) {
+        cell.classList.add('major', 'frame-zero');
+        cell.textContent = '0';
+      } else if (f < 0) {
+        cell.classList.add('negative-frame');
+        if (Math.abs(f) % division === 0 || f === minF) {
+          cell.classList.add('major');
+          cell.textContent = `${f}`;
+        }
+      } else {
+        if (f % division === 0 || f === 1) {
+          cell.classList.add('major');
+          cell.textContent = formatRulerTime(f, timeline.settings.fps, timeFormat);
+        }
       }
       if (f >= timeline.settings.startFrame && f <= timeline.settings.endFrame) {
         cell.classList.add('playback-bound');
@@ -853,7 +869,7 @@ export function mountTimelineView(
     const startBracket = document.createElement('div');
     startBracket.className = 'timeline-range-bracket start-bracket';
     startBracket.title = `Inicio de reproducción (Fotograma ${timeline.settings.startFrame}). Arrastra para cambiar inicio.`;
-    startBracket.style.left = `${(timeline.settings.startFrame - 1) * cellWidth}px`;
+    startBracket.style.left = `${frameToX(timeline.settings.startFrame)}px`;
     attachRangeBracketDrag(startBracket, 'start');
     ruler.appendChild(startBracket);
 
@@ -861,7 +877,7 @@ export function mountTimelineView(
     const endBracket = document.createElement('div');
     endBracket.className = 'timeline-range-bracket end-bracket';
     endBracket.title = `Fin de reproducción (Fotograma ${timeline.settings.endFrame}). Arrastra para cambiar fin.`;
-    endBracket.style.left = `${timeline.settings.endFrame * cellWidth - 6}px`;
+    endBracket.style.left = `${frameToX(timeline.settings.endFrame + 1) - 6}px`;
     attachRangeBracketDrag(endBracket, 'end');
     ruler.appendChild(endBracket);
 
@@ -885,9 +901,11 @@ export function mountTimelineView(
       boneLane.style.background = 'rgba(56, 189, 248, 0.05)';
       boneLane.style.borderBottom = '1px solid rgba(56, 189, 248, 0.25)';
 
-      for (let f = 1; f <= totalFrames; f++) {
+      for (let f = minF; f <= totalFrames; f++) {
         const bcell = document.createElement('div');
         bcell.className = 'timeline-kf-cell';
+        if (f === 0) bcell.classList.add('frame-zero-cell');
+        else if (f < 0) bcell.classList.add('negative-frame-cell');
         bcell.title = `Fotograma ${f}: Doble clic para registrar Keyframe de Pose 2D`;
         bcell.addEventListener('click', (ev) => {
           ev.stopPropagation();
@@ -910,7 +928,7 @@ export function mountTimelineView(
         if (k0.interpolation !== 'hold') {
           const spanBar = document.createElement('div');
           spanBar.className = `timeline-kf-span-line ${k0.interpolation}`;
-          spanBar.style.left = `${(k0.frame - 1) * cellWidth + cellWidth / 2}px`;
+          spanBar.style.left = `${frameToX(k0.frame) + cellWidth / 2}px`;
           spanBar.style.width = `${(k1.frame - k0.frame) * cellWidth}px`;
           spanBar.style.background = '#38bdf8';
           boneLane.appendChild(spanBar);
@@ -918,12 +936,12 @@ export function mountTimelineView(
       }
 
       for (const bkf of sortedBoneKfs) {
-        if (bkf.frame > totalFrames) continue;
+        if (bkf.frame > totalFrames || bkf.frame < minF) continue;
         const diamond = document.createElement('div');
         diamond.className = `timeline-kf-diamond ${bkf.interpolation} ${
           timeline.settings.currentFrame === bkf.frame ? 'active' : ''
         }`;
-        diamond.style.left = `${(bkf.frame - 1) * cellWidth + cellWidth / 2}px`;
+        diamond.style.left = `${frameToX(bkf.frame) + cellWidth / 2}px`;
         diamond.style.borderColor = '#38bdf8';
         diamond.title = `Pose Keyframe F${bkf.frame} (${bkf.interpolation}) | ${bkf.poses.size} huesos posados\nClic para ir al fotograma, Arrastra para mover, Clic derecho para eliminar`;
 
@@ -938,7 +956,7 @@ export function mountTimelineView(
             const f = clientXToFrame(moveEv.clientX, false);
             if (f !== bkf.frame) moved = true;
             targetFrame = f;
-            diamond.style.left = `${(f - 1) * cellWidth + cellWidth / 2}px`;
+            diamond.style.left = `${frameToX(f) + cellWidth / 2}px`;
           };
 
           const onUp = () => {
@@ -979,9 +997,11 @@ export function mountTimelineView(
       row.style.width = `${totalW}px`;
 
       // Background cell columns
-      for (let f = 1; f <= totalFrames; f++) {
+      for (let f = minF; f <= totalFrames; f++) {
         const fcell = document.createElement('div');
         fcell.className = 'timeline-frame-cell';
+        if (f === 0) fcell.classList.add('frame-zero-cell');
+        else if (f < 0) fcell.classList.add('negative-frame-cell');
         if (track.exposures.has(f)) {
           fcell.classList.add('key-cell');
         }
@@ -1006,13 +1026,13 @@ export function mountTimelineView(
 
       // Render CSP Clips & Cel spans inside each clip
       for (const clip of track.clips) {
-        const clipStart = Math.max(1, clip.startFrame);
+        const clipStart = Math.max(minF, clip.startFrame);
         const clipEnd = Math.min(totalFrames, clip.endFrame);
         if (clipEnd < clipStart) continue;
 
         const clipBar = document.createElement('div');
         clipBar.className = 'timeline-clip-container';
-        clipBar.style.left = `${(clipStart - 1) * cellWidth}px`;
+        clipBar.style.left = `${frameToX(clipStart)}px`;
         clipBar.style.width = `${(clipEnd - clipStart + 1) * cellWidth}px`;
 
         // Clip top grab bar & left/right clip handles
@@ -1053,7 +1073,7 @@ export function mountTimelineView(
             block.classList.add('active-cel');
           }
 
-          block.style.left = `${(expFrame - 1) * cellWidth}px`;
+          block.style.left = `${frameToX(expFrame)}px`;
           block.style.width = `${spanLength * cellWidth - 2}px`;
 
           // Left resize handle on cel block
@@ -1105,9 +1125,11 @@ export function mountTimelineView(
         kfLane.style.width = `${totalW}px`;
 
         // Background cells in keyframe lane (double click to add keyframe)
-        for (let f = 1; f <= totalFrames; f++) {
+        for (let f = minF; f <= totalFrames; f++) {
           const kcell = document.createElement('div');
           kcell.className = 'timeline-kf-cell';
+          if (f === 0) kcell.classList.add('frame-zero-cell');
+          else if (f < 0) kcell.classList.add('negative-frame-cell');
           kcell.title = `Fotograma ${f}: Doble clic para crear/editar Keyframe`;
           kcell.addEventListener('dblclick', (ev) => {
             ev.stopPropagation();
@@ -1127,7 +1149,7 @@ export function mountTimelineView(
           if (k0.interpolation !== 'hold') {
             const spanBar = document.createElement('div');
             spanBar.className = `timeline-kf-span-line ${k0.interpolation}`;
-            spanBar.style.left = `${(k0.frame - 1) * cellWidth + cellWidth / 2}px`;
+            spanBar.style.left = `${frameToX(k0.frame) + cellWidth / 2}px`;
             spanBar.style.width = `${(k1.frame - k0.frame) * cellWidth}px`;
             kfLane.appendChild(spanBar);
           }
@@ -1135,12 +1157,12 @@ export function mountTimelineView(
 
         // Render diamond markers for each keyframe
         for (const kf of sortedKfs) {
-          if (kf.frame > totalFrames) continue;
+          if (kf.frame > totalFrames || kf.frame < minF) continue;
           const diamond = document.createElement('div');
           diamond.className = `timeline-kf-diamond ${kf.interpolation} ${
             timeline.settings.currentFrame === kf.frame ? 'active' : ''
           }`;
-          diamond.style.left = `${(kf.frame - 1) * cellWidth + cellWidth / 2}px`;
+          diamond.style.left = `${frameToX(kf.frame) + cellWidth / 2}px`;
           diamond.title = `Keyframe F${kf.frame} (${kf.interpolation}) | X:${Math.round(kf.x)} Y:${Math.round(kf.y)} Escala:${Math.round(kf.scaleX * 100)}% Rot:${Math.round(kf.rotation)}° Opacidad:${Math.round(kf.opacity * 100)}%\nClic para editar, Arrastra para mover, Clic derecho para eliminar`;
 
           attachKeyframeDiamondInteraction(diamond, track, kf.frame);
@@ -1156,7 +1178,7 @@ export function mountTimelineView(
     // 4. Playhead
     const playhead = document.createElement('div');
     playhead.className = 'timeline-playhead';
-    playhead.style.left = `${(timeline.settings.currentFrame - 1) * cellWidth + cellWidth / 2}px`;
+    playhead.style.left = `${frameToX(timeline.settings.currentFrame) + cellWidth / 2}px`;
 
     const playheadCap = document.createElement('div');
     playheadCap.className = 'timeline-playhead-cap';
@@ -1202,6 +1224,9 @@ export function mountTimelineView(
       const onMove = (moveEv: MouseEvent) => {
         const f = clientXToFrame(moveEv.clientX, true);
         if (which === 'start') {
+          if (f < (timeline.settings.minFrame ?? 0)) {
+            timeline.updateTimelineSettings({ minFrame: f });
+          }
           timeline.setRange(Math.min(f, timeline.settings.endFrame), timeline.settings.endFrame);
         } else {
           if (f > timeline.settings.totalFrames) {
@@ -1284,9 +1309,9 @@ export function mountTimelineView(
             lbl.textContent = `${baseName} (${previewSpan}f)`;
           }
         } else {
-          previewFrame = Math.max(1, Math.min(origEndFrame, f));
+          previewFrame = Math.max(getMinFrame(), Math.min(origEndFrame, f));
           const previewSpan = origEndFrame - previewFrame + 1;
-          block.style.left = `${(previewFrame - 1) * cellWidth}px`;
+          block.style.left = `${frameToX(previewFrame)}px`;
           block.style.width = `${previewSpan * cellWidth - 2}px`;
           const lbl = block.querySelector('.timeline-cel-label');
           if (lbl) {
@@ -1296,7 +1321,7 @@ export function mountTimelineView(
         }
 
         row.querySelectorAll('.timeline-frame-cell').forEach((el, idx) => {
-          el.classList.toggle('drop-target', idx + 1 === previewFrame);
+          el.classList.toggle('drop-target', getMinFrame() + idx === previewFrame);
         });
       };
 
@@ -1355,10 +1380,10 @@ export function mountTimelineView(
 
         if (isDragging) {
           const rawHoverFrame = clientXToFrame(moveEv.clientX, true);
-          previewTargetFrame = Math.max(1, rawHoverFrame - grabOffsetFrames);
+          previewTargetFrame = Math.max(getMinFrame(), rawHoverFrame - grabOffsetFrames);
 
           // Visually move the cel block across the track, carrying its exact span
-          block.style.left = `${(previewTargetFrame - 1) * cellWidth}px`;
+          block.style.left = `${frameToX(previewTargetFrame)}px`;
           block.style.width = `${spanLength * cellWidth - 2}px`;
 
           // Update label during drag
@@ -1370,7 +1395,7 @@ export function mountTimelineView(
           // Highlight target range of frames
           const endTarget = previewTargetFrame + spanLength - 1;
           row.querySelectorAll('.timeline-frame-cell').forEach((el, idx) => {
-            const f = idx + 1;
+            const f = getMinFrame() + idx;
             el.classList.toggle('drop-target', f >= previewTargetFrame && f <= endTarget);
           });
         }
@@ -1389,7 +1414,7 @@ export function mountTimelineView(
             timeline.moveCelSpan(track.id, expFrame, previewTargetFrame, spanLength);
           } else {
             // Restore visual position if dropped back onto same frame
-            block.style.left = `${(expFrame - 1) * cellWidth}px`;
+            block.style.left = `${frameToX(expFrame)}px`;
             block.style.width = `${spanLength * cellWidth - 2}px`;
             const lbl = block.querySelector('.timeline-cel-label');
             if (lbl) {
@@ -1433,7 +1458,7 @@ export function mountTimelineView(
         }
         if (dragging) {
           const f = clientXToFrame(moveEv.clientX, false);
-          diamond.style.left = `${(f - 1) * cellWidth + cellWidth / 2}px`;
+          diamond.style.left = `${frameToX(f) + cellWidth / 2}px`;
         }
       };
 
@@ -1579,8 +1604,13 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
     </div>
 
     <div class="onion-setting-row">
+      <label>Fotograma mínimo visible (CSP Frame 0 / Negativos)</label>
+      <input type="number" id="tl-min-frame" min="-200" max="1" value="${s.minFrame ?? 0}"/>
+    </div>
+
+    <div class="onion-setting-row">
       <label>Fotograma de inicio (Playback Start)</label>
-      <input type="number" id="tl-start-frame" min="1" max="2000" value="${s.startFrame}"/>
+      <input type="number" id="tl-start-frame" min="-200" max="2000" value="${s.startFrame}"/>
     </div>
 
     <div class="onion-setting-row">
@@ -1591,7 +1621,7 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
     <div class="onion-setting-row">
       <label>Formato de visualización de tiempo</label>
       <select id="tl-time-format" style="width:140px;">
-        <option value="frames" ${(s.timeFormat ?? 'frames') === 'frames' ? 'selected' : ''}>Fotogramas (1, 5, 10...)</option>
+        <option value="frames" ${(s.timeFormat ?? 'frames') === 'frames' ? 'selected' : ''}>Fotogramas (0, 1, 5...)</option>
         <option value="sec_frames" ${s.timeFormat === 'sec_frames' ? 'selected' : ''}>Segundos + Fotogramas (0s+1f)</option>
         <option value="timecode" ${s.timeFormat === 'timecode' ? 'selected' : ''}>Código de tiempo (00:00:00)</option>
       </select>
@@ -1627,6 +1657,7 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
   document.body.appendChild(backdrop);
 
   const sceneNameInput = modal.querySelector('#tl-scene-name') as HTMLInputElement;
+  const minFrameInput = modal.querySelector('#tl-min-frame') as HTMLInputElement;
   const totalInput = modal.querySelector('#tl-total-frames') as HTMLInputElement;
   const fpsInput = modal.querySelector('#tl-fps') as HTMLInputElement;
   const fpsPreset = modal.querySelector('#tl-fps-preset') as HTMLSelectElement;
@@ -1663,13 +1694,16 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
 
   modal.querySelector('#tl-modal-cancel')?.addEventListener('click', close);
   modal.querySelector('#tl-modal-apply')?.addEventListener('click', () => {
+    const newMin = Math.min(0, Number(minFrameInput.value) || 0);
     const newTotal = Math.max(1, Number(totalInput.value) || s.totalFrames);
     const newFps = Math.max(1, Number(fpsInput.value) || s.fps);
-    const newStart = Math.max(1, Number(startInput.value) || 1);
+    const rawStart = Number(startInput.value);
+    const newStart = isNaN(rawStart) ? 1 : Math.max(newMin, rawStart);
     const newEnd = Math.max(newStart, Math.min(newTotal, Number(endInput.value) || newTotal));
 
     timeline.updateTimelineSettings({
       sceneName: sceneNameInput.value,
+      minFrame: Math.min(newMin, newStart),
       totalFrames: newTotal,
       fps: newFps,
       startFrame: newStart,

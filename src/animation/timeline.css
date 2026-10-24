@@ -316,8 +316,40 @@
   border-left: 1px solid #555555;
 }
 
+/* CSP Frame 0: Distinctive demarcation line and accent */
+.timeline-ruler-cell.frame-zero {
+  color: #00e5ff;
+  font-weight: 800;
+  border-left: 2px solid #00e5ff;
+  background: rgba(0, 229, 255, 0.08);
+}
+
+.timeline-ruler-cell.frame-zero::after {
+  border-left: 2px solid #00e5ff;
+  height: 10px;
+}
+
+/* CSP Negative Frames (Pre-roll / Anticipation / Audio Lead-in) */
+.timeline-ruler-cell.negative-frame {
+  background: #171620;
+  border-right-color: #262335;
+  color: #818cf8;
+}
+
+.timeline-ruler-cell.negative-frame.major {
+  color: #a5b4fc;
+}
+
+.timeline-ruler-cell.negative-frame.major::after {
+  border-left: 1px solid #6366f1;
+}
+
 .timeline-ruler-cell.playback-bound {
   background: rgba(0, 122, 204, 0.12);
+}
+
+.timeline-ruler-cell.negative-frame.playback-bound {
+  background: rgba(99, 102, 241, 0.18);
 }
 
 /* Grid Track Rows */
@@ -345,6 +377,22 @@
 
 .timeline-frame-cell.key-cell {
   background: #223547;
+}
+
+.timeline-frame-cell.frame-zero-cell,
+.timeline-kf-cell.frame-zero-cell {
+  border-left: 1.5px solid rgba(0, 229, 255, 0.45);
+}
+
+.timeline-frame-cell.negative-frame-cell,
+.timeline-kf-cell.negative-frame-cell {
+  background: rgba(99, 102, 241, 0.04);
+  border-right-color: #242230;
+}
+
+.timeline-frame-cell.negative-frame-cell:hover,
+.timeline-kf-cell.negative-frame-cell:hover {
+  background: rgba(99, 102, 241, 0.1);
 }
 
 /* Cel Block */

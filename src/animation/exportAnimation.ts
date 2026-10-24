@@ -262,7 +262,7 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
           <div style="display: flex; align-items: center; gap: 10px;">
             <div style="flex: 1;">
               <span style="font-size: 11px; color: #94a3b8;">Desde fotograma:</span>
-              <input type="number" id="exp-start" class="csp-num-input" style="width: 100%; margin-top: 4px;" value="${defaultStart}" min="1" max="${tlSettings.totalFrames}" />
+              <input type="number" id="exp-start" class="csp-num-input" style="width: 100%; margin-top: 4px;" value="${defaultStart}" min="-200" max="${tlSettings.totalFrames}" />
             </div>
             <div style="flex: 1;">
               <span style="font-size: 11px; color: #94a3b8;">Hasta fotograma:</span>
@@ -398,7 +398,9 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
     startBtn.disabled = true;
     progressBox.style.display = 'block';
 
-    const startF = Math.max(1, Number((modal.querySelector('#exp-start') as HTMLInputElement).value) || 1);
+    const minF = tlSettings.minFrame ?? 0;
+    const rawStart = Number((modal.querySelector('#exp-start') as HTMLInputElement).value);
+    const startF = isNaN(rawStart) ? defaultStart : Math.max(minF, rawStart);
     const endF = Math.max(startF, Number((modal.querySelector('#exp-end') as HTMLInputElement).value) || tlSettings.totalFrames);
     const fps = Math.max(1, Number((modal.querySelector('#exp-fps') as HTMLInputElement).value) || 24);
     const width = Number(wInput.value) || DOC_W;

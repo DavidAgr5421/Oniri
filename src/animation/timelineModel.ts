@@ -103,9 +103,10 @@ export type TimeDisplayFormat = 'frames' | 'sec_frames' | 'timecode';
 export interface TimelineSettings {
   fps: number; // Frames per second (e.g. 8, 12, 24, 30, 60)
   totalFrames: number; // Total length of timeline in frames (e.g. 24)
-  startFrame: number;  // Playback start frame (usually 1)
-  endFrame: number;    // Playback end frame (usually 24)
-  currentFrame: number;// Currently viewed/edited frame (1..totalFrames)
+  startFrame: number;  // Playback start frame (e.g. 1 or 0 or -12)
+  endFrame: number;    // Playback end frame (e.g. 24)
+  currentFrame: number;// Currently viewed/edited frame
+  minFrame?: number;   // Lowest display frame (CSP support for frame 0 and negative frames, e.g. -12, 0)
   loop: boolean;       // Repeat playback continuously
   isPlaying: boolean;  // Active playback status
   division?: number;   // Ruler major division (e.g. 4, 5, 6, 8, 12)

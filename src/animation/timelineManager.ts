@@ -197,6 +197,7 @@ function makeDefaultSettings(): TimelineSettings {
     startFrame: 1,
     endFrame: 24,
     currentFrame: 1,
+    minFrame: 0, // Soporte estilo Clip Studio Paint para fotograma 0 y fotogramas negativos
     loop: true,
     isPlaying: false,
     division: 5,
@@ -675,11 +676,15 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         settings.endFrame = newTotal;
       }
 
+      const minF = settings.minFrame ?? 0;
       if (settings.startFrame > settings.endFrame) {
-        settings.startFrame = Math.max(1, settings.endFrame);
+        settings.startFrame = Math.max(minF, settings.endFrame);
       }
       if (settings.currentFrame > newTotal) {
         settings.currentFrame = newTotal;
+      }
+      if (settings.currentFrame < minF) {
+        settings.currentFrame = minF;
       }
 
       // Update clips that extended to the end of the timeline
@@ -701,7 +706,10 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     setRange(start: number, end: number) {
       const settings = getActiveScene().settings;
-      const s = Math.max(0, Math.min(settings.totalFrames, Math.round(start)));
+      const s = Math.round(start);
+      // Si el inicio es menor que el minFrame actual, expandimos el rango visual hacia la izquierda
+      const minF = Math.min(settings.minFrame ?? 0, s);
+      settings.minFrame = minF;
       const e = Math.max(s, Math.min(settings.totalFrames, Math.round(end)));
       settings.startFrame = s;
       settings.endFrame = e;
@@ -730,6 +738,9 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const scene = getActiveScene();
       if (patch.sceneName !== undefined && patch.sceneName.trim()) {
         scene.name = patch.sceneName.trim();
+      }
+      if (patch.minFrame !== undefined) {
+        scene.settings.minFrame = Math.round(patch.minFrame);
       }
       if (patch.totalFrames !== undefined) {
         manager.setTotalFrames(patch.totalFrames, true);
@@ -760,7 +771,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         transformManager.commitTransform();
       }
       const settings = getActiveScene().settings;
-      const clamped = Math.max(1, Math.min(settings.totalFrames, Math.round(frame)));
+      const minF = settings.minFrame ?? 0;
+      const clamped = Math.max(minF, Math.min(settings.totalFrames, Math.round(frame)));
       if (settings.currentFrame === clamped) return;
       settings.currentFrame = clamped;
       syncActiveCelWithFrame();
@@ -915,7 +927,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const celId = track.exposures.get(fromFrame);
       if (!celId) return false;
 
-      const targetClamped = Math.max(1, Math.round(toFrame));
+      const minF = settings.minFrame ?? 0;
+      const targetClamped = Math.max(minF, Math.round(toFrame));
       if (targetClamped === fromFrame) return false;
       if (targetClamped > settings.totalFrames) {
         manager.setTotalFrames(targetClamped, true);
@@ -945,7 +958,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const celId = track.exposures.get(fromFrame);
       if (!celId) return false;
 
-      const targetStart = Math.max(1, Math.round(toFrame));
+      const minF = settings.minFrame ?? 0;
+      const targetStart = Math.max(minF, Math.round(toFrame));
       const targetEnd = targetStart + Math.max(1, spanLength) - 1;
       if (targetStart === fromFrame) return false;
 
@@ -1061,7 +1075,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         }
       } else {
         // Left edge drag: adjust start frame of this cel
-        const minAllowed = prevEntry ? prevEntry[0] + 1 : 1;
+        const minAllowed = prevEntry ? prevEntry[0] + 1 : (settings.minFrame ?? 0);
         const maxAllowed = currEnd;
         const targetStart = Math.max(minAllowed, Math.min(maxAllowed, Math.round(newEdgeFrame)));
         if (targetStart === currStart) return false;
@@ -1086,7 +1100,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const clip = track.clips.find((c) => c.id === clipId);
       if (!clip) return false;
 
-      const s = Math.max(1, Math.round(newStart));
+      const minF = settings.minFrame ?? 0;
+      const s = Math.max(minF, Math.round(newStart));
       const e = Math.max(s, Math.round(newEnd));
       if (e > settings.totalFrames) {
         manager.setTotalFrames(e, true);
@@ -1235,7 +1250,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (!track) return null;
       track.keyframesEnabled = true;
 
-      const clampedFrame = Math.max(1, Math.min(settings.totalFrames, Math.round(frame)));
+      const minF = settings.minFrame ?? 0;
+      const clampedFrame = Math.max(minF, Math.min(settings.totalFrames, Math.round(frame)));
       const existing = track.keyframes.get(clampedFrame);
       if (existing) {
         if (patch) Object.assign(existing, patch);
@@ -1266,7 +1282,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (!track) return false;
       const kf = track.keyframes.get(fromFrame);
       if (!kf) return false;
-      const target = Math.max(1, Math.min(settings.totalFrames, Math.round(toFrame)));
+      const minF = settings.minFrame ?? 0;
+      const target = Math.max(minF, Math.min(settings.totalFrames, Math.round(toFrame)));
       if (target === fromFrame) return false;
 
       track.keyframes.delete(fromFrame);
@@ -1576,7 +1593,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     setBonePoseAtFrame(frame, boneId, patch, interpolation = 'smooth') {
       const scene = getActiveScene();
-      const clampedFrame = Math.max(1, Math.min(scene.settings.totalFrames, Math.round(frame)));
+      const minF = scene.settings.minFrame ?? 0;
+      const clampedFrame = Math.max(minF, Math.min(scene.settings.totalFrames, Math.round(frame)));
       let skf = scene.boneKeyframes.get(clampedFrame);
       if (!skf) {
         const currentPoses = manager.getInterpolatedBonePoses(clampedFrame);
@@ -1600,7 +1618,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     applyTwoBoneIKAtFrame(frame, endBoneId, targetX, targetY) {
       const scene = getActiveScene();
-      const clampedFrame = Math.max(1, Math.min(scene.settings.totalFrames, Math.round(frame)));
+      const minF = scene.settings.minFrame ?? 0;
+      const clampedFrame = Math.max(minF, Math.min(scene.settings.totalFrames, Math.round(frame)));
       const currentPoses = manager.getInterpolatedBonePoses(clampedFrame);
       const solved = solveTwoBoneIK(scene.bones, currentPoses, endBoneId, targetX, targetY);
 
@@ -1620,7 +1639,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
 
     addOrUpdateBoneKeyframe(frame, interpolation = 'smooth') {
       const scene = getActiveScene();
-      const clampedFrame = Math.max(1, Math.min(scene.settings.totalFrames, Math.round(frame)));
+      const minF = scene.settings.minFrame ?? 0;
+      const clampedFrame = Math.max(minF, Math.min(scene.settings.totalFrames, Math.round(frame)));
       let skf = scene.boneKeyframes.get(clampedFrame);
       if (skf) {
         skf.interpolation = interpolation;
@@ -1647,7 +1667,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const scene = getActiveScene();
       const skf = scene.boneKeyframes.get(fromFrame);
       if (!skf) return false;
-      const target = Math.max(1, Math.min(scene.settings.totalFrames, Math.round(toFrame)));
+      const minF = scene.settings.minFrame ?? 0;
+      const target = Math.max(minF, Math.min(scene.settings.totalFrames, Math.round(toFrame)));
       if (target === fromFrame) return false;
       scene.boneKeyframes.delete(fromFrame);
       skf.frame = target;
