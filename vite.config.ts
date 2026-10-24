@@ -1,8 +1,11 @@
 import { defineConfig } from 'vite';
+import wasm from 'vite-plugin-wasm';
 
 export default defineConfig({
   root: '.',
+  plugins: [wasm()],
   build: {
+    target: 'esnext',
     outDir: 'dist',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1200,

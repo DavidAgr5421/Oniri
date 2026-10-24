@@ -8,6 +8,7 @@ dist/
 # Tauri / Rust build targets & executables
 src-tauri/target/
 src-tauri/gen/
+crates/*/target/
 *.exe
 *.msi
 

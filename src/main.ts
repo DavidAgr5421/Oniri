@@ -26,6 +26,10 @@ import { viewportNav } from './canvas/viewportNavigation';
 import { mountNavigatorPalette } from './canvas/navigatorView';
 import { cameraFrameOverlay } from './canvas/cameraFrameOverlay';
 import { brushDiagnostics } from './brush/brushDiagnostics';
+import { rustStrokeEngine } from './brush/rustStrokeEngine';
+
+// Initialize high-performance Rust Wasm core
+rustStrokeEngine.init();
 
 // --- Viewport & Three.js Setup ---
 const viewport = document.getElementById('viewport') ?? document.body;

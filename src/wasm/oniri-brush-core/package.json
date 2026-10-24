@@ -1,0 +1,19 @@
+{
+  "name": "oniri-brush-core",
+  "type": "module",
+  "collaborators": [
+    "Oniri Team"
+  ],
+  "description": "High-performance Rust stroke calculation and dab engine for Oniri",
+  "version": "0.1.0",
+  "files": [
+    "oniri_brush_core_bg.wasm",
+    "oniri_brush_core.js",
+    "oniri_brush_core.d.ts"
+  ],
+  "main": "oniri_brush_core.js",
+  "types": "oniri_brush_core.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
