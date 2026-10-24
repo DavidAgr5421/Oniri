@@ -19,6 +19,7 @@ import { viewportNav } from '../canvas/viewportNavigation';
 import { brushSizeOverlay, eyedropperLoupeOverlay } from '../ui/canvasOverlays';
 import { createBrushCursorOverlay } from './brushCursorOverlay';
 import { brushDiagnostics } from './brushDiagnostics';
+import { rustStrokeEngine } from './rustStrokeEngine';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
@@ -362,6 +363,22 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const handleStrokePoint = (doc: { x: number; y: number }, pressure: number): void => {
+    const isPen = lastPointerType === 'pen';
+    const stab = getToolState().brush.stabilization;
+    const rustRes = rustStrokeEngine.addStabilizerPoint(doc.x, doc.y, pressure, stab, isPen);
+
+    if (rustRes) {
+      engine.setStrokeSpeed(rustRes.speed);
+      lastSamplePressure = pressure;
+      if (pressure > peakStrokePressure) peakStrokePressure = pressure;
+      const pts = rustRes.points;
+      for (let i = 0; i < rustRes.count; i++) {
+        const off = i * 3;
+        enqueuePoint(pts[off], pts[off + 1], pts[off + 2]);
+      }
+      return;
+    }
+
     const dxr = doc.x - rawLastX;
     const dyr = doc.y - rawLastY;
     const stepDist = Math.hypot(dxr, dyr);
@@ -382,7 +399,6 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const speed = Math.hypot(velX, velY);
     engine.setStrokeSpeed(speed);
 
-    const stab = getToolState().brush.stabilization;
     if (stab <= 0) {
       smoothedX = doc.x;
       smoothedY = doc.y;
@@ -755,6 +771,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       velY = 0;
       smoothHist = [{ x: doc.x, y: doc.y, p: erasePressure }];
       activeStroke = 'eraser';
+      rustStrokeEngine.beginStabilizer(doc.x, doc.y, erasePressure);
       applyTiltFrom(event);
       engine.beginErase(doc.x, doc.y, erasePressure);
       return;
@@ -1042,6 +1059,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     velX = 0;
     velY = 0;
     smoothHist = [{ x: doc.x, y: doc.y, p: pressure }];
+    rustStrokeEngine.beginStabilizer(doc.x, doc.y, pressure);
 
     const isErase = tool === 'eraser' || getToolState().isTransparentColor;
     activeStroke = isErase ? 'eraser' : 'brush';

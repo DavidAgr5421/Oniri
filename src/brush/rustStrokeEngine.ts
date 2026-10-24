@@ -7,6 +7,7 @@ import initWasm, {
   SelectionCore,
   SmartFillCore,
   StrokeEngineCore,
+  StrokeStabilizerCore,
   init_engine_hooks,
 } from '../wasm/oniri-brush-core/oniri_brush_core';
 import type { BrushSettings, TipTextureId } from '../tools/toolState';
@@ -104,6 +105,7 @@ class RustStrokeEngineWrapper {
   private fillCore: SmartFillCore | null = null;
   private boneCore: BoneSkinCore | null = null;
   private gifCore: GifEncoderCore | null = null;
+  private stabilizerCore: StrokeStabilizerCore | null = null;
   private wasmMemory: WebAssembly.Memory | null = null;
   private isReady = false;
   private initPromise: Promise<boolean> | null = null;
@@ -155,6 +157,7 @@ class RustStrokeEngineWrapper {
         this.fillCore = new SmartFillCore();
         this.boneCore = new BoneSkinCore();
         this.gifCore = new GifEncoderCore();
+        this.stabilizerCore = new StrokeStabilizerCore();
         this.isReady = true;
         console.log('[Oniri] Rust Stroke Engine Core initialized and active (Wasm + Zero-Copy).');
         return true;
@@ -644,6 +647,40 @@ class RustStrokeEngineWrapper {
       console.warn('WASM ColorBlendCore.evaluate_paper_texture fallback:', e);
       return null;
     }
+  }
+
+  beginStabilizer(x: number, y: number, pressure: number): void {
+    if (!this.available || !this.stabilizerCore) return;
+    this.stabilizerCore.begin_stroke(x, y, pressure);
+  }
+
+  addStabilizerPoint(
+    x: number,
+    y: number,
+    pressure: number,
+    stabilization: number,
+    isPen: boolean,
+  ): { points: Float32Array; count: number; speed: number } | null {
+    if (!this.available || !this.stabilizerCore || !this.wasmMemory) return null;
+    const count = this.stabilizerCore.add_raw_point(x, y, pressure, stabilization, isPen);
+    const speed = this.stabilizerCore.get_speed();
+    if (count === 0) {
+      return { points: new Float32Array(0), count: 0, speed };
+    }
+    const ptr = this.stabilizerCore.get_emitted_ptr();
+    const len = this.stabilizerCore.get_emitted_len();
+    const points = new Float32Array(this.wasmMemory.buffer, ptr, len);
+    return { points, count, speed };
+  }
+
+  flushStabilizerTail(): { points: Float32Array; count: number } | null {
+    if (!this.available || !this.stabilizerCore || !this.wasmMemory) return null;
+    const count = this.stabilizerCore.flush_tail();
+    if (count === 0) return null;
+    const ptr = this.stabilizerCore.get_emitted_ptr();
+    const len = this.stabilizerCore.get_emitted_len();
+    const points = new Float32Array(this.wasmMemory.buffer, ptr, len);
+    return { points, count };
   }
 }
 

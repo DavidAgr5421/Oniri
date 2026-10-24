@@ -245,6 +245,32 @@ export class StrokeEngineCore {
     update_config(config: BrushDynamicsConfig): void;
 }
 
+/**
+ * Motor nativo de estabilización adaptativa de trazo y subdivisión Bézier
+ */
+export class StrokeStabilizerCore {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Procesa una muestra bruta del pointer (ratón o lápiz)
+     * Aplica filtrado de jitter, estabilización adaptativa a la velocidad y subdivisión Bézier.
+     * Retorna la cantidad de puntos interpolados emitidos (cada uno stride 3: [x, y, p]).
+     */
+    add_raw_point(x: number, y: number, pressure: number, stabilization: number, is_pen: boolean): number;
+    /**
+     * Inicia un nuevo trazo estabilizado
+     */
+    begin_stroke(x: number, y: number, pressure: number): void;
+    /**
+     * Al soltar el lápiz, emite el segmento final hasta el punto de liberación exacto
+     */
+    flush_tail(): number;
+    get_emitted_len(): number;
+    get_emitted_ptr(): number;
+    get_speed(): number;
+    constructor();
+}
+
 export function init_engine_hooks(): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -311,6 +337,7 @@ export interface InitOutput {
     readonly __wbg_set_brushdynamicsconfig_velocity_size_enabled: (a: number, b: number) => void;
     readonly __wbg_smartfillcore_free: (a: number, b: number) => void;
     readonly __wbg_strokeenginecore_free: (a: number, b: number) => void;
+    readonly __wbg_strokestabilizercore_free: (a: number, b: number) => void;
     readonly boneskincore_build_mesh_vertices: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly boneskincore_compute_skinned_triangles: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly boneskincore_get_triangles_len: (a: number) => number;
@@ -363,6 +390,13 @@ export interface InitOutput {
     readonly strokeenginecore_save_checkpoint: (a: number) => void;
     readonly strokeenginecore_set_speed: (a: number, b: number) => void;
     readonly strokeenginecore_update_config: (a: number, b: number) => void;
+    readonly strokestabilizercore_add_raw_point: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly strokestabilizercore_begin_stroke: (a: number, b: number, c: number, d: number) => void;
+    readonly strokestabilizercore_flush_tail: (a: number) => number;
+    readonly strokestabilizercore_get_emitted_len: (a: number) => number;
+    readonly strokestabilizercore_get_emitted_ptr: (a: number) => number;
+    readonly strokestabilizercore_get_speed: (a: number) => number;
+    readonly strokestabilizercore_new: () => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

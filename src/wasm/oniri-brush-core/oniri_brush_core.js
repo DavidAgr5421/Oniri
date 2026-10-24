@@ -1098,6 +1098,82 @@ export class StrokeEngineCore {
 }
 if (Symbol.dispose) StrokeEngineCore.prototype[Symbol.dispose] = StrokeEngineCore.prototype.free;
 
+/**
+ * Motor nativo de estabilización adaptativa de trazo y subdivisión Bézier
+ */
+export class StrokeStabilizerCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        StrokeStabilizerCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_strokestabilizercore_free(ptr, 0);
+    }
+    /**
+     * Procesa una muestra bruta del pointer (ratón o lápiz)
+     * Aplica filtrado de jitter, estabilización adaptativa a la velocidad y subdivisión Bézier.
+     * Retorna la cantidad de puntos interpolados emitidos (cada uno stride 3: [x, y, p]).
+     * @param {number} x
+     * @param {number} y
+     * @param {number} pressure
+     * @param {number} stabilization
+     * @param {boolean} is_pen
+     * @returns {number}
+     */
+    add_raw_point(x, y, pressure, stabilization, is_pen) {
+        const ret = wasm.strokestabilizercore_add_raw_point(this.__wbg_ptr, x, y, pressure, stabilization, is_pen);
+        return ret >>> 0;
+    }
+    /**
+     * Inicia un nuevo trazo estabilizado
+     * @param {number} x
+     * @param {number} y
+     * @param {number} pressure
+     */
+    begin_stroke(x, y, pressure) {
+        wasm.strokestabilizercore_begin_stroke(this.__wbg_ptr, x, y, pressure);
+    }
+    /**
+     * Al soltar el lápiz, emite el segmento final hasta el punto de liberación exacto
+     * @returns {number}
+     */
+    flush_tail() {
+        const ret = wasm.strokestabilizercore_flush_tail(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get_emitted_len() {
+        const ret = wasm.strokestabilizercore_get_emitted_len(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get_emitted_ptr() {
+        const ret = wasm.strokestabilizercore_get_emitted_ptr(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get_speed() {
+        const ret = wasm.strokestabilizercore_get_speed(this.__wbg_ptr);
+        return ret;
+    }
+    constructor() {
+        const ret = wasm.strokestabilizercore_new();
+        this.__wbg_ptr = ret;
+        StrokeStabilizerCoreFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+}
+if (Symbol.dispose) StrokeStabilizerCore.prototype[Symbol.dispose] = StrokeStabilizerCore.prototype.free;
+
 export function init_engine_hooks() {
     wasm.init_engine_hooks();
 }
@@ -1172,6 +1248,9 @@ const SmartFillCoreFinalization = (typeof FinalizationRegistry === 'undefined')
 const StrokeEngineCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_strokeenginecore_free(ptr, 1));
+const StrokeStabilizerCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_strokestabilizercore_free(ptr, 1));
 
 function _assertClass(instance, klass) {
     if (!(instance instanceof klass)) {

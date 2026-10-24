@@ -6,12 +6,14 @@ pub mod color_blend;
 pub mod fill;
 pub mod gif;
 pub mod selection;
+pub mod stabilizer;
 pub use bones::BoneSkinCore;
 pub use clip_tiles::ClipTileCore;
 pub use color_blend::ColorBlendCore;
 pub use fill::SmartFillCore;
 pub use gif::GifEncoderCore;
 pub use selection::SelectionCore;
+pub use stabilizer::StrokeStabilizerCore;
 
 const MIN_STAMP_DIAMETER: f32 = 0.4;
 const MIN_STAMP_STEP: f32 = 1.1;
@@ -986,6 +988,26 @@ mod tests {
         assert_eq!(rgba[3], 255);
         // transparent pixel untouched
         assert_eq!(rgba[7], 0);
+    }
+
+    #[test]
+    fn test_stroke_stabilizer_core() {
+        let mut stab = StrokeStabilizerCore::new();
+        stab.begin_stroke(10.0, 10.0, 0.5);
+
+        // Move to (20.0, 10.0) with stabilization 5
+        let count = stab.add_raw_point(20.0, 10.0, 0.6, 5.0, true);
+        assert!(count > 0);
+        assert!(stab.get_speed() > 0.0);
+        assert_eq!(stab.get_emitted_len(), count * 3);
+
+        // Subpixel jitter should be ignored
+        let count_jitter = stab.add_raw_point(20.02, 10.01, 0.6, 5.0, true);
+        assert_eq!(count_jitter, 0);
+
+        // Flush tail
+        let tail_count = stab.flush_tail();
+        assert_eq!(tail_count, 2);
     }
 }
 
