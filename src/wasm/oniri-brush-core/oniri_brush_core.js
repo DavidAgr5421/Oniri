@@ -743,6 +743,84 @@ export class ColorBlendCore {
 }
 if (Symbol.dispose) ColorBlendCore.prototype[Symbol.dispose] = ColorBlendCore.prototype.free;
 
+export class FilterCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        FilterCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_filtercore_free(ptr, 0);
+    }
+    /**
+     * Adjust brightness (-1.0 to 1.0) and contrast (-1.0 to 1.0) in place.
+     * @param {Uint8Array} rgba
+     * @param {number} brightness
+     * @param {number} contrast
+     */
+    static adjust_brightness_contrast(rgba, brightness, contrast) {
+        var ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.filtercore_adjust_brightness_contrast(ptr0, len0, rgba, brightness, contrast);
+    }
+    /**
+     * Adjust Hue, Saturation and Value (HSV).
+     * - `hue_delta_deg`: -180.0 to 180.0
+     * - `sat_scale`: 0.0 to 3.0 (1.0 = unchanged)
+     * - `val_scale`: 0.0 to 3.0 (1.0 = unchanged)
+     * @param {Uint8Array} rgba
+     * @param {number} hue_delta_deg
+     * @param {number} sat_scale
+     * @param {number} val_scale
+     */
+    static adjust_hsv(rgba, hue_delta_deg, sat_scale, val_scale) {
+        var ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.filtercore_adjust_hsv(ptr0, len0, rgba, hue_delta_deg, sat_scale, val_scale);
+    }
+    /**
+     * Convert to black or white based on luminance threshold (0..255).
+     * Pixels with luminance >= threshold become white (255), otherwise black (0).
+     * Transparent pixels remain unaffected.
+     * @param {Uint8Array} rgba
+     * @param {number} threshold
+     */
+    static binarize(rgba, threshold) {
+        var ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.filtercore_binarize(ptr0, len0, rgba, threshold);
+    }
+    /**
+     * Fast separable 1D Gaussian blur on an RGBA buffer.
+     * Returns a new blurred RGBA vector of identical dimensions.
+     * @param {Uint8Array} src_rgba
+     * @param {number} width
+     * @param {number} height
+     * @param {number} radius
+     * @returns {Uint8Array}
+     */
+    static gaussian_blur(src_rgba, width, height, radius) {
+        const ptr0 = passArray8ToWasm0(src_rgba, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.filtercore_gaussian_blur(ptr0, len0, width, height, radius);
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
+     * Invert RGB channels in place, preserving alpha.
+     * @param {Uint8Array} rgba
+     */
+    static invert_colors(rgba) {
+        var ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.filtercore_invert_colors(ptr0, len0, rgba);
+    }
+}
+if (Symbol.dispose) FilterCore.prototype[Symbol.dispose] = FilterCore.prototype.free;
+
 /**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
@@ -1389,6 +1467,9 @@ const ClipTileCoreFinalization = (typeof FinalizationRegistry === 'undefined')
 const ColorBlendCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_colorblendcore_free(ptr, 1));
+const FilterCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_filtercore_free(ptr, 1));
 const GifEncoderCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_gifencodercore_free(ptr, 1));

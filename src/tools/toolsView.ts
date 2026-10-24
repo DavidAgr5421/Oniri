@@ -39,7 +39,6 @@ import {
   swapColors,
   toggleProperties,
   toggleTransparentColor,
-  setDockLayout,
   setActiveSubToolGroup,
   getSubToolGroupsForTool,
   reorderSubTools,
@@ -504,75 +503,17 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const colorPickerComp = createColorPickerSection();
   const colorSection = colorPickerComp.section;
 
-  // Subtool column width (for side_by_side 2-column layout mode)
-  const savedSubColW = localStorage.getItem('oniri.subtool.col_width');
-  let currentSubColW = savedSubColW ? Math.max(160, Math.min(320, Number(savedSubColW))) : 200;
-
-  // Prop column / dock inner width (for stacked layout or prop column in side_by_side)
+  // Prop column / dock inner width
   const savedDockWidth = localStorage.getItem('oniri.dock.width');
-  let currentDockInnerW = savedDockWidth ? Math.max(210, Math.min(480, Number(savedDockWidth))) : 250;
+  let currentDockInnerW = savedDockWidth ? Math.max(200, Math.min(500, Number(savedDockWidth))) : 250;
 
   function applyDockDimensions(): void {
-    const isTwoCols = getToolState().dockLayout === 'side_by_side';
-    dock.classList.toggle('two-columns', isTwoCols);
-    document.documentElement.style.setProperty('--left-dock-subtool-width', `${currentSubColW}px`);
-    if (isTwoCols) {
-      const totalW = currentSubColW + currentDockInnerW + 4;
-      document.documentElement.style.setProperty('--left-dock-inner-width', `${totalW}px`);
-      document.documentElement.style.setProperty(
-        '--left-dock-width',
-        getToolState().propertiesOpen ? `${totalW + 48}px` : '48px',
-      );
-    } else {
-      document.documentElement.style.setProperty('--left-dock-inner-width', `${currentDockInnerW}px`);
-      document.documentElement.style.setProperty(
-        '--left-dock-width',
-        getToolState().propertiesOpen ? `${currentDockInnerW + 48}px` : '48px',
-      );
-    }
+    document.documentElement.style.setProperty('--left-dock-inner-width', `${currentDockInnerW}px`);
+    document.documentElement.style.setProperty(
+      '--left-dock-width',
+      getToolState().propertiesOpen ? `${currentDockInnerW + 48}px` : '48px',
+    );
   }
-
-  // Vertical column splitter between Subtools and Properties (in side_by_side mode)
-  const colSplitter = document.createElement('div');
-  colSplitter.className = 'csp-column-splitter';
-  colSplitter.title = 'Arrastrar para cambiar el ancho de la columna de subherramientas';
-
-  let isDraggingColSplitter = false;
-  let startColSplitterX = 0;
-  let startSubColW = 200;
-
-  colSplitter.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    isDraggingColSplitter = true;
-    startColSplitterX = e.clientX;
-    startSubColW = currentSubColW;
-    colSplitter.classList.add('dragging');
-    colSplitter.setPointerCapture(e.pointerId);
-  });
-
-  colSplitter.addEventListener('pointermove', (e) => {
-    if (!isDraggingColSplitter) return;
-    const dx = e.clientX - startColSplitterX;
-    currentSubColW = Math.max(160, Math.min(320, startSubColW + dx));
-    localStorage.setItem('oniri.subtool.col_width', String(currentSubColW));
-    applyDockDimensions();
-    subtoolScroll.update();
-    propScroll.update();
-  });
-
-  const stopColSplitter = (e: PointerEvent) => {
-    if (!isDraggingColSplitter) return;
-    isDraggingColSplitter = false;
-    colSplitter.classList.remove('dragging');
-    try {
-      colSplitter.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  };
-  colSplitter.addEventListener('pointerup', stopColSplitter);
-  colSplitter.addEventListener('pointercancel', stopColSplitter);
 
   // Dock Width Resizer Handle on right border
   const dockWidthResizer = document.createElement('div');
@@ -596,12 +537,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   dockWidthResizer.addEventListener('pointermove', (e) => {
     if (!isDraggingDockW) return;
     const dx = e.clientX - startDockX;
-    const isTwoCols = getToolState().dockLayout === 'side_by_side';
-    if (isTwoCols) {
-      currentDockInnerW = Math.max(210, Math.min(480, startDockW - currentSubColW - 4 + dx));
-    } else {
-      currentDockInnerW = Math.max(220, Math.min(480, startDockW + dx));
-    }
+    currentDockInnerW = Math.max(200, Math.min(500, startDockW + dx));
     localStorage.setItem('oniri.dock.width', String(currentDockInnerW));
     applyDockDimensions();
     subtoolScroll.update();
@@ -653,12 +589,6 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     btn.title = title;
     return btn;
   }
-
-  const layoutModeBtn = actionBtn('◫', 'Alternar diseño: 2 Columnas (lado a lado) / 1 Columna (apilada)');
-  layoutModeBtn.addEventListener('click', () => {
-    const nextMode = getToolState().dockLayout === 'side_by_side' ? 'stacked' : 'side_by_side';
-    setDockLayout(nextMode);
-  });
 
   const createBtn = actionBtn('+', 'Crear un pincel nuevo a partir del actual (duplicar)');
   const moveCatBtn = actionBtn('⇄', 'Mover pincel activo a otra herramienta (Pluma ↔ Pincel ↔ Efectos ↔ Borrador)');
@@ -759,7 +689,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
   const subtoolActions = document.createElement('div');
   subtoolActions.className = 'subtool-header-actions';
-  subtoolActions.append(layoutModeBtn, moveCatBtn, createBtn, resetBtn, deleteBtn);
+  subtoolActions.append(moveCatBtn, createBtn, resetBtn, deleteBtn);
   subtoolHeader.appendChild(subtoolActions);
 
   // Subtool Group Tabs (e.g. [Plumilla] [Marcador] [Lápiz])
@@ -770,11 +700,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const subtoolScroll = createCustomScrollContainer('csp-subtool-scroll-wrap');
   subtoolSection.append(subtoolHeader, subtoolTabs, subtoolScroll.wrap);
 
-  const subtoolCol = document.createElement('div');
-  subtoolCol.className = 'csp-subtool-column';
-  subtoolCol.appendChild(subtoolSection);
-
-  // --- Splitter 1: Between Subtools & Tool Properties (in stacked mode) ---
+  // --- Splitter 1: Between Subtools & Tool Properties ---
   const splitterSubProp = document.createElement('div');
   splitterSubProp.className = 'csp-dock-splitter csp-splitter-subprop';
   splitterSubProp.title = 'Arrastrar para cambiar el tamaño de Subherramientas y Propiedades';
@@ -796,7 +722,9 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   splitterSubProp.addEventListener('pointermove', (e) => {
     if (!isDraggingSplitter1) return;
     const dy = e.clientY - startSplitter1Y;
-    currentSubtoolH = Math.max(70, Math.min(400, startSubH + dy));
+    const dockH = dock.clientHeight || window.innerHeight - 26;
+    const maxSubH = Math.max(90, dockH - colorSection.offsetHeight - 110);
+    currentSubtoolH = Math.max(70, Math.min(maxSubH, startSubH + dy));
     subtoolSection.style.height = `${currentSubtoolH}px`;
     localStorage.setItem('oniri.subtool.height', String(currentSubtoolH));
     subtoolScroll.update();
@@ -1993,7 +1921,9 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   splitterPropColor.addEventListener('pointermove', (e) => {
     if (!isDraggingSplitter2) return;
     const dy = e.clientY - startSplitter2Y;
-    const currentColorH = Math.max(120, Math.min(500, startColorH - dy));
+    const dockH = dock.clientHeight || window.innerHeight - 26;
+    const maxColorH = Math.max(120, dockH - subtoolSection.offsetHeight - 110);
+    const currentColorH = Math.max(120, Math.min(maxColorH, startColorH - dy));
     colorSection.style.height = `${currentColorH}px`;
     localStorage.setItem('oniri.color.height', String(currentColorH));
     colorPickerComp.scroll.update();
@@ -2013,11 +1943,15 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   splitterPropColor.addEventListener('pointerup', stopSplitter2);
   splitterPropColor.addEventListener('pointercancel', stopSplitter2);
 
-  const propCol = document.createElement('div');
-  propCol.className = 'csp-prop-column';
-  propCol.append(propSection, splitterPropColor, colorSection);
-
-  dock.append(subtoolCol, colSplitter, splitterSubProp, propCol, dockWidthResizer);
+  // Stacked Layout: Subtools on top, Properties in the middle (flex 1), Color on bottom
+  dock.append(
+    subtoolSection,
+    splitterSubProp,
+    propSection,
+    splitterPropColor,
+    colorSection,
+    dockWidthResizer,
+  );
   container.appendChild(dock);
 
   // --- 3. Synchronize View with State ---
@@ -2036,10 +1970,6 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
     // 3. Update CSS variable on document for timeline docking offset and layout
     applyDockDimensions();
-    layoutModeBtn.innerHTML = state.dockLayout === 'side_by_side' ? '◫' : '⊟';
-    layoutModeBtn.title = state.dockLayout === 'side_by_side'
-      ? 'Cambiar a diseño apilado (1 Columna)'
-      : 'Cambiar a diseño lado a lado (2 Columnas)';
 
     // 4. Color widgets in Column 1
     primarySwatch.style.background = state.primaryColor;

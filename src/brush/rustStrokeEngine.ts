@@ -4,6 +4,7 @@ import initWasm, {
   BrushDynamicsConfig,
   ClipTileCore,
   ColorBlendCore,
+  FilterCore,
   GifEncoderCore,
   SelectionCore,
   SmartFillCore,
@@ -757,6 +758,77 @@ class RustStrokeEngineWrapper {
       return BoneIKCore.distance_to_segment(px, py, x1, y1, x2, y2);
     } catch (e) {
       console.warn('WASM BoneIKCore.distance_to_segment fallback:', e);
+      return null;
+    }
+  }
+
+  invertColors(rgba: Uint8ClampedArray): boolean {
+    if (!this.available) return false;
+    try {
+      // Pass typed subarray to WASM slice
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      FilterCore.invert_colors(u8);
+      return true;
+    } catch (e) {
+      console.warn('WASM FilterCore.invert_colors fallback:', e);
+      return false;
+    }
+  }
+
+  adjustBrightnessContrast(rgba: Uint8ClampedArray, brightness: number, contrast: number): boolean {
+    if (!this.available) return false;
+    try {
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      FilterCore.adjust_brightness_contrast(u8, brightness, contrast);
+      return true;
+    } catch (e) {
+      console.warn('WASM FilterCore.adjust_brightness_contrast fallback:', e);
+      return false;
+    }
+  }
+
+  binarize(rgba: Uint8ClampedArray, threshold: number): boolean {
+    if (!this.available) return false;
+    try {
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      FilterCore.binarize(u8, Math.max(0, Math.min(255, Math.round(threshold))));
+      return true;
+    } catch (e) {
+      console.warn('WASM FilterCore.binarize fallback:', e);
+      return false;
+    }
+  }
+
+  adjustHSV(
+    rgba: Uint8ClampedArray,
+    hueDeltaDeg: number,
+    satScale: number,
+    valScale: number,
+  ): boolean {
+    if (!this.available) return false;
+    try {
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      FilterCore.adjust_hsv(u8, hueDeltaDeg, satScale, valScale);
+      return true;
+    } catch (e) {
+      console.warn('WASM FilterCore.adjust_hsv fallback:', e);
+      return false;
+    }
+  }
+
+  gaussianBlur(
+    srcRgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    radius: number,
+  ): Uint8ClampedArray | null {
+    if (!this.available) return null;
+    try {
+      const u8 = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const res = FilterCore.gaussian_blur(u8, width, height, radius);
+      return new Uint8ClampedArray(res.buffer, res.byteOffset, res.byteLength);
+    } catch (e) {
+      console.warn('WASM FilterCore.gaussian_blur fallback:', e);
       return null;
     }
   }

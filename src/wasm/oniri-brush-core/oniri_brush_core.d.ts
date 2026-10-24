@@ -149,6 +149,38 @@ export class ColorBlendCore {
     static step_smudge(current_r: number, current_g: number, current_b: number, current_a: number, sampled_r: number, sampled_g: number, sampled_b: number, sampled_a: number, pick_rate: number): Float32Array;
 }
 
+export class FilterCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Adjust brightness (-1.0 to 1.0) and contrast (-1.0 to 1.0) in place.
+     */
+    static adjust_brightness_contrast(rgba: Uint8Array, brightness: number, contrast: number): void;
+    /**
+     * Adjust Hue, Saturation and Value (HSV).
+     * - `hue_delta_deg`: -180.0 to 180.0
+     * - `sat_scale`: 0.0 to 3.0 (1.0 = unchanged)
+     * - `val_scale`: 0.0 to 3.0 (1.0 = unchanged)
+     */
+    static adjust_hsv(rgba: Uint8Array, hue_delta_deg: number, sat_scale: number, val_scale: number): void;
+    /**
+     * Convert to black or white based on luminance threshold (0..255).
+     * Pixels with luminance >= threshold become white (255), otherwise black (0).
+     * Transparent pixels remain unaffected.
+     */
+    static binarize(rgba: Uint8Array, threshold: number): void;
+    /**
+     * Fast separable 1D Gaussian blur on an RGBA buffer.
+     * Returns a new blurred RGBA vector of identical dimensions.
+     */
+    static gaussian_blur(src_rgba: Uint8Array, width: number, height: number, radius: number): Uint8Array;
+    /**
+     * Invert RGB channels in place, preserving alpha.
+     */
+    static invert_colors(rgba: Uint8Array): void;
+}
+
 /**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
@@ -324,6 +356,7 @@ export interface InitOutput {
     readonly __wbg_brushdynamicsconfig_free: (a: number, b: number) => void;
     readonly __wbg_cliptilecore_free: (a: number, b: number) => void;
     readonly __wbg_colorblendcore_free: (a: number, b: number) => void;
+    readonly __wbg_filtercore_free: (a: number, b: number) => void;
     readonly __wbg_get_brushdynamicsconfig_base_size: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_flow: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_follow_direction: (a: number) => number;
@@ -407,6 +440,11 @@ export interface InitOutput {
     readonly colorblendcore_blend_dual_color: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly colorblendcore_evaluate_paper_texture: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
     readonly colorblendcore_step_smudge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly filtercore_adjust_brightness_contrast: (a: number, b: number, c: any, d: number, e: number) => void;
+    readonly filtercore_adjust_hsv: (a: number, b: number, c: any, d: number, e: number, f: number) => void;
+    readonly filtercore_binarize: (a: number, b: number, c: any, d: number) => void;
+    readonly filtercore_gaussian_blur: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly filtercore_invert_colors: (a: number, b: number, c: any) => void;
     readonly gifencodercore_encode_lzw_frame: (a: number, b: number, c: number, d: number) => number;
     readonly gifencodercore_get_indexed_len: (a: number) => number;
     readonly gifencodercore_get_indexed_ptr: (a: number) => number;

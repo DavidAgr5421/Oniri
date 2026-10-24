@@ -281,28 +281,30 @@ body {
 /* Sections */
 .dock-section {
   position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .dock-section.subtool-section {
   flex-shrink: 0;
   min-height: 80px;
+  overflow: hidden;
+  background: #1c1c1c;
 }
 
 .dock-section.prop-section {
   flex: 1 1 0;
   min-height: 90px;
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
+  background: var(--bg-panel);
 }
 
 .dock-section.color-section {
   flex-shrink: 0;
-  min-height: 150px;
-  max-height: 55vh;
-  display: flex;
-  flex-direction: column;
+  min-height: 140px;
   overflow: hidden;
+  background: #1e1e1e;
 }
 
 .dock-section-header {
@@ -457,76 +459,10 @@ body {
 }
 
 /* ==========================================================================
-   Dual Column Dock Layout (CSP Style: Subtools Column + Tool Properties Column)
+   Dock Sections Layout (Subtools on top, Properties in middle, Color on bottom)
    ========================================================================== */
-.csp-sidebar-dock.two-columns {
-  flex-direction: row;
-}
-
-.csp-sidebar-dock:not(.two-columns) .csp-subtool-column {
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-  height: auto;
-  border-right: none;
-}
-
-.csp-sidebar-dock:not(.two-columns) .csp-prop-column {
-  width: 100%;
-  min-width: 0;
-}
-
-.csp-sidebar-dock:not(.two-columns) .csp-column-splitter {
-  display: none !important;
-}
-
-.csp-sidebar-dock.two-columns .csp-splitter-subprop {
-  display: none !important;
-}
-
-.csp-sidebar-dock.two-columns .dock-section.subtool-section {
-  flex: 1 1 0;
-  height: 100% !important;
-  max-height: none;
-}
-
-.csp-subtool-column {
-  width: var(--left-dock-subtool-width, 200px);
-  min-width: 160px;
-  max-width: 320px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--bg-panel-border);
-  background: #1c1c1c;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.csp-prop-column {
-  flex: 1 1 0;
-  min-width: 210px;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg-panel);
-}
-
-/* Vertical splitter between Subtools column and Prop column */
-.csp-column-splitter {
-  width: 4px;
-  height: 100%;
-  cursor: col-resize;
-  background: transparent;
-  flex-shrink: 0;
-  transition: background 0.15s ease;
-  z-index: 5;
-}
-
-.csp-column-splitter:hover,
-.csp-column-splitter.dragging {
-  background: #007acc;
+.csp-sidebar-dock {
+  height: calc(100vh - 26px);
 }
 
 /* Subtool Group Tabs */

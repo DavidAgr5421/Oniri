@@ -471,11 +471,7 @@ function persistVisibleProps(props: BrushPropKey[]): void {
 const DOCK_LAYOUT_KEY = 'oniri.dock.layout';
 
 function loadDockLayout(): DockLayoutMode {
-  try {
-    const raw = localStorage.getItem(DOCK_LAYOUT_KEY);
-    if (raw === 'stacked' || raw === 'side_by_side') return raw;
-  } catch {}
-  return 'side_by_side';
+  return 'stacked';
 }
 
 const initialSub = findSubTool('g-pen') ?? subTools[0];

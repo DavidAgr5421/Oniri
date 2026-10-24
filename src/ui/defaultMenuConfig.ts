@@ -22,6 +22,7 @@ import {
 } from '../storage/clipboardManager';
 import { commandDispatcher } from './commandDispatcher';
 import type { TopMenuCategory } from './topMenuBar';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 
 export interface MenuDependencies {
   engine: BrushEngine;
@@ -552,18 +553,80 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     execute: () => {
       const l = lm.getActiveDrawableLayer();
       if (!l || !l.canvas || !l.context) return;
-      const img = l.context.getImageData(0, 0, l.canvas.width, l.canvas.height);
-      const d = img.data;
-      for (let i = 0; i < d.length; i += 4) {
-        if (d[i + 3] > 0) {
-          d[i] = 255 - d[i];
-          d[i + 1] = 255 - d[i + 1];
-          d[i + 2] = 255 - d[i + 2];
+      const w = l.canvas.width;
+      const h = l.canvas.height;
+      const prev = l.context.getImageData(0, 0, w, h);
+      engine.pushUndoRecord(l.id, { x: 0, y: 0, w, h }, prev);
+      const img = l.context.getImageData(0, 0, w, h);
+      if (!rustStrokeEngine.invertColors(img.data)) {
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] > 0) {
+            d[i] = 255 - d[i];
+            d[i + 1] = 255 - d[i + 1];
+            d[i + 2] = 255 - d[i + 2];
+          }
         }
       }
       l.context.putImageData(img, 0, 0);
       engine.compositeDirty = true;
       engine.updateComposite();
+    },
+  });
+
+  commandDispatcher.register({
+    id: 'filter.binarize',
+    label: 'Binarización / Umbral (Tinta)',
+    category: 'filter',
+    execute: () => {
+      const l = lm.getActiveDrawableLayer();
+      if (!l || !l.canvas || !l.context) return;
+      const w = l.canvas.width;
+      const h = l.canvas.height;
+      const prev = l.context.getImageData(0, 0, w, h);
+      engine.pushUndoRecord(l.id, { x: 0, y: 0, w, h }, prev);
+      const img = l.context.getImageData(0, 0, w, h);
+      if (!rustStrokeEngine.binarize(img.data, 128)) {
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] > 0) {
+            const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            const v = lum >= 128 ? 255 : 0;
+            d[i] = v;
+            d[i + 1] = v;
+            d[i + 2] = v;
+          }
+        }
+      }
+      l.context.putImageData(img, 0, 0);
+      engine.compositeDirty = true;
+      engine.updateComposite();
+    },
+  });
+
+  commandDispatcher.register({
+    id: 'filter.gaussianBlur',
+    label: 'Desenfoque Gaussiano (Suave)',
+    category: 'filter',
+    execute: () => {
+      const l = lm.getActiveDrawableLayer();
+      if (!l || !l.canvas || !l.context) return;
+      const w = l.canvas.width;
+      const h = l.canvas.height;
+      const prev = l.context.getImageData(0, 0, w, h);
+      engine.pushUndoRecord(l.id, { x: 0, y: 0, w, h }, prev);
+      const blurred = rustStrokeEngine.gaussianBlur(prev.data, w, h, 4.0);
+      if (blurred) {
+        const clamped = new Uint8ClampedArray(
+          blurred.buffer as ArrayBuffer,
+          blurred.byteOffset,
+          blurred.byteLength,
+        );
+        const newImg = new ImageData(clamped, w, h);
+        l.context.putImageData(newImg, 0, 0);
+        engine.compositeDirty = true;
+        engine.updateComposite();
+      }
     },
   });
 

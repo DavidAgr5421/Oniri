@@ -5,6 +5,7 @@ pub mod bones;
 pub mod clip_tiles;
 pub mod color_blend;
 pub mod fill;
+pub mod filters;
 pub mod gif;
 pub mod selection;
 pub mod stabilizer;
@@ -13,6 +14,7 @@ pub use bones::BoneSkinCore;
 pub use clip_tiles::ClipTileCore;
 pub use color_blend::ColorBlendCore;
 pub use fill::SmartFillCore;
+pub use filters::FilterCore;
 pub use gif::GifEncoderCore;
 pub use selection::SelectionCore;
 pub use stabilizer::StrokeStabilizerCore;
@@ -1045,6 +1047,53 @@ mod tests {
         let composed = BoneIKCore::compose_mat2d(&m1, &m2);
         assert_eq!(composed[4], 15.0);
         assert_eq!(composed[5], 25.0);
+    }
+
+    #[test]
+    fn test_filter_core() {
+        // Invert
+        let mut pixels = vec![100, 150, 200, 255, 0, 0, 0, 0];
+        FilterCore::invert_colors(&mut pixels);
+        assert_eq!(pixels[0], 155);
+        assert_eq!(pixels[1], 105);
+        assert_eq!(pixels[2], 55);
+        assert_eq!(pixels[3], 255);
+        // transparent pixel untouched
+        assert_eq!(pixels[7], 0);
+
+        // Binarize
+        let mut mono = vec![50, 50, 50, 255, 200, 200, 200, 255, 0, 0, 0, 0];
+        FilterCore::binarize(&mut mono, 128);
+        assert_eq!(mono[0], 0);
+        assert_eq!(mono[1], 0);
+        assert_eq!(mono[2], 0);
+        assert_eq!(mono[4], 255);
+        assert_eq!(mono[5], 255);
+        assert_eq!(mono[6], 255);
+        assert_eq!(mono[11], 0);
+
+        // Brightness & contrast
+        let mut bc = vec![128, 128, 128, 255];
+        FilterCore::adjust_brightness_contrast(&mut bc, 0.1, 0.0);
+        assert!(bc[0] > 140);
+
+        // HSV
+        let mut hsv = vec![255, 0, 0, 255]; // pure red
+        FilterCore::adjust_hsv(&mut hsv, 120.0, 1.0, 1.0); // +120 deg -> green
+        assert!(hsv[1] > 240);
+        assert!(hsv[0] < 15);
+
+        // Gaussian Blur (3x3 single white center on black)
+        let mut grid = vec![0u8; 9 * 4];
+        for i in 0..9 {
+            grid[i * 4 + 3] = 255;
+        }
+        grid[(1 * 3 + 1) * 4] = 255; // center R=255
+        let blurred = FilterCore::gaussian_blur(&grid, 3, 3, 1.0);
+        assert_eq!(blurred.len(), 36);
+        // Center should be diffused to neighbours
+        assert!(blurred[(1 * 3 + 0) * 4] > 0);
+        assert!(blurred[(1 * 3 + 2) * 4] > 0);
     }
 }
 
