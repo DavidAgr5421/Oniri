@@ -670,6 +670,15 @@ export function mountTimelineView(
     isScrubbing = false;
   });
 
+  let activePlayheadEl: HTMLElement | null = null;
+
+  function syncPlaybackUI(): void {
+    if (activePlayheadEl) {
+      activePlayheadEl.style.left = `${(timeline.settings.currentFrame - 1) * cellWidth + cellWidth / 2}px`;
+    }
+    frameDisplay.textContent = `${timeline.settings.currentFrame} / ${timeline.settings.totalFrames}`;
+  }
+
   // --- 4. Render Grid & Tracks ---
   function render(): void {
     const trSelected = getSelectedTrack();
@@ -1154,6 +1163,7 @@ export function mountTimelineView(
     playhead.appendChild(playheadCap);
 
     gridContent.appendChild(playhead);
+    activePlayheadEl = playhead;
   }
 
   // --- Helper: Drag Total Frames Handle on Right End of Timeline ---
@@ -1504,7 +1514,19 @@ export function mountTimelineView(
     }
   });
 
-  timeline.subscribe(render);
+  let wasPlaying = false;
+  timeline.subscribe(() => {
+    const isPlaying = timeline.settings.isPlaying;
+    if (isPlaying) {
+      wasPlaying = true;
+      syncPlaybackUI();
+    } else {
+      if (wasPlaying) {
+        wasPlaying = false;
+      }
+      render();
+    }
+  });
   render();
 }
 

@@ -790,8 +790,21 @@ export function mountLayersView(
     }
   }
 
+  function syncActiveHighlightOnly(): void {
+    const activeId = layerManager.activeLayerId;
+    const items = listContainer.querySelectorAll('.layer-item');
+    items.forEach((item) => {
+      const el = item as HTMLElement;
+      el.classList.toggle('active', el.dataset.layerId === activeId);
+    });
+  }
+
   let renderRaf = 0;
   function scheduleRender(): void {
+    if (timeline?.settings.isPlaying) {
+      syncActiveHighlightOnly();
+      return;
+    }
     if (renderRaf) return;
     renderRaf = requestAnimationFrame(() => {
       renderRaf = 0;
