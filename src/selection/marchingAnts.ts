@@ -1,4 +1,5 @@
 import { DOC_H, DOC_W } from '../brush/docConstants';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 import { selectionModel } from './selectionModel';
 import { transformManager } from './transformGizmo';
 
@@ -62,15 +63,34 @@ export class MarchingAntsRenderer {
 
   /**
    * Recalculates the 1-pixel boundary of the current selection mask.
-   * Uses 4-way dilation followed by destination-out subtraction.
+   * Uses Rust WASM for 1-pass zero-latency perimeter extraction, with 4-way dilation fallback.
    */
   private updateBoundary(): void {
     this.boundaryDirty = false;
-    this.boundaryCtx.clearRect(0, 0, this.boundaryCanvas.width, this.boundaryCanvas.height);
+    const w = this.boundaryCanvas.width;
+    const h = this.boundaryCanvas.height;
+    this.boundaryCtx.clearRect(0, 0, w, h);
 
     if (!selectionModel.hasSelection()) return;
 
     const mask = selectionModel.maskCanvas;
+    const mctx = selectionModel.maskCtx;
+    const imgData = mctx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+
+    const rustBoundary = rustStrokeEngine.extractBoundaryMask(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+      true,
+    );
+
+    if (rustBoundary) {
+      const clamped = new Uint8ClampedArray(rustBoundary.buffer as ArrayBuffer, rustBoundary.byteOffset, rustBoundary.byteLength);
+      const outImg = new ImageData(clamped, w, h);
+      this.boundaryCtx.putImageData(outImg, 0, 0);
+      return;
+    }
 
     // 1. Dilate mask by 1 pixel in 4 cardinal directions
     this.boundaryCtx.drawImage(mask, -1, 0);

@@ -1,7 +1,9 @@
 import initWasm, {
   BoneSkinCore,
   BrushDynamicsConfig,
+  ClipTileCore,
   GifEncoderCore,
+  SelectionCore,
   SmartFillCore,
   StrokeEngineCore,
   init_engine_hooks,
@@ -444,6 +446,106 @@ class RustStrokeEngineWrapper {
     if (len === 0) return null;
     const ptr = this.gifCore.get_lzw_ptr();
     return new Uint8Array(this.wasmMemory.buffer, ptr, len);
+  }
+
+  computeSelectionBounds(
+    buffer: Uint8Array,
+    width: number,
+    height: number,
+    isRgba = true,
+  ): [number, number, number, number, number, number] | null {
+    if (!this.available) return null;
+    try {
+      const res = SelectionCore.compute_bounds(buffer, width, height, isRgba);
+      if (res.length < 6) return null;
+      return [res[0], res[1], res[2], res[3], res[4], res[5]];
+    } catch (e) {
+      console.warn('WASM SelectionCore.compute_bounds fallback:', e);
+      return null;
+    }
+  }
+
+  morphologyExpand(
+    srcBuffer: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+    isRgba = true,
+  ): Uint8Array | null {
+    if (!this.available) return null;
+    try {
+      return SelectionCore.morphology_expand(srcBuffer, width, height, radius, isRgba);
+    } catch (e) {
+      console.warn('WASM SelectionCore.morphology_expand fallback:', e);
+      return null;
+    }
+  }
+
+  morphologyContract(
+    srcBuffer: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+    isRgba = true,
+  ): Uint8Array | null {
+    if (!this.available) return null;
+    try {
+      return SelectionCore.morphology_contract(srcBuffer, width, height, radius, isRgba);
+    } catch (e) {
+      console.warn('WASM SelectionCore.morphology_contract fallback:', e);
+      return null;
+    }
+  }
+
+  extractBoundaryMask(
+    srcBuffer: Uint8Array,
+    width: number,
+    height: number,
+    isRgba = true,
+  ): Uint8Array | null {
+    if (!this.available) return null;
+    try {
+      return SelectionCore.extract_boundary_mask(srcBuffer, width, height, isRgba);
+    } catch (e) {
+      console.warn('WASM SelectionCore.extract_boundary_mask fallback:', e);
+      return null;
+    }
+  }
+
+  invertMask(srcRgba: Uint8Array, width: number, height: number): Uint8Array | null {
+    if (!this.available) return null;
+    try {
+      return SelectionCore.invert_mask(srcRgba, width, height);
+    } catch (e) {
+      console.warn('WASM SelectionCore.invert_mask fallback:', e);
+      return null;
+    }
+  }
+
+  blitPlanarTile(
+    destRgba: Uint8Array,
+    docW: number,
+    docH: number,
+    decompPlanes: Uint8Array,
+    startX: number,
+    startY: number,
+    isMonochrome: boolean,
+  ): boolean {
+    if (!this.available) return false;
+    try {
+      return ClipTileCore.blit_planar_tile(
+        destRgba,
+        docW,
+        docH,
+        decompPlanes,
+        startX,
+        startY,
+        isMonochrome,
+      );
+    } catch (e) {
+      console.warn('WASM ClipTileCore.blit_planar_tile fallback:', e);
+      return false;
+    }
   }
 }
 

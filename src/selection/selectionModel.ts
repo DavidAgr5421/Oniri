@@ -1,4 +1,5 @@
 import { DOC_H, DOC_W } from '../brush/docConstants';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 
 export type SelectionCombineMode = 'replace' | 'add' | 'subtract';
 
@@ -149,21 +150,53 @@ export class SelectionModel {
   }
 
   /**
-   * Recalculates bounding box and whether any pixel is selected.
+   * Recalculates bounding box and whether any pixel is selected using Rust WASM.
    */
   public updateBounds(): void {
-    const imgData = this.maskCtx.getImageData(0, 0, this.maskCanvas.width, this.maskCanvas.height);
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    const imgData = this.maskCtx.getImageData(0, 0, w, h);
     const data = imgData.data;
-    let minX = this.maskCanvas.width;
-    let minY = this.maskCanvas.height;
+
+    const rustBounds = rustStrokeEngine.computeSelectionBounds(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+      true,
+    );
+
+    if (rustBounds) {
+      this._hasSelection = true;
+      this._bounds = {
+        minX: rustBounds[0],
+        minY: rustBounds[1],
+        maxX: rustBounds[2],
+        maxY: rustBounds[3],
+        width: rustBounds[4],
+        height: rustBounds[5],
+      };
+      this.notify();
+      return;
+    }
+
+    if (rustBounds === null && rustStrokeEngine.available) {
+      // Empty selection confirmed by Rust
+      this._hasSelection = false;
+      this._bounds = null;
+      this.notify();
+      return;
+    }
+
+    // JS Fallback
+    let minX = w;
+    let minY = h;
     let maxX = -1;
     let maxY = -1;
     let found = false;
 
-    // Scan for alpha > 0
-    for (let y = 0; y < this.maskCanvas.height; y++) {
-      const rowOffset = y * this.maskCanvas.width * 4;
-      for (let x = 0; x < this.maskCanvas.width; x++) {
+    for (let y = 0; y < h; y++) {
+      const rowOffset = y * w * 4;
+      for (let x = 0; x < w; x++) {
         const a = data[rowOffset + x * 4 + 3];
         if (a > 0) {
           found = true;
@@ -223,53 +256,112 @@ export class SelectionModel {
   }
 
   /**
-   * Invert the current selection (Ctrl+Shift+I)
+   * Invert the current selection (Ctrl+Shift+I) accelerated by Rust.
    */
   public invertSelection(): void {
     this.endMoveMask();
-    this.maskCtx.save();
-    this.maskCtx.globalCompositeOperation = 'difference';
-    this.maskCtx.fillStyle = '#ffffff';
-    this.maskCtx.fillRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
-    this.maskCtx.restore();
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    const imgData = this.maskCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+
+    const rustInverted = rustStrokeEngine.invertMask(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+    );
+
+    if (rustInverted) {
+      const clamped = new Uint8ClampedArray(rustInverted.buffer as ArrayBuffer, rustInverted.byteOffset, rustInverted.byteLength);
+      const outImg = new ImageData(clamped, w, h);
+      this.maskCtx.putImageData(outImg, 0, 0);
+    } else {
+      this.maskCtx.save();
+      this.maskCtx.globalCompositeOperation = 'difference';
+      this.maskCtx.fillStyle = '#ffffff';
+      this.maskCtx.fillRect(0, 0, w, h);
+      this.maskCtx.restore();
+    }
     this.updateBounds();
   }
 
   /**
-   * Expand Selection: morphological dilation by radius in pixels.
+   * Expand Selection: morphological dilation by radius in pixels accelerated by Rust.
    */
   public expandSelection(radiusPx: number): void {
     if (!this._hasSelection || radiusPx <= 0) return;
     this.endMoveMask();
     const r = Math.min(64, Math.max(1, Math.round(radiusPx)));
-    const tmp = document.createElement('canvas');
-    tmp.width = this.maskCanvas.width;
-    tmp.height = this.maskCanvas.height;
-    const tctx = tmp.getContext('2d')!;
-    tctx.drawImage(this.maskCanvas, 0, 0);
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    const imgData = this.maskCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
 
-    this.maskCtx.save();
-    this.maskCtx.globalCompositeOperation = 'source-over';
-    const step = r > 8 ? 2 : 1;
-    for (let dy = -r; dy <= r; dy += step) {
-      for (let dx = -r; dx <= r; dx += step) {
-        if (dx * dx + dy * dy <= r * r) {
-          this.maskCtx.drawImage(tmp, dx, dy);
+    const rustExpanded = rustStrokeEngine.morphologyExpand(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+      r,
+      true,
+    );
+
+    if (rustExpanded) {
+      const clamped = new Uint8ClampedArray(rustExpanded.buffer as ArrayBuffer, rustExpanded.byteOffset, rustExpanded.byteLength);
+      const outImg = new ImageData(clamped, w, h);
+      this.maskCtx.putImageData(outImg, 0, 0);
+    } else {
+      const tmp = document.createElement('canvas');
+      tmp.width = w;
+      tmp.height = h;
+      const tctx = tmp.getContext('2d')!;
+      tctx.drawImage(this.maskCanvas, 0, 0);
+
+      this.maskCtx.save();
+      this.maskCtx.globalCompositeOperation = 'source-over';
+      const step = r > 8 ? 2 : 1;
+      for (let dy = -r; dy <= r; dy += step) {
+        for (let dx = -r; dx <= r; dx += step) {
+          if (dx * dx + dy * dy <= r * r) {
+            this.maskCtx.drawImage(tmp, dx, dy);
+          }
         }
       }
+      this.maskCtx.restore();
     }
-    this.maskCtx.restore();
     this.updateBounds();
   }
 
   /**
-   * Contract / Reduce Selection: morphological erosion by radius in pixels.
+   * Contract / Reduce Selection: morphological erosion by radius in pixels accelerated by Rust.
    */
   public contractSelection(radiusPx: number): void {
     if (!this._hasSelection || radiusPx <= 0) return;
-    this.invertSelection();
-    this.expandSelection(radiusPx);
-    this.invertSelection();
+    this.endMoveMask();
+    const r = Math.min(64, Math.max(1, Math.round(radiusPx)));
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    const imgData = this.maskCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+
+    const rustContracted = rustStrokeEngine.morphologyContract(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+      r,
+      true,
+    );
+
+    if (rustContracted) {
+      const clamped = new Uint8ClampedArray(rustContracted.buffer as ArrayBuffer, rustContracted.byteOffset, rustContracted.byteLength);
+      const outImg = new ImageData(clamped, w, h);
+      this.maskCtx.putImageData(outImg, 0, 0);
+    } else {
+      this.invertSelection();
+      this.expandSelection(radiusPx);
+      this.invertSelection();
+      return;
+    }
+    this.updateBounds();
   }
 
   /**

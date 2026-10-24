@@ -1,11 +1,15 @@
 use wasm_bindgen::prelude::*;
 
 pub mod bones;
+pub mod clip_tiles;
 pub mod fill;
 pub mod gif;
+pub mod selection;
 pub use bones::BoneSkinCore;
+pub use clip_tiles::ClipTileCore;
 pub use fill::SmartFillCore;
 pub use gif::GifEncoderCore;
+pub use selection::SelectionCore;
 
 const MIN_STAMP_DIAMETER: f32 = 0.4;
 const MIN_STAMP_STEP: f32 = 1.1;
@@ -908,6 +912,53 @@ mod tests {
         .to_vec();
         let lzw_len = gif.encode_lzw_frame(&indexed, 2);
         assert!(lzw_len > 3);
+    }
+
+    #[test]
+    fn test_selection_core() {
+        let mut mask = vec![0u8; 100 * 100 * 4];
+        // Select a 20x20 box from (10, 10) to (29, 29)
+        for y in 10..30 {
+            for x in 10..30 {
+                let p = (y * 100 + x) * 4;
+                mask[p] = 255;
+                mask[p + 1] = 255;
+                mask[p + 2] = 255;
+                mask[p + 3] = 255;
+            }
+        }
+
+        let bounds = SelectionCore::compute_bounds(&mask, 100, 100, true);
+        assert_eq!(bounds, vec![10, 10, 29, 29, 20, 20]);
+
+        // Expand by 2 px
+        let expanded = SelectionCore::morphology_expand(&mask, 100, 100, 2, true);
+        let exp_bounds = SelectionCore::compute_bounds(&expanded, 100, 100, true);
+        assert_eq!(exp_bounds, vec![8, 8, 31, 31, 24, 24]);
+
+        // Boundary extraction
+        let boundary = SelectionCore::extract_boundary_mask(&mask, 100, 100, true);
+        let b_bounds = SelectionCore::compute_bounds(&boundary, 100, 100, true);
+        assert_eq!(b_bounds, vec![10, 10, 29, 29, 20, 20]);
+        // Pixel at (15, 15) is internal, so boundary should be 0 there
+        let internal_alpha = boundary[(15 * 100 + 15) * 4 + 3];
+        assert_eq!(internal_alpha, 0);
+        // Pixel at (10, 10) is corner, so boundary should be 255
+        let edge_alpha = boundary[(10 * 100 + 10) * 4 + 3];
+        assert_eq!(edge_alpha, 255);
+    }
+
+    #[test]
+    fn test_clip_tile_core() {
+        let mut dest = vec![0u8; 256 * 256 * 4];
+        let mut decomp = vec![0u8; 256 * 256 * 5];
+        // Set first pixel in alpha to 255 and red to 200
+        decomp[0] = 255; // alpha
+        decomp[256 * 256] = 200; // red
+        let ok = ClipTileCore::blit_planar_tile(&mut dest, 256, 256, &decomp, 0, 0, false);
+        assert!(ok);
+        assert_eq!(dest[0], 200); // R
+        assert_eq!(dest[3], 255); // A
     }
 }
 

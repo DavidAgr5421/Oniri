@@ -5,6 +5,7 @@ import type { TimelineManager } from '../animation/timelineManager';
 import type { LayerNode } from '../brush/layers';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 
 export interface CelDescriptor {
   mainId: number;
@@ -266,36 +267,45 @@ export function decodeCelToCanvas(
           const c2 = decomp.subarray(131072, 196608); // Green or White mask
           const c3 = decomp.subarray(196608, 262144); // Blue
 
-          // Monochrome lineart uses plane 0 as density and planes 1/2 as ink flags.
-          // In monochrome (0) or grayscale (1), reading planes 1, 2, 3 directly as RGB causes rainbow chromatic scanline glitches.
           const isMonochrome = desc.colorType === 0 || desc.colorType === 1 || desc.colorType === undefined;
 
-          for (let ty = 0; ty < tileH; ty++) {
-            const py = startY + ty;
-            if (py < 0 || py >= desc.docH) continue;
-            const rowOffset = py * desc.docW;
-            const tileRowOffset = ty * tileW;
+          const rawRgba = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+          const rustOk = rustStrokeEngine.blitPlanarTile(
+            rawRgba,
+            desc.docW,
+            desc.docH,
+            decomp,
+            startX,
+            startY,
+            isMonochrome
+          );
 
-            for (let tx = 0; tx < tileW; tx++) {
-              const px = startX + tx;
-              if (px < 0 || px >= desc.docW) continue;
-              const tidx = tileRowOffset + tx;
-              const a = c0[tidx];
-              if (a === 0) continue;
+          if (!rustOk) {
+            for (let ty = 0; ty < tileH; ty++) {
+              const py = startY + ty;
+              if (py < 0 || py >= desc.docH) continue;
+              const rowOffset = py * desc.docW;
+              const tileRowOffset = ty * tileW;
 
-              const pidx = (rowOffset + px) * 4;
-              if (isMonochrome) {
-                // Clean, crisp solid black lineart (#000000) with alpha density.
-                // Eliminates false white scanline striping caused by screentone dither planes in c2.
-                rgba[pidx] = 0;
-                rgba[pidx + 1] = 0;
-                rgba[pidx + 2] = 0;
-              } else {
-                rgba[pidx] = c1[tidx];     // R
-                rgba[pidx + 1] = c2[tidx]; // G
-                rgba[pidx + 2] = c3[tidx]; // B
+              for (let tx = 0; tx < tileW; tx++) {
+                const px = startX + tx;
+                if (px < 0 || px >= desc.docW) continue;
+                const tidx = tileRowOffset + tx;
+                const a = c0[tidx];
+                if (a === 0) continue;
+
+                const pidx = (rowOffset + px) * 4;
+                if (isMonochrome) {
+                  rgba[pidx] = 0;
+                  rgba[pidx + 1] = 0;
+                  rgba[pidx + 2] = 0;
+                } else {
+                  rgba[pidx] = c1[tidx];     // R
+                  rgba[pidx + 1] = c2[tidx]; // G
+                  rgba[pidx + 2] = c3[tidx]; // B
+                }
+                rgba[pidx + 3] = a;        // A
               }
-              rgba[pidx + 3] = a;        // A
             }
           }
         }

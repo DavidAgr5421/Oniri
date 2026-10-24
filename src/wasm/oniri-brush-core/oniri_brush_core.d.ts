@@ -75,6 +75,19 @@ export class BrushDynamicsConfig {
 }
 
 /**
+ * Motor nativo de decodificación planar y composición de mosaicos (tiles)
+ */
+export class ClipTileCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Compone un tile descompreso de 5 planos (256x256) directamente en el buffer RGBA del documento
+     */
+    static blit_planar_tile(dest_rgba: Uint8Array, doc_w: number, doc_h: number, decomp_planes: Uint8Array, start_x: number, start_y: number, is_monochrome: boolean): boolean;
+}
+
+/**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
 export class GifEncoderCore {
@@ -95,6 +108,37 @@ export class GifEncoderCore {
      * Cuantiza un frame RGBA8 a paleta de hasta 255 colores + índice transparente en O(N)
      */
     quantize_rgba(rgba: Uint8Array, width: number, height: number): number;
+}
+
+/**
+ * Motor nativo de selección, morfología y extracción de bordes (Marching Ants)
+ */
+export class SelectionCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Calcula de manera ultrarrápida los límites de la selección (bounding box)
+     * Retorna `[min_x, min_y, max_x, max_y, width, height]` o un vector vacío si no hay selección.
+     */
+    static compute_bounds(buffer: Uint8Array, width: number, height: number, is_rgba: boolean): Int32Array;
+    /**
+     * Extrae el contorno perimetral exacto de 1 píxel para las Marching Ants
+     * Genera directamente un buffer RGBA con el perímetro marcado para pintar en canvas
+     */
+    static extract_boundary_mask(src_buffer: Uint8Array, width: number, height: number, is_rgba: boolean): Uint8Array;
+    /**
+     * Inversión de máscara booleana directamente a RGBA
+     */
+    static invert_mask(src_rgba: Uint8Array, width: number, height: number): Uint8Array;
+    /**
+     * Erosión morfológica circular (Contract / Reduce Selection) directamente a RGBA
+     */
+    static morphology_contract(src_buffer: Uint8Array, width: number, height: number, radius: number, is_rgba: boolean): Uint8Array;
+    /**
+     * Dilatación morfológica circular (Expand Selection) directamente a RGBA
+     */
+    static morphology_expand(src_buffer: Uint8Array, width: number, height: number, radius: number, is_rgba: boolean): Uint8Array;
 }
 
 /**
@@ -178,6 +222,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_boneskincore_free: (a: number, b: number) => void;
     readonly __wbg_brushdynamicsconfig_free: (a: number, b: number) => void;
+    readonly __wbg_cliptilecore_free: (a: number, b: number) => void;
     readonly __wbg_get_brushdynamicsconfig_base_size: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_flow: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_follow_direction: (a: number) => number;
@@ -205,6 +250,7 @@ export interface InitOutput {
     readonly __wbg_get_brushdynamicsconfig_velocity_min_ratio: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_velocity_size_enabled: (a: number) => number;
     readonly __wbg_gifencodercore_free: (a: number, b: number) => void;
+    readonly __wbg_selectioncore_free: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_base_size: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_flow: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_follow_direction: (a: number, b: number) => void;
@@ -242,6 +288,7 @@ export interface InitOutput {
     readonly boneskincore_new: () => number;
     readonly boneskincore_scan_layer_bounds: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly brushdynamicsconfig_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number) => number;
+    readonly cliptilecore_blit_planar_tile: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly gifencodercore_encode_lzw_frame: (a: number, b: number, c: number, d: number) => number;
     readonly gifencodercore_get_indexed_len: (a: number) => number;
     readonly gifencodercore_get_indexed_ptr: (a: number) => number;
@@ -252,6 +299,11 @@ export interface InitOutput {
     readonly gifencodercore_new: () => number;
     readonly gifencodercore_quantize_rgba: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly init_engine_hooks: () => void;
+    readonly selectioncore_compute_bounds: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly selectioncore_extract_boundary_mask: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly selectioncore_invert_mask: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly selectioncore_morphology_contract: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly selectioncore_morphology_expand: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly smartfillcore_compute_enclose_fill_mask: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly smartfillcore_compute_smart_fill_mask: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly smartfillcore_compute_unfilled_area_mask: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;

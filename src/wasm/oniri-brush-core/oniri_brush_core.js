@@ -507,6 +507,42 @@ export class BrushDynamicsConfig {
 if (Symbol.dispose) BrushDynamicsConfig.prototype[Symbol.dispose] = BrushDynamicsConfig.prototype.free;
 
 /**
+ * Motor nativo de decodificación planar y composición de mosaicos (tiles)
+ */
+export class ClipTileCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        ClipTileCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_cliptilecore_free(ptr, 0);
+    }
+    /**
+     * Compone un tile descompreso de 5 planos (256x256) directamente en el buffer RGBA del documento
+     * @param {Uint8Array} dest_rgba
+     * @param {number} doc_w
+     * @param {number} doc_h
+     * @param {Uint8Array} decomp_planes
+     * @param {number} start_x
+     * @param {number} start_y
+     * @param {boolean} is_monochrome
+     * @returns {boolean}
+     */
+    static blit_planar_tile(dest_rgba, doc_w, doc_h, decomp_planes, start_x, start_y, is_monochrome) {
+        var ptr0 = passArray8ToWasm0(dest_rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(decomp_planes, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.cliptilecore_blit_planar_tile(ptr0, len0, dest_rgba, doc_w, doc_h, ptr1, len1, start_x, start_y, is_monochrome);
+        return ret !== 0;
+    }
+}
+if (Symbol.dispose) ClipTileCore.prototype[Symbol.dispose] = ClipTileCore.prototype.free;
+
+/**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
 export class GifEncoderCore {
@@ -595,6 +631,106 @@ export class GifEncoderCore {
     }
 }
 if (Symbol.dispose) GifEncoderCore.prototype[Symbol.dispose] = GifEncoderCore.prototype.free;
+
+/**
+ * Motor nativo de selección, morfología y extracción de bordes (Marching Ants)
+ */
+export class SelectionCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        SelectionCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_selectioncore_free(ptr, 0);
+    }
+    /**
+     * Calcula de manera ultrarrápida los límites de la selección (bounding box)
+     * Retorna `[min_x, min_y, max_x, max_y, width, height]` o un vector vacío si no hay selección.
+     * @param {Uint8Array} buffer
+     * @param {number} width
+     * @param {number} height
+     * @param {boolean} is_rgba
+     * @returns {Int32Array}
+     */
+    static compute_bounds(buffer, width, height, is_rgba) {
+        const ptr0 = passArray8ToWasm0(buffer, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.selectioncore_compute_bounds(ptr0, len0, width, height, is_rgba);
+        var v2 = getArrayI32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v2;
+    }
+    /**
+     * Extrae el contorno perimetral exacto de 1 píxel para las Marching Ants
+     * Genera directamente un buffer RGBA con el perímetro marcado para pintar en canvas
+     * @param {Uint8Array} src_buffer
+     * @param {number} width
+     * @param {number} height
+     * @param {boolean} is_rgba
+     * @returns {Uint8Array}
+     */
+    static extract_boundary_mask(src_buffer, width, height, is_rgba) {
+        const ptr0 = passArray8ToWasm0(src_buffer, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.selectioncore_extract_boundary_mask(ptr0, len0, width, height, is_rgba);
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
+     * Inversión de máscara booleana directamente a RGBA
+     * @param {Uint8Array} src_rgba
+     * @param {number} width
+     * @param {number} height
+     * @returns {Uint8Array}
+     */
+    static invert_mask(src_rgba, width, height) {
+        const ptr0 = passArray8ToWasm0(src_rgba, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.selectioncore_invert_mask(ptr0, len0, width, height);
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
+     * Erosión morfológica circular (Contract / Reduce Selection) directamente a RGBA
+     * @param {Uint8Array} src_buffer
+     * @param {number} width
+     * @param {number} height
+     * @param {number} radius
+     * @param {boolean} is_rgba
+     * @returns {Uint8Array}
+     */
+    static morphology_contract(src_buffer, width, height, radius, is_rgba) {
+        const ptr0 = passArray8ToWasm0(src_buffer, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.selectioncore_morphology_contract(ptr0, len0, width, height, radius, is_rgba);
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+    /**
+     * Dilatación morfológica circular (Expand Selection) directamente a RGBA
+     * @param {Uint8Array} src_buffer
+     * @param {number} width
+     * @param {number} height
+     * @param {number} radius
+     * @param {boolean} is_rgba
+     * @returns {Uint8Array}
+     */
+    static morphology_expand(src_buffer, width, height, radius, is_rgba) {
+        const ptr0 = passArray8ToWasm0(src_buffer, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.selectioncore_morphology_expand(ptr0, len0, width, height, radius, is_rgba);
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+}
+if (Symbol.dispose) SelectionCore.prototype[Symbol.dispose] = SelectionCore.prototype.free;
 
 /**
  * Motor morfológico en Rust + WASM para Smart Fill, Enclose & Fill y Paint Unfilled Area
@@ -868,6 +1004,9 @@ export function init_engine_hooks() {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_copy_to_typed_array_88899a52af046901: function(arg0, arg1, arg2) {
+            new Uint8Array(arg2.buffer, arg2.byteOffset, arg2.byteLength).set(getArrayU8FromWasm0(arg0, arg1));
+        },
         __wbg___wbindgen_throw_41e9ee4f547fc59a: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
@@ -915,9 +1054,15 @@ const BoneSkinCoreFinalization = (typeof FinalizationRegistry === 'undefined')
 const BrushDynamicsConfigFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_brushdynamicsconfig_free(ptr, 1));
+const ClipTileCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_cliptilecore_free(ptr, 1));
 const GifEncoderCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_gifencodercore_free(ptr, 1));
+const SelectionCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_selectioncore_free(ptr, 1));
 const SmartFillCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_smartfillcore_free(ptr, 1));
@@ -939,6 +1084,11 @@ function getArrayF32FromWasm0(ptr, len) {
 function getArrayI32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getInt32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
 let cachedDataViewMemory0 = null;
