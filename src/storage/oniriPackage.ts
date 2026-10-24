@@ -1,4 +1,4 @@
-import { zipSync, unzipSync, strToU8, strFromU8, type Zippable } from 'fflate';
+import { zip, unzipSync, strToU8, strFromU8, type Zippable } from 'fflate';
 import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from '../animation/timelineManager';
 import type { LayerNode } from '../brush/layers';
@@ -76,10 +76,19 @@ async function canvasToPngU8(canvas: HTMLCanvasElement): Promise<Uint8Array> {
 }
 
 /**
- * Renders a PNG Uint8Array onto a target canvas.
+ * Renders a PNG Uint8Array onto a target canvas using fast createImageBitmap when available.
  */
 async function drawPngU8ToCanvas(u8: Uint8Array, targetCanvas: HTMLCanvasElement): Promise<void> {
   const blob = new Blob([u8 as any], { type: 'image/png' });
+  if (typeof createImageBitmap === 'function') {
+    const bitmap = await createImageBitmap(blob);
+    const ctx = targetCanvas.getContext('2d')!;
+    ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return;
+  }
+
   const url = URL.createObjectURL(blob);
   try {
     const img = new Image();
@@ -234,7 +243,12 @@ export async function exportOniriPackage(
   }
   zippable.cels = celsFolder;
 
-  return zipSync(zippable, { level: 6 });
+  return new Promise<Uint8Array>((resolve, reject) => {
+    zip(zippable, { level: 1 }, (err, data) => {
+      if (err) reject(err);
+      else resolve(data);
+    });
+  });
 }
 
 /**
