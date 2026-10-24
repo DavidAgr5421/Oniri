@@ -1724,12 +1724,9 @@ export function createBrushEngine(): BrushEngine {
       if (selectionModel.hasSelection() && !selectionModel.isPixelSelected(x, y)) {
         return;
       }
-      const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
-      const current = active.context.getImageData(0, 0, curDocW, curDocH);
-      history.push(active.id, fullRect, current);
 
       const bSettings = getToolState().brush;
-      const handled = executeSmartFill({
+      const fillRes = executeSmartFill({
         seedX: x,
         seedY: y,
         fillColorHex: colorHex,
@@ -1744,10 +1741,15 @@ export function createBrushEngine(): BrushEngine {
         docH: curDocH,
       });
 
-      if (!handled && (bSettings.referMode === 'editing')) {
+      if (fillRes) {
+        history.push(active.id, fillRes.bounds, fillRes.prevImageData);
+        meshCache.delete(active.id);
+        engine.compositeDirty = true;
+      } else if (bSettings.referMode === 'editing') {
+        const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
+        const current = active.context.getImageData(0, 0, curDocW, curDocH);
         floodFill(active.context, x, y, colorHex, tolerance);
         if (selectionModel.hasSelection()) {
-          // If selection is active, restore pixels outside selection using pre-fill snapshot
           const newImg = active.context.getImageData(0, 0, curDocW, curDocH);
           const maskData = selectionModel.maskCtx.getImageData(0, 0, curDocW, curDocH).data;
           for (let i = 0; i < current.data.length; i += 4) {
@@ -1760,19 +1762,18 @@ export function createBrushEngine(): BrushEngine {
           }
           active.context.putImageData(newImg, 0, 0);
         }
+        history.push(active.id, fullRect, current);
+        meshCache.delete(active.id);
+        engine.compositeDirty = true;
       }
-      meshCache.delete(active.id);
-      engine.compositeDirty = true;
     },
     encloseAndFill(polygon, colorHex, tolerance): boolean {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return false;
-      const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
-      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       const bSettings = getToolState().brush;
 
-      const ok = executeEncloseAndFill({
+      const res = executeEncloseAndFill({
         polygon,
         fillColorHex: colorHex,
         tolerance,
@@ -1786,22 +1787,21 @@ export function createBrushEngine(): BrushEngine {
         docH: curDocH,
       });
 
-      if (ok) {
-        history.push(active.id, fullRect, current);
+      if (res) {
+        history.push(active.id, res.bounds, res.prevImageData);
         meshCache.delete(active.id);
         engine.compositeDirty = true;
+        return true;
       }
-      return ok;
+      return false;
     },
     paintUnfilledArea(points, radius, colorHex, tolerance): boolean {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return false;
-      const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
-      const current = active.context.getImageData(0, 0, curDocW, curDocH);
       const bSettings = getToolState().brush;
 
-      const ok = executePaintUnfilledArea({
+      const res = executePaintUnfilledArea({
         points,
         radius,
         fillColorHex: colorHex,
@@ -1816,20 +1816,32 @@ export function createBrushEngine(): BrushEngine {
         docH: curDocH,
       });
 
-      if (ok) {
-        history.push(active.id, fullRect, current);
+      if (res) {
+        history.push(active.id, res.bounds, res.prevImageData);
         meshCache.delete(active.id);
         engine.compositeDirty = true;
+        return true;
       }
-      return ok;
+      return false;
     },
     fillSelection(colorHex?: string): void {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return;
-      const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
-      const current = active.context.getImageData(0, 0, curDocW, curDocH);
-      history.push(active.id, fullRect, current);
+
+      const hasSel = selectionModel.hasSelection();
+      const selBounds = hasSel ? selectionModel.getBounds() : null;
+      const targetRect: Rect = selBounds
+        ? {
+            x: Math.max(0, Math.floor(selBounds.minX)),
+            y: Math.max(0, Math.floor(selBounds.minY)),
+            w: Math.min(curDocW - Math.floor(selBounds.minX), Math.ceil(selBounds.width)),
+            h: Math.min(curDocH - Math.floor(selBounds.minY), Math.ceil(selBounds.height)),
+          }
+        : { x: 0, y: 0, w: curDocW, h: curDocH };
+
+      const current = active.context.getImageData(targetRect.x, targetRect.y, targetRect.w, targetRect.h);
+      history.push(active.id, targetRect, current);
       meshCache.delete(active.id);
 
       const color = colorHex || getToolState().brush.color;
@@ -1840,7 +1852,7 @@ export function createBrushEngine(): BrushEngine {
       liveMaskContext.clearRect(0, 0, curDocW, curDocH);
       liveMaskContext.fillStyle = color;
       liveMaskContext.fillRect(0, 0, curDocW, curDocH);
-      if (selectionModel.hasSelection()) {
+      if (hasSel) {
         liveMaskContext.save();
         liveMaskContext.globalCompositeOperation = 'destination-in';
         liveMaskContext.drawImage(selectionModel.maskCanvas, 0, 0);
@@ -1854,11 +1866,22 @@ export function createBrushEngine(): BrushEngine {
       if (mode) finishStroke();
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper) return false;
-      const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
-      const current = active.context.getImageData(0, 0, curDocW, curDocH);
-      history.push(active.id, fullRect, current);
+
+      const hasSel = selectionModel.hasSelection();
+      const selBounds = hasSel ? selectionModel.getBounds() : null;
+      const targetRect: Rect = selBounds
+        ? {
+            x: Math.max(0, Math.floor(selBounds.minX)),
+            y: Math.max(0, Math.floor(selBounds.minY)),
+            w: Math.min(curDocW - Math.floor(selBounds.minX), Math.ceil(selBounds.width)),
+            h: Math.min(curDocH - Math.floor(selBounds.minY), Math.ceil(selBounds.height)),
+          }
+        : { x: 0, y: 0, w: curDocW, h: curDocH };
+
+      const current = active.context.getImageData(targetRect.x, targetRect.y, targetRect.w, targetRect.h);
+      history.push(active.id, targetRect, current);
       meshCache.delete(active.id);
-      if (selectionModel.hasSelection()) {
+      if (hasSel) {
         active.context.save();
         active.context.globalCompositeOperation = 'destination-out';
         active.context.drawImage(selectionModel.maskCanvas, 0, 0);

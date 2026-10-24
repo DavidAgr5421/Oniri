@@ -1,5 +1,10 @@
 import type { LayerNode } from './layers';
 
+export interface SmartFillResult {
+  bounds: { x: number; y: number; w: number; h: number };
+  prevImageData: ImageData;
+}
+
 export interface SmartFillConfig {
   seedX: number;
   seedY: number;
@@ -120,7 +125,7 @@ function hexToRgba(hex: string): [number, number, number, number] {
  * 2. Morphological Close Gap (seals lines with small openings without leaving unfilled margins).
  * 3. Area Scaling (expands color under anti-aliased lineart, removing white halos, or contracts if negative).
  */
-export function executeSmartFill(config: SmartFillConfig): boolean {
+export function executeSmartFill(config: SmartFillConfig): SmartFillResult | null {
   const {
     seedX,
     seedY,
@@ -137,10 +142,10 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
   } = config;
 
   if (!activeLayer.context || activeLayer.locked || activeLayer.isPaper) {
-    return false;
+    return null;
   }
   if (seedX < 0 || seedX >= docW || seedY < 0 || seedY >= docH) {
-    return false;
+    return null;
   }
 
   const targetCtx = activeLayer.context;
@@ -221,7 +226,7 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
 
   // If clicked on active layer with exact same color and opacity, do nothing
   if (!isMultiLayerBoundary && targetData[seedP] === fillR && targetData[seedP + 1] === fillG && targetData[seedP + 2] === fillB && targetData[seedP + 3] === fillA) {
-    return false;
+    return null;
   }
 
   // 3. Build Obstacle / Boundary Mask
@@ -260,7 +265,7 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
 
   // If seed itself is an impenetrable obstacle, abort
   if (obstacleMask[seedIdx] === 1) {
-    return false;
+    return null;
   }
 
   // 4. Close Gap: Morphological Dilation of Obstacles
@@ -373,31 +378,62 @@ export function executeSmartFill(config: SmartFillConfig): boolean {
     }
   }
 
-  // 8. Write pixels into target layer
+  // 8. Write pixels into target layer with bounded dirty-rect detection
   const lockAlpha = !!activeLayer.lockAlpha;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let writeCount = 0;
 
   for (let i = 0; i < totalPixels; i++) {
     if (finalFillMask[i] === 1) {
-      // Check selection boundary
-      if (selectionData && selectionData[i * 4 + 3] === 0) {
-        continue;
-      }
-
+      if (selectionData && selectionData[i * 4 + 3] === 0) continue;
       const p = i * 4;
-      if (lockAlpha && targetData[p + 3] === 0) {
-        // Skip transparent pixel when Lock Alpha is active
+      if (lockAlpha && targetData[p + 3] === 0) continue;
+
+      if (
+        targetData[p] === fillR &&
+        targetData[p + 1] === fillG &&
+        targetData[p + 2] === fillB &&
+        targetData[p + 3] === fillA
+      ) {
         continue;
       }
 
-      targetData[p] = fillR;
-      targetData[p + 1] = fillG;
-      targetData[p + 2] = fillB;
-      targetData[p + 3] = fillA;
+      const px = i % docW;
+      const py = (i - px) / docW;
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+      writeCount++;
     }
   }
 
-  targetCtx.putImageData(targetImg, 0, 0);
-  return true;
+  if (writeCount === 0) {
+    return null;
+  }
+
+  const rw = maxX - minX + 1;
+  const rh = maxY - minY + 1;
+  const prevImageData = targetCtx.getImageData(minX, minY, rw, rh);
+
+  for (let y = minY; y <= maxY; y++) {
+    const rowOffset = y * docW;
+    for (let x = minX; x <= maxX; x++) {
+      const idx = rowOffset + x;
+      if (finalFillMask[idx] === 1) {
+        if (selectionData && selectionData[idx * 4 + 3] === 0) continue;
+        const p = idx * 4;
+        if (lockAlpha && targetData[p + 3] === 0) continue;
+        targetData[p] = fillR;
+        targetData[p + 1] = fillG;
+        targetData[p + 2] = fillB;
+        targetData[p + 3] = fillA;
+      }
+    }
+  }
+
+  targetCtx.putImageData(targetImg, 0, 0, minX, minY, rw, rh);
+  return { bounds: { x: minX, y: minY, w: rw, h: rh }, prevImageData };
 }
 
 /**
@@ -479,7 +515,7 @@ export interface EncloseAndFillConfig {
  * The user draws a freehand lasso around a drawing. Interior enclosed regions
  * are detected and filled, while exterior transparent space is completely ignored.
  */
-export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
+export function executeEncloseAndFill(config: EncloseAndFillConfig): SmartFillResult | null {
   const {
     polygon,
     fillColorHex,
@@ -494,7 +530,7 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   } = config;
 
   if (polygon.length < 3 || !activeLayer.context || activeLayer.locked || activeLayer.isPaper) {
-    return false;
+    return null;
   }
 
   // 1. Compute bounding box of lasso polygon
@@ -511,7 +547,7 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   const ry = Math.max(0, Math.floor(minY - margin));
   const rw = Math.min(docW - rx, Math.ceil(maxX + margin) - rx);
   const rh = Math.min(docH - ry, Math.ceil(maxY + margin) - ry);
-  if (rw <= 2 || rh <= 2) return false;
+  if (rw <= 2 || rh <= 2) return null;
 
   // 2. Rasterize lasso polygon inside local bounding box
   const lassoCanvas = document.createElement('canvas');
@@ -636,7 +672,7 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   }
 
   if (filledCount === 0) {
-    return false;
+    return null;
   }
 
   // Expand fill up to true obstacle border, strictly halted by closed gap bridges
@@ -671,6 +707,7 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   }
 
   const lockAlpha = !!activeLayer.lockAlpha;
+  const prevImageData = new ImageData(new Uint8ClampedArray(targetData), rw, rh);
 
   for (let i = 0; i < total; i++) {
     if (finalFillMask[i] === 1) {
@@ -689,7 +726,7 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): boolean {
   }
 
   activeLayer.context.putImageData(targetImg, rx, ry);
-  return true;
+  return { bounds: { x: rx, y: ry, w: rw, h: rh }, prevImageData };
 }
 
 export interface PaintUnfilledAreaConfig {
@@ -711,7 +748,7 @@ export interface PaintUnfilledAreaConfig {
  * Clip Studio Paint "Pintar área no rellenada" (Fill Unfilled Area Brush / 塗り残し部分を塗る).
  * A touch-up brush that fills only unpainted crevices trapped by lineart under the brush footprint.
  */
-export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boolean {
+export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): SmartFillResult | null {
   const {
     points,
     radius,
@@ -727,7 +764,7 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
   } = config;
 
   if (points.length === 0 || !activeLayer.context || activeLayer.locked || activeLayer.isPaper) {
-    return false;
+    return null;
   }
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -744,7 +781,7 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
   const ry = Math.max(0, Math.floor(minY - margin));
   const rw = Math.min(docW - rx, Math.ceil(maxX + margin) - rx);
   const rh = Math.min(docH - ry, Math.ceil(maxY + margin) - ry);
-  if (rw <= 2 || rh <= 2) return false;
+  if (rw <= 2 || rh <= 2) return null;
 
   // Rasterize stroke footprint
   const strokeCanvas = document.createElement('canvas');
@@ -804,7 +841,7 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
   }
 
   if (filledCount === 0) {
-    return false;
+    return null;
   }
 
   // Expand fill up to true obstacle border, halted by closed gap bridges
@@ -837,6 +874,7 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
   }
 
   const lockAlpha = !!activeLayer.lockAlpha;
+  const prevImageData = new ImageData(new Uint8ClampedArray(targetData), rw, rh);
 
   for (let i = 0; i < total; i++) {
     if (finalMask[i] === 1) {
@@ -851,5 +889,5 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): boole
   }
 
   activeLayer.context.putImageData(targetImg, rx, ry);
-  return true;
+  return { bounds: { x: rx, y: ry, w: rw, h: rh }, prevImageData };
 }
