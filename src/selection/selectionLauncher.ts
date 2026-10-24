@@ -1,11 +1,11 @@
-import * as THREE from 'three';
+import type { Camera } from 'three';
 import type { BrushEngine } from '../brush/brushEngine';
 import { placeLauncherNearBounds } from './launcherAnchor';
 import { selectionModel } from './selectionModel';
 import { transformManager } from './transformGizmo';
 
 export interface SelectionLauncherOptions {
-  camera: THREE.Camera;
+  camera: Camera;
   canvas: HTMLCanvasElement;
   engine: BrushEngine;
   root?: HTMLElement;

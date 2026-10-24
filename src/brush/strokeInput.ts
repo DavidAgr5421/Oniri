@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { Raycaster, Vector2, type OrthographicCamera, type Object3D } from 'three';
 import type { BrushEngine } from './brushEngine';
 import {
   activeTool,
@@ -22,8 +22,8 @@ import { brushDiagnostics } from './brushDiagnostics';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
-  camera: THREE.OrthographicCamera;
-  plane: THREE.Object3D;
+  camera: OrthographicCamera;
+  plane: Object3D;
   engine: BrushEngine;
   docW: number;
   docH: number;
@@ -102,8 +102,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   const { canvas, camera, plane, engine, docW, docH, onPickColor } = options;
   let currentDocW = docW;
   let currentDocH = docH;
-  const raycaster = new THREE.Raycaster();
-  const pointerVec = new THREE.Vector2();
+  const raycaster = new Raycaster();
+  const pointerVec = new Vector2();
 
   let activeStroke:
     | 'brush'

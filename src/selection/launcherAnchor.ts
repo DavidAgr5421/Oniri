@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { Vector3, type Camera } from 'three';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 
 export interface DocRect {
@@ -8,14 +8,14 @@ export interface DocRect {
   maxY: number;
 }
 
-const projVec = new THREE.Vector3();
+const projVec = new Vector3();
 
 /**
  * Maps a document pixel (0..DOC_W, 0..DOC_H) to client (viewport) coordinates
  * through the shared 16x9 canvas plane and the orthographic camera.
  */
 export function projectDocToScreen(
-  camera: THREE.Camera,
+  camera: Camera,
   canvas: HTMLCanvasElement,
   docX: number,
   docY: number,
@@ -43,7 +43,7 @@ export function projectDocToScreen(
  */
 export function placeLauncherNearBounds(
   bar: HTMLElement,
-  camera: THREE.Camera,
+  camera: Camera,
   canvas: HTMLCanvasElement,
   bounds: DocRect,
   margin = 14,

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import type { OrthographicCamera, Mesh } from 'three';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 
 export interface ViewportState {
@@ -12,16 +12,16 @@ export interface ViewportState {
 }
 
 export interface ViewportInitOptions {
-  camera: THREE.OrthographicCamera;
+  camera: OrthographicCamera;
   canvas: HTMLCanvasElement;
-  meshes: THREE.Mesh[];
+  meshes: Mesh[];
   onUpdate?: (state: ViewportState) => void;
 }
 
 class ViewportNavigationManager {
-  private camera: THREE.OrthographicCamera | null = null;
+  private camera: OrthographicCamera | null = null;
   private canvas: HTMLCanvasElement | null = null;
-  private meshes: THREE.Mesh[] = [];
+  private meshes: Mesh[] = [];
   private listeners: Set<(state: ViewportState) => void> = new Set();
 
   private zoomVal = 1.0;

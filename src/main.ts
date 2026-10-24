@@ -1,4 +1,15 @@
-import * as THREE from 'three';
+import {
+  WebGLRenderer,
+  Scene,
+  OrthographicCamera,
+  PlaneGeometry,
+  MeshBasicMaterial,
+  DoubleSide,
+  Mesh,
+  CanvasTexture,
+  SRGBColorSpace,
+  LinearFilter,
+} from 'three';
 import { createTimelineManager } from './animation/timelineManager';
 import { mountTimelineView } from './animation/timelineView';
 import { createBrushEngine, DOC_H, DOC_W } from './brush/brushEngine';
@@ -21,14 +32,14 @@ const viewport = document.getElementById('viewport') ?? document.body;
 const canvas = document.createElement('canvas');
 viewport.appendChild(canvas);
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+const renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-const scene = new THREE.Scene();
+const scene = new Scene();
 
 // Orthographic camera for 2D canvas drawing
-const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+const camera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
 camera.position.set(0, 0.6, 10);
 
 function updateCameraBounds(): void {
@@ -56,9 +67,9 @@ window.addEventListener('resize', updateCameraBounds);
 updateCameraBounds();
 
 // Document background drop shadow / border
-const borderGeo = new THREE.PlaneGeometry(16.08, 9.08);
-const borderMat = new THREE.MeshBasicMaterial({ color: 0x080808, side: THREE.DoubleSide });
-const borderMesh = new THREE.Mesh(borderGeo, borderMat);
+const borderGeo = new PlaneGeometry(16.08, 9.08);
+const borderMat = new MeshBasicMaterial({ color: 0x080808, side: DoubleSide });
+const borderMesh = new Mesh(borderGeo, borderMat);
 borderMesh.position.set(0, 0, -0.01);
 scene.add(borderMesh);
 
@@ -74,46 +85,46 @@ if (timeline.tracks.length === 0) {
   timeline.createTrack('Animation 1');
 }
 
-let canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
-canvasTexture.colorSpace = THREE.SRGBColorSpace;
-canvasTexture.minFilter = THREE.LinearFilter;
-canvasTexture.magFilter = THREE.LinearFilter;
+let canvasTexture = new CanvasTexture(engine.compositeCanvas);
+canvasTexture.colorSpace = SRGBColorSpace;
+canvasTexture.minFilter = LinearFilter;
+canvasTexture.magFilter = LinearFilter;
 canvasTexture.generateMipmaps = false;
 
-const canvasGeo = new THREE.PlaneGeometry(16, 9);
-const canvasMat = new THREE.MeshBasicMaterial({ map: canvasTexture, side: THREE.DoubleSide });
-const canvasMesh = new THREE.Mesh(canvasGeo, canvasMat);
+const canvasGeo = new PlaneGeometry(16, 9);
+const canvasMat = new MeshBasicMaterial({ map: canvasTexture, side: DoubleSide });
+const canvasMesh = new Mesh(canvasGeo, canvasMat);
 scene.add(canvasMesh);
 
 // Selection Overlay (Marching Ants)
-let selectionTexture = new THREE.CanvasTexture(marchingAnts.overlayCanvas);
-selectionTexture.minFilter = THREE.LinearFilter;
-selectionTexture.magFilter = THREE.LinearFilter;
+let selectionTexture = new CanvasTexture(marchingAnts.overlayCanvas);
+selectionTexture.minFilter = LinearFilter;
+selectionTexture.magFilter = LinearFilter;
 selectionTexture.generateMipmaps = false;
 
-const selectionMat = new THREE.MeshBasicMaterial({
+const selectionMat = new MeshBasicMaterial({
   map: selectionTexture,
   transparent: true,
   depthTest: false,
-  side: THREE.DoubleSide,
+  side: DoubleSide,
 });
-const selectionMesh = new THREE.Mesh(canvasGeo, selectionMat);
+const selectionMesh = new Mesh(canvasGeo, selectionMat);
 selectionMesh.position.set(0, 0, 0.005);
 scene.add(selectionMesh);
 
 // Camera Frame & Overscan Mask Overlay (Clip Studio Paint style)
-let cameraFrameTexture = new THREE.CanvasTexture(cameraFrameOverlay.canvas);
-cameraFrameTexture.minFilter = THREE.LinearFilter;
-cameraFrameTexture.magFilter = THREE.LinearFilter;
+let cameraFrameTexture = new CanvasTexture(cameraFrameOverlay.canvas);
+cameraFrameTexture.minFilter = LinearFilter;
+cameraFrameTexture.magFilter = LinearFilter;
 cameraFrameTexture.generateMipmaps = false;
 
-const cameraFrameMat = new THREE.MeshBasicMaterial({
+const cameraFrameMat = new MeshBasicMaterial({
   map: cameraFrameTexture,
   transparent: true,
   depthTest: false,
-  side: THREE.DoubleSide,
+  side: DoubleSide,
 });
-const cameraFrameMesh = new THREE.Mesh(canvasGeo, cameraFrameMat);
+const cameraFrameMesh = new Mesh(canvasGeo, cameraFrameMat);
 cameraFrameMesh.position.set(0, 0, 0.007);
 scene.add(cameraFrameMesh);
 
@@ -161,37 +172,37 @@ engine.onDocumentResize = (w: number, h: number) => {
   }
 
   canvasMesh.geometry.dispose();
-  const newCanvasGeo = new THREE.PlaneGeometry(planeW, planeH);
+  const newCanvasGeo = new PlaneGeometry(planeW, planeH);
   canvasMesh.geometry = newCanvasGeo;
   selectionMesh.geometry = newCanvasGeo;
   cameraFrameMesh.geometry = newCanvasGeo;
 
   borderMesh.geometry.dispose();
-  borderMesh.geometry = new THREE.PlaneGeometry(planeW + 0.08, planeH + 0.08);
+  borderMesh.geometry = new PlaneGeometry(planeW + 0.08, planeH + 0.08);
 
   // Critical WebGL fix: When canvas dimensions change, Three.js textures MUST be disposed and recreated
   // so the GPU allocates fresh textures matching the new dimensions, preventing GL_INVALID_VALUE / glTexSubImage2D overflow.
   canvasTexture.dispose();
-  canvasTexture = new THREE.CanvasTexture(engine.compositeCanvas);
-  canvasTexture.colorSpace = THREE.SRGBColorSpace;
-  canvasTexture.minFilter = THREE.LinearFilter;
-  canvasTexture.magFilter = THREE.LinearFilter;
+  canvasTexture = new CanvasTexture(engine.compositeCanvas);
+  canvasTexture.colorSpace = SRGBColorSpace;
+  canvasTexture.minFilter = LinearFilter;
+  canvasTexture.magFilter = LinearFilter;
   canvasTexture.generateMipmaps = false;
   canvasMat.map = canvasTexture;
   canvasMat.needsUpdate = true;
 
   selectionTexture.dispose();
-  selectionTexture = new THREE.CanvasTexture(marchingAnts.overlayCanvas);
-  selectionTexture.minFilter = THREE.LinearFilter;
-  selectionTexture.magFilter = THREE.LinearFilter;
+  selectionTexture = new CanvasTexture(marchingAnts.overlayCanvas);
+  selectionTexture.minFilter = LinearFilter;
+  selectionTexture.magFilter = LinearFilter;
   selectionTexture.generateMipmaps = false;
   selectionMat.map = selectionTexture;
   selectionMat.needsUpdate = true;
 
   cameraFrameTexture.dispose();
-  cameraFrameTexture = new THREE.CanvasTexture(cameraFrameOverlay.canvas);
-  cameraFrameTexture.minFilter = THREE.LinearFilter;
-  cameraFrameTexture.magFilter = THREE.LinearFilter;
+  cameraFrameTexture = new CanvasTexture(cameraFrameOverlay.canvas);
+  cameraFrameTexture.minFilter = LinearFilter;
+  cameraFrameTexture.magFilter = LinearFilter;
   cameraFrameTexture.generateMipmaps = false;
   cameraFrameMat.map = cameraFrameTexture;
   cameraFrameMat.needsUpdate = true;

@@ -1,9 +1,9 @@
-import * as THREE from 'three';
+import type { Camera } from 'three';
 import { placeLauncherNearBounds } from './launcherAnchor';
 import { transformManager } from './transformGizmo';
 
 export interface TransformToolbarOptions {
-  camera: THREE.Camera;
+  camera: Camera;
   canvas: HTMLCanvasElement;
   root?: HTMLElement;
 }

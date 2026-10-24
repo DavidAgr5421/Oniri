@@ -12,7 +12,6 @@ import { openPressureCalibrationModal } from '../tools/pressureCalibrationModal'
 import { openExportAnimationModal } from '../animation/exportAnimation';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { saveOniriToFile } from '../storage/oniriPackage';
-import { saveClipToFile } from '../storage/clipImporter';
 import { getActiveProjectName } from '../storage/fileMenu';
 import {
   createNewFromClipboard,
@@ -66,9 +65,10 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     label: 'Guardar',
     category: 'file',
     shortcut: 'Ctrl+S',
-    execute: () => {
+    execute: async () => {
       if (getActiveProjectName().toLowerCase().endsWith('.clip')) {
-        saveClipToFile(engine, timeline);
+        const { saveClipToFile } = await import('../storage/clipImporter');
+        await saveClipToFile(engine, timeline);
       } else {
         saveOniriToFile(engine, timeline);
       }
@@ -78,7 +78,10 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     id: 'file.saveClip',
     label: 'Guardar .clip (Clip Studio Paint)',
     category: 'file',
-    execute: () => saveClipToFile(engine, timeline),
+    execute: async () => {
+      const { saveClipToFile } = await import('../storage/clipImporter');
+      await saveClipToFile(engine, timeline);
+    },
   });
   commandDispatcher.register({
     id: 'file.exportPng',

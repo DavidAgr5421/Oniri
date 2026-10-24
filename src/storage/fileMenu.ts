@@ -1,7 +1,6 @@
 import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from '../animation/timelineManager';
 import { importOniriPackage } from './oniriPackage';
-import { importClipProject, isClipBuffer } from './clipImporter';
 import { openImageAsDocument } from './clipboardManager';
 import { openPressureCalibrationModal } from '../tools/pressureCalibrationModal';
 import { openNewProjectModal } from '../tools/newProjectModal';
@@ -278,12 +277,19 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
   const ext = file.name.split('.').pop()?.toLowerCase() || '';
   const buffer = new Uint8Array(await file.arrayBuffer());
 
+  const isClip =
+    ext === 'clip' ||
+    (buffer.length >= 8 &&
+      buffer[0] === 0x43 && buffer[1] === 0x53 && buffer[2] === 0x46 && buffer[3] === 0x43 &&
+      buffer[4] === 0x48 && buffer[5] === 0x55 && buffer[6] === 0x4e && buffer[7] === 0x4b);
+
   try {
     if (ext === 'oniri' || (!ext && buffer[0] === 0x50 && buffer[1] === 0x4b)) {
       const res = await importOniriPackage(buffer, engine, timeline);
       setProjectTitle(file.name);
       showNotification('Proyecto Oniri cargado', `Cargado "${res.title}" con ${res.layersCount} capas.`);
-    } else if (ext === 'clip' || isClipBuffer(buffer)) {
+    } else if (isClip) {
+      const { importClipProject } = await import('./clipImporter');
       const res = await importClipProject(buffer, engine, timeline, file.name);
       setActiveProjectName(file.name);
       showNotification(
