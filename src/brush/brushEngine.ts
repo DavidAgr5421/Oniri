@@ -1836,25 +1836,22 @@ export function createBrushEngine(): BrushEngine {
         meshCache.delete(active.id);
         engine.compositeDirty = true;
       } else if (bSettings.referMode === 'editing') {
-        const fullRect: Rect = { x: 0, y: 0, w: curDocW, h: curDocH };
         const current = active.context.getImageData(0, 0, curDocW, curDocH);
-        floodFill(active.context, x, y, colorHex, tolerance);
-        if (selectionModel.hasSelection()) {
-          const newImg = active.context.getImageData(0, 0, curDocW, curDocH);
-          const maskData = selectionModel.maskCtx.getImageData(0, 0, curDocW, curDocH).data;
-          for (let i = 0; i < current.data.length; i += 4) {
-            if (maskData[i + 3] === 0) {
-              newImg.data[i] = current.data[i];
-              newImg.data[i + 1] = current.data[i + 1];
-              newImg.data[i + 2] = current.data[i + 2];
-              newImg.data[i + 3] = current.data[i + 3];
-            }
-          }
-          active.context.putImageData(newImg, 0, 0);
+        const maskData = selectionModel.hasSelection()
+          ? selectionModel.maskCtx.getImageData(0, 0, curDocW, curDocH).data
+          : undefined;
+        const fillRes = floodFill(active.context, x, y, colorHex, tolerance, maskData);
+        if (fillRes) {
+          const dirtyRect: Rect = {
+            x: fillRes.minX,
+            y: fillRes.minY,
+            w: fillRes.maxX - fillRes.minX + 1,
+            h: fillRes.maxY - fillRes.minY + 1,
+          };
+          history.push(active.id, dirtyRect, current);
+          meshCache.delete(active.id);
+          engine.compositeDirty = true;
         }
-        history.push(active.id, fullRect, current);
-        meshCache.delete(active.id);
-        engine.compositeDirty = true;
       }
     },
     encloseAndFill(polygon, colorHex, tolerance): boolean {

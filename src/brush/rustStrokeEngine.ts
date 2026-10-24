@@ -5,6 +5,7 @@ import initWasm, {
   ClipTileCore,
   ColorBlendCore,
   FilterCore,
+  FloodFillCore,
   GifEncoderCore,
   SelectionCore,
   SmartFillCore,
@@ -829,6 +830,52 @@ class RustStrokeEngineWrapper {
       return new Uint8ClampedArray(res.buffer, res.byteOffset, res.byteLength);
     } catch (e) {
       console.warn('WASM FilterCore.gaussian_blur fallback:', e);
+      return null;
+    }
+  }
+
+  floodFillScanline(
+    rgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    startX: number,
+    startY: number,
+    fillR: number,
+    fillG: number,
+    fillB: number,
+    fillA: number,
+    tolerance: number,
+    selectionMask?: Uint8ClampedArray | Uint8Array,
+  ): { minX: number; minY: number; maxX: number; maxY: number; filledCount: number } | null {
+    if (!this.available) return null;
+    try {
+      const u8Rgba = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      const maskSlice = selectionMask
+        ? new Uint8Array(selectionMask.buffer, selectionMask.byteOffset, selectionMask.byteLength)
+        : new Uint8Array(0);
+      const res = FloodFillCore.scanline_fill(
+        u8Rgba,
+        width,
+        height,
+        Math.floor(startX),
+        Math.floor(startY),
+        fillR,
+        fillG,
+        fillB,
+        fillA,
+        tolerance,
+        maskSlice,
+      );
+      if (!res) return null;
+      return {
+        minX: res.min_x,
+        minY: res.min_y,
+        maxX: res.max_x,
+        maxY: res.max_y,
+        filledCount: res.filled_count,
+      };
+    } catch (e) {
+      console.warn('WASM FloodFillCore.scanline_fill fallback:', e);
       return null;
     }
   }

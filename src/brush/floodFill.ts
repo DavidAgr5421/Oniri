@@ -1,13 +1,24 @@
+import { rustStrokeEngine } from './rustStrokeEngine';
+
+export interface FloodFillResult {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  filledCount: number;
+}
+
 export function floodFill(
   ctx: CanvasRenderingContext2D,
   startX: number,
   startY: number,
   fillHex: string,
   tolerance = 20,
-): void {
+  selectionMask?: Uint8ClampedArray | Uint8Array,
+): FloodFillResult | null {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
-  if (startX < 0 || startX >= width || startY < 0 || startY >= height) return;
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height) return null;
 
   const imgData = ctx.getImageData(0, 0, width, height);
   const data = imgData.data;
@@ -18,14 +29,47 @@ export function floodFill(
   const bF = parseInt(fillHex.slice(5, 7), 16) || 0;
   const aF = 255;
 
+  // 1. WASM Fast-Path via FloodFillCore
+  if (rustStrokeEngine.available) {
+    const rustRes = rustStrokeEngine.floodFillScanline(
+      data,
+      width,
+      height,
+      startX,
+      startY,
+      rF,
+      gF,
+      bF,
+      aF,
+      tolerance,
+      selectionMask,
+    );
+    if (rustRes) {
+      ctx.putImageData(imgData, 0, 0);
+      return rustRes;
+    }
+    return null;
+  }
+
+  // 2. TypeScript Scanline Fallback
   const startIdx = (startY * width + startX) * 4;
   const rS = data[startIdx];
   const gS = data[startIdx + 1];
   const bS = data[startIdx + 2];
   const aS = data[startIdx + 3];
 
-  // Already identical color
-  if (rS === rF && gS === gF && bS === bF && aS === aF) return;
+  if (rS === rF && gS === gF && bS === bF && aS === aF) return null;
+
+  const isMaskedOut = (x: number, y: number): boolean => {
+    if (!selectionMask || selectionMask.length === 0) return false;
+    const offset = y * width + x;
+    if (selectionMask.length >= (offset + 1) * 4) {
+      return selectionMask[offset * 4 + 3] === 0;
+    }
+    return selectionMask[offset] === 0;
+  };
+
+  if (isMaskedOut(startX, startY)) return null;
 
   const tolSq = ((tolerance / 100) * 255) ** 2 * 3;
 
@@ -37,39 +81,45 @@ export function floodFill(
     return dr * dr + dg * dg + db * db + da * da <= tolSq;
   }
 
-  function setPixel(idx: number): void {
-    data[idx] = rF;
-    data[idx + 1] = gF;
-    data[idx + 2] = bF;
-    data[idx + 3] = aF;
-  }
+  let minX = startX;
+  let maxX = startX;
+  let minY = startY;
+  let maxY = startY;
+  let filledCount = 0;
 
-  // Scanline Flood Fill with bitfield / visited table
   const visited = new Uint8Array(width * height);
   const stack: [number, number][] = [[startX, startY]];
-  visited[startY * width + startX] = 1;
 
   while (stack.length > 0) {
     const [cx, cy] = stack.pop()!;
     const lineY = cy * width;
+    if (visited[lineY + cx] || !matches((lineY + cx) * 4)) continue;
 
     let left = cx;
-    while (left > 0) {
-      const idx = (lineY + left - 1) * 4;
-      if (visited[lineY + left - 1] || !matches(idx)) break;
+    while (left > 0 && !visited[line_y_prev(lineY, left)] && matches((lineY + left - 1) * 4)) {
       left--;
     }
 
     let right = cx;
-    while (right < width - 1) {
-      const idx = (lineY + right + 1) * 4;
-      if (visited[lineY + right + 1] || !matches(idx)) break;
+    while (right < width - 1 && !visited[lineY + right + 1] && matches((lineY + right + 1) * 4)) {
       right++;
     }
 
     for (let x = left; x <= right; x++) {
       visited[lineY + x] = 1;
-      setPixel((lineY + x) * 4);
+      if (!isMaskedOut(x, cy)) {
+        const idx = (lineY + x) * 4;
+        data[idx] = rF;
+        data[idx + 1] = gF;
+        data[idx + 2] = bF;
+        data[idx + 3] = aF;
+
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (cy < minY) minY = cy;
+        if (cy > maxY) maxY = cy;
+        filledCount++;
+      }
     }
 
     for (const nextY of [cy - 1, cy + 1]) {
@@ -91,5 +141,12 @@ export function floodFill(
     }
   }
 
+  if (filledCount === 0) return null;
+
   ctx.putImageData(imgData, 0, 0);
+  return { minX, minY, maxX, maxY, filledCount };
+}
+
+function line_y_prev(lineY: number, left: number): number {
+  return lineY + left - 1;
 }

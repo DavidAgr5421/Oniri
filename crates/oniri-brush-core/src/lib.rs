@@ -6,6 +6,7 @@ pub mod clip_tiles;
 pub mod color_blend;
 pub mod fill;
 pub mod filters;
+pub mod flood_fill;
 pub mod gif;
 pub mod selection;
 pub mod stabilizer;
@@ -15,6 +16,7 @@ pub use clip_tiles::ClipTileCore;
 pub use color_blend::ColorBlendCore;
 pub use fill::SmartFillCore;
 pub use filters::FilterCore;
+pub use flood_fill::{FloodFillCore, FloodFillResult};
 pub use gif::GifEncoderCore;
 pub use selection::SelectionCore;
 pub use stabilizer::StrokeStabilizerCore;
@@ -1094,6 +1096,72 @@ mod tests {
         // Center should be diffused to neighbours
         assert!(blurred[(1 * 3 + 0) * 4] > 0);
         assert!(blurred[(1 * 3 + 2) * 4] > 0);
+    }
+
+    #[test]
+    fn test_flood_fill_core() {
+        // 4x4 image, initially all white
+        let mut img = vec![255u8; 16 * 4];
+        // Draw a horizontal line of black at row 2
+        for x in 0..4 {
+            img[(2 * 4 + x) * 4] = 0;
+            img[(2 * 4 + x) * 4 + 1] = 0;
+            img[(2 * 4 + x) * 4 + 2] = 0;
+            img[(2 * 4 + x) * 4 + 3] = 255;
+        }
+
+        // Flood fill top half with red (255, 0, 0, 255) from (0, 0)
+        let res = FloodFillCore::scanline_fill(
+            &mut img,
+            4,
+            4,
+            0,
+            0,
+            255,
+            0,
+            0,
+            255,
+            10.0,
+            &[],
+        );
+
+        assert!(res.is_some());
+        let info = res.unwrap();
+        // Rows 0 and 1 are 8 pixels
+        assert_eq!(info.filled_count, 8);
+        assert_eq!(info.min_y, 0);
+        assert_eq!(info.max_y, 1);
+        assert_eq!(info.min_x, 0);
+        assert_eq!(info.max_x, 3);
+
+        // Row 0 should be red
+        assert_eq!(img[0], 255);
+        assert_eq!(img[1], 0);
+        assert_eq!(img[2], 0);
+
+        // Black line (row 2) remains black
+        assert_eq!(img[(2 * 4 + 0) * 4], 0);
+
+        // Row 3 (bottom half) remains white
+        assert_eq!(img[(3 * 4 + 0) * 4], 255);
+        assert_eq!(img[(3 * 4 + 0) * 4 + 1], 255);
+
+        // Non-contiguous fill: replace all remaining white with blue (0, 0, 255, 255)
+        let all_res = FloodFillCore::fill_all_matching(
+            &mut img,
+            4,
+            4,
+            0,
+            3,
+            0,
+            0,
+            255,
+            255,
+            10.0,
+            &[],
+        );
+        assert!(all_res.is_some());
+        assert_eq!(all_res.unwrap().filled_count, 4); // Only row 3
     }
 }
 

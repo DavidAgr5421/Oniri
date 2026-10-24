@@ -181,6 +181,34 @@ export class FilterCore {
     static invert_colors(rgba: Uint8Array): void;
 }
 
+export class FloodFillCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Non-contiguous color fill: replaces all pixels matching the color under (start_x, start_y)
+     * across the whole buffer within tolerance, respecting optional selection mask.
+     */
+    static fill_all_matching(rgba: Uint8Array, width: number, height: number, start_x: number, start_y: number, fill_r: number, fill_g: number, fill_b: number, fill_a: number, tolerance: number, selection_mask: Uint8Array): FloodFillResult | undefined;
+    /**
+     * 4-way scanline flood fill on an RGBA buffer in place.
+     * If `selection_mask` is non-empty, filling only applies where mask > 0.
+     * Returns bounding box and filled count, or None if no pixels were changed.
+     */
+    static scanline_fill(rgba: Uint8Array, width: number, height: number, start_x: number, start_y: number, fill_r: number, fill_g: number, fill_b: number, fill_a: number, tolerance: number, selection_mask: Uint8Array): FloodFillResult | undefined;
+}
+
+export class FloodFillResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    filled_count: number;
+    max_x: number;
+    max_y: number;
+    min_x: number;
+    min_y: number;
+}
+
 /**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
@@ -357,6 +385,8 @@ export interface InitOutput {
     readonly __wbg_cliptilecore_free: (a: number, b: number) => void;
     readonly __wbg_colorblendcore_free: (a: number, b: number) => void;
     readonly __wbg_filtercore_free: (a: number, b: number) => void;
+    readonly __wbg_floodfillcore_free: (a: number, b: number) => void;
+    readonly __wbg_floodfillresult_free: (a: number, b: number) => void;
     readonly __wbg_get_brushdynamicsconfig_base_size: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_flow: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_follow_direction: (a: number) => number;
@@ -383,6 +413,11 @@ export interface InitOutput {
     readonly __wbg_get_brushdynamicsconfig_velocity_flow: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_velocity_min_ratio: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_velocity_size_enabled: (a: number) => number;
+    readonly __wbg_get_floodfillresult_filled_count: (a: number) => number;
+    readonly __wbg_get_floodfillresult_max_x: (a: number) => number;
+    readonly __wbg_get_floodfillresult_max_y: (a: number) => number;
+    readonly __wbg_get_floodfillresult_min_x: (a: number) => number;
+    readonly __wbg_get_floodfillresult_min_y: (a: number) => number;
     readonly __wbg_get_twoboneikresult_child_d_rotation: (a: number) => number;
     readonly __wbg_get_twoboneikresult_parent_d_rotation: (a: number) => number;
     readonly __wbg_gifencodercore_free: (a: number, b: number) => void;
@@ -413,6 +448,11 @@ export interface InitOutput {
     readonly __wbg_set_brushdynamicsconfig_velocity_flow: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_velocity_min_ratio: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_velocity_size_enabled: (a: number, b: number) => void;
+    readonly __wbg_set_floodfillresult_filled_count: (a: number, b: number) => void;
+    readonly __wbg_set_floodfillresult_max_x: (a: number, b: number) => void;
+    readonly __wbg_set_floodfillresult_max_y: (a: number, b: number) => void;
+    readonly __wbg_set_floodfillresult_min_x: (a: number, b: number) => void;
+    readonly __wbg_set_floodfillresult_min_y: (a: number, b: number) => void;
     readonly __wbg_set_twoboneikresult_child_d_rotation: (a: number, b: number) => void;
     readonly __wbg_set_twoboneikresult_parent_d_rotation: (a: number, b: number) => void;
     readonly __wbg_smartfillcore_free: (a: number, b: number) => void;
@@ -445,6 +485,8 @@ export interface InitOutput {
     readonly filtercore_binarize: (a: number, b: number, c: any, d: number) => void;
     readonly filtercore_gaussian_blur: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly filtercore_invert_colors: (a: number, b: number, c: any) => void;
+    readonly floodfillcore_fill_all_matching: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
+    readonly floodfillcore_scanline_fill: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number) => number;
     readonly gifencodercore_encode_lzw_frame: (a: number, b: number, c: number, d: number) => number;
     readonly gifencodercore_get_indexed_len: (a: number) => number;
     readonly gifencodercore_get_indexed_ptr: (a: number) => number;

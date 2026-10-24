@@ -821,6 +821,154 @@ export class FilterCore {
 }
 if (Symbol.dispose) FilterCore.prototype[Symbol.dispose] = FilterCore.prototype.free;
 
+export class FloodFillCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        FloodFillCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_floodfillcore_free(ptr, 0);
+    }
+    /**
+     * Non-contiguous color fill: replaces all pixels matching the color under (start_x, start_y)
+     * across the whole buffer within tolerance, respecting optional selection mask.
+     * @param {Uint8Array} rgba
+     * @param {number} width
+     * @param {number} height
+     * @param {number} start_x
+     * @param {number} start_y
+     * @param {number} fill_r
+     * @param {number} fill_g
+     * @param {number} fill_b
+     * @param {number} fill_a
+     * @param {number} tolerance
+     * @param {Uint8Array} selection_mask
+     * @returns {FloodFillResult | undefined}
+     */
+    static fill_all_matching(rgba, width, height, start_x, start_y, fill_r, fill_g, fill_b, fill_a, tolerance, selection_mask) {
+        var ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(selection_mask, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.floodfillcore_fill_all_matching(ptr0, len0, rgba, width, height, start_x, start_y, fill_r, fill_g, fill_b, fill_a, tolerance, ptr1, len1);
+        return ret === 0 ? undefined : FloodFillResult.__wrap(ret);
+    }
+    /**
+     * 4-way scanline flood fill on an RGBA buffer in place.
+     * If `selection_mask` is non-empty, filling only applies where mask > 0.
+     * Returns bounding box and filled count, or None if no pixels were changed.
+     * @param {Uint8Array} rgba
+     * @param {number} width
+     * @param {number} height
+     * @param {number} start_x
+     * @param {number} start_y
+     * @param {number} fill_r
+     * @param {number} fill_g
+     * @param {number} fill_b
+     * @param {number} fill_a
+     * @param {number} tolerance
+     * @param {Uint8Array} selection_mask
+     * @returns {FloodFillResult | undefined}
+     */
+    static scanline_fill(rgba, width, height, start_x, start_y, fill_r, fill_g, fill_b, fill_a, tolerance, selection_mask) {
+        var ptr0 = passArray8ToWasm0(rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(selection_mask, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.floodfillcore_scanline_fill(ptr0, len0, rgba, width, height, start_x, start_y, fill_r, fill_g, fill_b, fill_a, tolerance, ptr1, len1);
+        return ret === 0 ? undefined : FloodFillResult.__wrap(ret);
+    }
+}
+if (Symbol.dispose) FloodFillCore.prototype[Symbol.dispose] = FloodFillCore.prototype.free;
+
+export class FloodFillResult {
+    static __wrap(ptr) {
+        const obj = Object.create(FloodFillResult.prototype);
+        obj.__wbg_ptr = ptr;
+        FloodFillResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        FloodFillResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_floodfillresult_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get filled_count() {
+        const ret = wasm.__wbg_get_floodfillresult_filled_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get max_x() {
+        const ret = wasm.__wbg_get_floodfillresult_max_x(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get max_y() {
+        const ret = wasm.__wbg_get_floodfillresult_max_y(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get min_x() {
+        const ret = wasm.__wbg_get_floodfillresult_min_x(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get min_y() {
+        const ret = wasm.__wbg_get_floodfillresult_min_y(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} arg0
+     */
+    set filled_count(arg0) {
+        wasm.__wbg_set_floodfillresult_filled_count(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set max_x(arg0) {
+        wasm.__wbg_set_floodfillresult_max_x(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set max_y(arg0) {
+        wasm.__wbg_set_floodfillresult_max_y(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set min_x(arg0) {
+        wasm.__wbg_set_floodfillresult_min_x(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set min_y(arg0) {
+        wasm.__wbg_set_floodfillresult_min_y(this.__wbg_ptr, arg0);
+    }
+}
+if (Symbol.dispose) FloodFillResult.prototype[Symbol.dispose] = FloodFillResult.prototype.free;
+
 /**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
@@ -1470,6 +1618,12 @@ const ColorBlendCoreFinalization = (typeof FinalizationRegistry === 'undefined')
 const FilterCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_filtercore_free(ptr, 1));
+const FloodFillCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_floodfillcore_free(ptr, 1));
+const FloodFillResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_floodfillresult_free(ptr, 1));
 const GifEncoderCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_gifencodercore_free(ptr, 1));
