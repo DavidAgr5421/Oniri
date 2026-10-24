@@ -326,6 +326,10 @@ export function createBrushEngine(): BrushEngine {
   let strokeBoundsMinY = 0;
   let strokeBoundsMaxX = 0;
   let strokeBoundsMaxY = 0;
+  let predBoundsMinX = 0;
+  let predBoundsMinY = 0;
+  let predBoundsMaxX = 0;
+  let predBoundsMaxY = 0;
 
   const history: HistoryManager = createHistoryManager(30);
 
@@ -614,8 +618,27 @@ export function createBrushEngine(): BrushEngine {
   function renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void {
     if (!mode || mode === 'shape' || points.length === 0) return;
     const t0 = performance.now();
-    predictedContext.clearRect(0, 0, curDocW, curDocH);
+    clearPredictedStroke();
     hasPredictions = true;
+
+    // Track dirty bounding box of predicted stroke for microsecond clearRect & drawImage
+    const pad = Math.ceil((strokeSettings.size || 20) * 1.5) + 8;
+    let minPX = Math.max(0, Math.min(curDocW, Math.floor(lastX - pad)));
+    let minPY = Math.max(0, Math.min(curDocH, Math.floor(lastY - pad)));
+    let maxPX = Math.min(curDocW, Math.max(0, Math.ceil(lastX + pad)));
+    let maxPY = Math.min(curDocH, Math.max(0, Math.ceil(lastY + pad)));
+
+    for (const pt of points) {
+      minPX = Math.max(0, Math.min(minPX, Math.floor(pt.x - pad)));
+      minPY = Math.max(0, Math.min(minPY, Math.floor(pt.y - pad)));
+      maxPX = Math.min(curDocW, Math.max(maxPX, Math.ceil(pt.x + pad)));
+      maxPY = Math.min(curDocH, Math.max(maxPY, Math.ceil(pt.y + pad)));
+    }
+
+    predBoundsMinX = minPX;
+    predBoundsMinY = minPY;
+    predBoundsMaxX = maxPX;
+    predBoundsMaxY = maxPY;
 
     let prevX = lastX;
     let prevY = lastY;
@@ -654,8 +677,21 @@ export function createBrushEngine(): BrushEngine {
 
   function clearPredictedStroke(): void {
     if (hasPredictions) {
-      predictedContext.clearRect(0, 0, curDocW, curDocH);
+      if (predBoundsMaxX > predBoundsMinX && predBoundsMaxY > predBoundsMinY) {
+        predictedContext.clearRect(
+          predBoundsMinX,
+          predBoundsMinY,
+          predBoundsMaxX - predBoundsMinX,
+          predBoundsMaxY - predBoundsMinY
+        );
+      } else {
+        predictedContext.clearRect(0, 0, curDocW, curDocH);
+      }
       hasPredictions = false;
+      predBoundsMinX = 0;
+      predBoundsMinY = 0;
+      predBoundsMaxX = 0;
+      predBoundsMaxY = 0;
       engine.compositeDirty = true;
     }
   }
@@ -707,6 +743,12 @@ export function createBrushEngine(): BrushEngine {
           strokeContext.drawImage(selectionModel.maskCanvas, 0, 0);
           strokeContext.restore();
         }
+        const hasBounds = strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY;
+        const bx = strokeBoundsMinX;
+        const by = strokeBoundsMinY;
+        const bw = strokeBoundsMaxX - strokeBoundsMinX;
+        const bh = strokeBoundsMaxY - strokeBoundsMinY;
+
         active.context.save();
         if (active.lockAlpha) {
           active.context.globalCompositeOperation = 'source-atop';
@@ -714,10 +756,25 @@ export function createBrushEngine(): BrushEngine {
           active.context.globalCompositeOperation = 'lighter';
         }
         active.context.globalAlpha = getToolState().brush.opacity;
-        active.context.drawImage(strokeCanvas, 0, 0);
+        if (hasBounds && bw > 0 && bh > 0) {
+          active.context.drawImage(strokeCanvas, bx, by, bw, bh, bx, by, bw, bh);
+        } else {
+          active.context.drawImage(strokeCanvas, 0, 0);
+        }
         active.context.restore();
       }
-      strokeContext.clearRect(0, 0, curDocW, curDocH);
+      if (strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY) {
+        const pad = 12;
+        const cx = Math.max(0, strokeBoundsMinX - pad);
+        const cy = Math.max(0, strokeBoundsMinY - pad);
+        const cw = Math.min(curDocW, strokeBoundsMaxX + pad) - cx;
+        const ch = Math.min(curDocH, strokeBoundsMaxY + pad) - cy;
+        strokeContext.clearRect(cx, cy, cw, ch);
+      } else {
+        strokeContext.clearRect(0, 0, curDocW, curDocH);
+      }
+      liveMaskContext.clearRect(0, 0, curDocW, curDocH);
+      predictedContext.clearRect(0, 0, curDocW, curDocH);
     } else if (mode === 'erase' && selectionModel.hasSelection()) {
       if (active.context) {
         strokeContext.save();
@@ -731,6 +788,8 @@ export function createBrushEngine(): BrushEngine {
         active.context.restore();
       }
       strokeContext.clearRect(0, 0, curDocW, curDocH);
+      liveMaskContext.clearRect(0, 0, curDocW, curDocH);
+      predictedContext.clearRect(0, 0, curDocW, curDocH);
     }
 
     if (preStrokeSnapshot) {
@@ -951,10 +1010,24 @@ export function createBrushEngine(): BrushEngine {
       const needsLiveMask = isLivePainting && (hasPaperTooth || hasSelection);
 
       if (needsLiveMask) {
-        liveMaskContext.clearRect(0, 0, curDocW, curDocH);
-        liveMaskContext.drawImage(strokeCanvas, 0, 0);
+        let lmX = 0, lmY = 0, lmW = curDocW, lmH = curDocH;
+        const hasBounds = strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY;
+        if (hasBounds) {
+          const pad = 12;
+          const minBX = Math.min(strokeBoundsMinX, predBoundsMaxX > predBoundsMinX ? predBoundsMinX : strokeBoundsMinX);
+          const minBY = Math.min(strokeBoundsMinY, predBoundsMaxY > predBoundsMinY ? predBoundsMinY : strokeBoundsMinY);
+          const maxBX = Math.max(strokeBoundsMaxX, predBoundsMaxX > predBoundsMinX ? predBoundsMaxX : strokeBoundsMaxX);
+          const maxBY = Math.max(strokeBoundsMaxY, predBoundsMaxY > predBoundsMinY ? predBoundsMaxY : strokeBoundsMaxY);
+          lmX = Math.max(0, minBX - pad);
+          lmY = Math.max(0, minBY - pad);
+          lmW = Math.min(curDocW, maxBX + pad) - lmX;
+          lmH = Math.min(curDocH, maxBY + pad) - lmY;
+        }
+
+        liveMaskContext.clearRect(lmX, lmY, lmW, lmH);
+        liveMaskContext.drawImage(strokeCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
         if (hasPredictions) {
-          liveMaskContext.drawImage(predictedCanvas, 0, 0);
+          liveMaskContext.drawImage(predictedCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
         }
         if (hasPaperTooth) {
           const density = clamp01(strokeSettings.textureDensity ?? 0.85);
@@ -973,14 +1046,14 @@ export function createBrushEngine(): BrushEngine {
             liveMaskContext.save();
             liveMaskContext.globalCompositeOperation = 'destination-in';
             liveMaskContext.fillStyle = pattern;
-            liveMaskContext.fillRect(0, 0, curDocW, curDocH);
+            liveMaskContext.fillRect(lmX, lmY, lmW, lmH);
             liveMaskContext.restore();
           }
         }
         if (hasSelection) {
           liveMaskContext.save();
           liveMaskContext.globalCompositeOperation = 'destination-in';
-          liveMaskContext.drawImage(selectionModel.maskCanvas, 0, 0);
+          liveMaskContext.drawImage(selectionModel.maskCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
           liveMaskContext.restore();
         }
       }
@@ -1066,13 +1139,26 @@ export function createBrushEngine(): BrushEngine {
           targetCtx.globalCompositeOperation = 'lighter';
         }
         if (needsLiveMask) {
+          let lmX = 0, lmY = 0, lmW = curDocW, lmH = curDocH;
+          const hasBounds = strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY;
+          if (hasBounds) {
+            const pad = 12;
+            const minBX = Math.min(strokeBoundsMinX, predBoundsMaxX > predBoundsMinX ? predBoundsMinX : strokeBoundsMinX);
+            const minBY = Math.min(strokeBoundsMinY, predBoundsMaxY > predBoundsMinY ? predBoundsMinY : strokeBoundsMinY);
+            const maxBX = Math.max(strokeBoundsMaxX, predBoundsMaxX > predBoundsMinX ? predBoundsMaxX : strokeBoundsMaxX);
+            const maxBY = Math.max(strokeBoundsMaxY, predBoundsMaxY > predBoundsMinY ? predBoundsMaxY : strokeBoundsMaxY);
+            lmX = Math.max(0, minBX - pad);
+            lmY = Math.max(0, minBY - pad);
+            lmW = Math.min(curDocW, maxBX + pad) - lmX;
+            lmH = Math.min(curDocH, maxBY + pad) - lmY;
+          }
           if (mode === 'erase') {
             targetCtx.save();
             targetCtx.globalCompositeOperation = 'destination-out';
-            targetCtx.drawImage(liveMaskCanvas, 0, 0);
+            targetCtx.drawImage(liveMaskCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
             targetCtx.restore();
           } else {
-            targetCtx.drawImage(liveMaskCanvas, 0, 0);
+            targetCtx.drawImage(liveMaskCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
           }
         } else {
           targetCtx.drawImage(strokeCanvas, 0, 0);
