@@ -5,6 +5,7 @@ import type { LayerNode } from '../brush/layers';
 import type { SkeletonKeyframe } from '../animation/boneModel';
 import type { AnimationScene } from '../animation/timelineModel';
 import { DOC_H, DOC_W } from '../brush/docConstants';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 
 export interface OniriManifest {
   format: 'oniri';
@@ -109,13 +110,31 @@ async function drawPngU8ToCanvas(u8: Uint8Array, targetCanvas: HTMLCanvasElement
  * Creates a scaled thumbnail canvas for fast preview.
  */
 async function generatePreviewPngU8(sourceCanvas: HTMLCanvasElement, maxW = 640, maxH = 360): Promise<Uint8Array> {
+  const srcW = sourceCanvas.width;
+  const srcH = sourceCanvas.height;
+  const ctx = sourceCanvas.getContext('2d');
+  if (ctx && rustStrokeEngine.available && srcW > 0 && srcH > 0) {
+    const srcImg = ctx.getImageData(0, 0, srcW, srcH);
+    const scaled = rustStrokeEngine.resampleScale(srcImg.data, srcW, srcH, maxW, maxH, 'bicubic');
+    if (scaled) {
+      const thumb = document.createElement('canvas');
+      thumb.width = maxW;
+      thumb.height = maxH;
+      const tCtx = thumb.getContext('2d')!;
+      const clamped = new Uint8ClampedArray(scaled.buffer as ArrayBuffer, scaled.byteOffset, scaled.byteLength);
+      tCtx.putImageData(new ImageData(clamped, maxW, maxH), 0, 0);
+      return canvasToPngU8(thumb);
+    }
+  }
+
   const thumb = document.createElement('canvas');
   thumb.width = maxW;
   thumb.height = maxH;
-  const ctx = thumb.getContext('2d')!;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(sourceCanvas, 0, 0, maxW, maxH);
+  const tCtx = thumb.getContext('2d')!;
+  ctx?.imageSmoothingEnabled;
+  tCtx.imageSmoothingEnabled = true;
+  tCtx.imageSmoothingQuality = 'high';
+  tCtx.drawImage(sourceCanvas, 0, 0, maxW, maxH);
   return canvasToPngU8(thumb);
 }
 

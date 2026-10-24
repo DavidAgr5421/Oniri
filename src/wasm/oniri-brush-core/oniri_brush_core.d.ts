@@ -232,6 +232,13 @@ export class GifEncoderCore {
     quantize_rgba(rgba: Uint8Array, width: number, height: number): number;
 }
 
+export enum ResampleMode {
+    Nearest = 0,
+    Bilinear = 1,
+    Bicubic = 2,
+    Lanczos = 3,
+}
+
 /**
  * Motor nativo de selección, morfología y extracción de bordes (Marching Ants)
  */
@@ -362,6 +369,31 @@ export class StrokeStabilizerCore {
     constructor();
 }
 
+export class TransformResampleCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Helper to compute the 6-element inverse affine transform matrix
+     * for translation, rotation, scale and pivot offset:
+     * `P_src = Center_src + S^-1 * R^-1 * (P_dst - Center_dst)`
+     */
+    static compute_inverse_transform_matrix(center_src_x: number, center_src_y: number, center_dst_x: number, center_dst_y: number, scale_x: number, scale_y: number, rotation_rad: number): Float32Array;
+    /**
+     * Resample an RGBA patch applying an affine transformation with inverse mapping.
+     * `mat_inv` is the 6-element inverse affine matrix:
+     * `[a, b, c, d, tx, ty]` where
+     * `src_x = a * dst_x + c * dst_y + tx`
+     * `src_y = b * dst_x + d * dst_y + ty`
+     */
+    static resample_affine(src_rgba: Uint8Array, src_w: number, src_h: number, dst_w: number, dst_h: number, mat_inv: Float32Array, mode: ResampleMode): Uint8Array;
+    /**
+     * Resample an RGBA image from `(src_w, src_h)` to `(dst_w, dst_h)`.
+     * Returns a new RGBA vector of length `dst_w * dst_h * 4`.
+     */
+    static resample_scale(src_rgba: Uint8Array, src_w: number, src_h: number, dst_w: number, dst_h: number, mode: ResampleMode): Uint8Array;
+}
+
 /**
  * Resultado del cálculo analítico de IK para extremidades de 2 huesos
  */
@@ -458,6 +490,7 @@ export interface InitOutput {
     readonly __wbg_smartfillcore_free: (a: number, b: number) => void;
     readonly __wbg_strokeenginecore_free: (a: number, b: number) => void;
     readonly __wbg_strokestabilizercore_free: (a: number, b: number) => void;
+    readonly __wbg_transformresamplecore_free: (a: number, b: number) => void;
     readonly __wbg_twoboneikresult_free: (a: number, b: number) => void;
     readonly boneikcore_compose_mat2d: (a: number, b: number, c: number, d: number) => [number, number];
     readonly boneikcore_distance_to_segment: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
@@ -531,6 +564,9 @@ export interface InitOutput {
     readonly strokestabilizercore_get_emitted_ptr: (a: number) => number;
     readonly strokestabilizercore_get_speed: (a: number) => number;
     readonly strokestabilizercore_new: () => number;
+    readonly transformresamplecore_compute_inverse_transform_matrix: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly transformresamplecore_resample_affine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly transformresamplecore_resample_scale: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

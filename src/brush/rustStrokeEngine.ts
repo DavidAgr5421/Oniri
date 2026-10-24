@@ -7,10 +7,12 @@ import initWasm, {
   FilterCore,
   FloodFillCore,
   GifEncoderCore,
+  ResampleMode,
   SelectionCore,
   SmartFillCore,
   StrokeEngineCore,
   StrokeStabilizerCore,
+  TransformResampleCore,
   init_engine_hooks,
 } from '../wasm/oniri-brush-core/oniri_brush_core';
 import type { BrushSettings, TipTextureId } from '../tools/toolState';
@@ -876,6 +878,90 @@ class RustStrokeEngineWrapper {
       };
     } catch (e) {
       console.warn('WASM FloodFillCore.scanline_fill fallback:', e);
+      return null;
+    }
+  }
+
+  resampleScale(
+    srcRgba: Uint8ClampedArray,
+    srcW: number,
+    srcH: number,
+    dstW: number,
+    dstH: number,
+    mode: 'nearest' | 'bilinear' | 'bicubic' | 'lanczos' = 'bicubic',
+  ): Uint8ClampedArray | null {
+    if (!this.available) return null;
+    try {
+      const u8Src = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const resMode =
+        mode === 'nearest'
+          ? ResampleMode.Nearest
+          : mode === 'bilinear'
+            ? ResampleMode.Bilinear
+            : mode === 'lanczos'
+              ? ResampleMode.Lanczos
+              : ResampleMode.Bicubic;
+      const res = TransformResampleCore.resample_scale(u8Src, srcW, srcH, dstW, dstH, resMode);
+      if (res.length === 0) return null;
+      return new Uint8ClampedArray(res.buffer, res.byteOffset, res.byteLength);
+    } catch (e) {
+      console.warn('WASM TransformResampleCore.resample_scale fallback:', e);
+      return null;
+    }
+  }
+
+  resampleAffine(
+    srcRgba: Uint8ClampedArray,
+    srcW: number,
+    srcH: number,
+    dstW: number,
+    dstH: number,
+    matInv: Float32Array,
+    mode: 'nearest' | 'bilinear' | 'bicubic' | 'lanczos' = 'bicubic',
+  ): Uint8ClampedArray | null {
+    if (!this.available) return null;
+    try {
+      const u8Src = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const resMode =
+        mode === 'nearest'
+          ? ResampleMode.Nearest
+          : mode === 'bilinear'
+            ? ResampleMode.Bilinear
+            : mode === 'lanczos'
+              ? ResampleMode.Lanczos
+              : ResampleMode.Bicubic;
+      const res = TransformResampleCore.resample_affine(u8Src, srcW, srcH, dstW, dstH, matInv, resMode);
+      if (res.length === 0) return null;
+      return new Uint8ClampedArray(res.buffer, res.byteOffset, res.byteLength);
+    } catch (e) {
+      console.warn('WASM TransformResampleCore.resample_affine fallback:', e);
+      return null;
+    }
+  }
+
+  computeInverseTransformMatrix(
+    centerSrcX: number,
+    centerSrcY: number,
+    centerDstX: number,
+    centerDstY: number,
+    scaleX: number,
+    scaleY: number,
+    rotationRad: number,
+  ): Float32Array | null {
+    if (!this.available) return null;
+    try {
+      const mat = TransformResampleCore.compute_inverse_transform_matrix(
+        centerSrcX,
+        centerSrcY,
+        centerDstX,
+        centerDstY,
+        scaleX,
+        scaleY,
+        rotationRad,
+      );
+      return mat;
+    } catch (e) {
+      console.warn('WASM TransformResampleCore.compute_inverse_transform_matrix fallback:', e);
       return null;
     }
   }

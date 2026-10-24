@@ -8,6 +8,7 @@ pub mod fill;
 pub mod filters;
 pub mod flood_fill;
 pub mod gif;
+pub mod resample;
 pub mod selection;
 pub mod stabilizer;
 pub use bone_ik::BoneIKCore;
@@ -18,6 +19,7 @@ pub use fill::SmartFillCore;
 pub use filters::FilterCore;
 pub use flood_fill::{FloodFillCore, FloodFillResult};
 pub use gif::GifEncoderCore;
+pub use resample::{ResampleMode, TransformResampleCore};
 pub use selection::SelectionCore;
 pub use stabilizer::StrokeStabilizerCore;
 
@@ -1162,6 +1164,41 @@ mod tests {
         );
         assert!(all_res.is_some());
         assert_eq!(all_res.unwrap().filled_count, 4); // Only row 3
+    }
+
+    #[test]
+    fn test_transform_resample_core() {
+        // 2x2 image with Red, Green, Blue, White pixels
+        let src = vec![
+            255, 0, 0, 255, // (0, 0) Red
+            0, 255, 0, 255, // (1, 0) Green
+            0, 0, 255, 255, // (0, 1) Blue
+            255, 255, 255, 255, // (1, 1) White
+        ];
+
+        // 1. Scale 2x2 to 4x4 with Nearest
+        let scaled_nearest = TransformResampleCore::resample_scale(&src, 2, 2, 4, 4, ResampleMode::Nearest);
+        assert_eq!(scaled_nearest.len(), 4 * 4 * 4);
+        assert_eq!(scaled_nearest[0], 255); // Top-left is Red
+        assert_eq!(scaled_nearest[(3 * 4 + 3) * 4], 255); // Bottom-right is White
+
+        // 2. Scale 2x2 to 4x4 with Bilinear
+        let scaled_bilinear = TransformResampleCore::resample_scale(&src, 2, 2, 4, 4, ResampleMode::Bilinear);
+        assert_eq!(scaled_bilinear.len(), 4 * 4 * 4);
+
+        // 3. Scale 2x2 to 4x4 with Bicubic
+        let scaled_bicubic = TransformResampleCore::resample_scale(&src, 2, 2, 4, 4, ResampleMode::Bicubic);
+        assert_eq!(scaled_bicubic.len(), 4 * 4 * 4);
+
+        // 4. Affine identity mapping
+        let mat_inv = TransformResampleCore::compute_inverse_transform_matrix(
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+        );
+        let affine_res = TransformResampleCore::resample_affine(&src, 2, 2, 2, 2, &mat_inv, ResampleMode::Nearest);
+        assert_eq!(affine_res.len(), 16);
+        assert_eq!(affine_res[0], 255);
+        assert_eq!(affine_res[4], 0);
+        assert_eq!(affine_res[5], 255);
     }
 }
 

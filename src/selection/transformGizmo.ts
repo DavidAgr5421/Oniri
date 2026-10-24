@@ -1,4 +1,5 @@
 import type { BrushEngine } from '../brush/brushEngine';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 import { selectionModel } from './selectionModel';
 import { setTransformModalLocked } from './transformModal';
 
@@ -114,22 +115,36 @@ export class TransformManager {
     } else {
       // Find non-empty bounding box of active layer
       const data = this.snapshotBeforeTransform.data;
+      const rustBounds = rustStrokeEngine.scanLayerBounds(data, curW, curH, 1, 0);
       let minX = curW;
       let minY = curH;
       let maxX = -1;
       let maxY = -1;
       let found = false;
 
-      for (let y = 0; y < curH; y++) {
-        const row = y * curW * 4;
-        for (let x = 0; x < curW; x++) {
-          if (data[row + x * 4 + 3] > 0) {
-            found = true;
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
+      if (rustBounds) {
+        [minX, minY, bw, bh] = rustBounds;
+        found = bw > 0 && bh > 0;
+        bx = minX + ox;
+        by = minY + oy;
+      } else {
+        for (let y = 0; y < curH; y++) {
+          const row = y * curW * 4;
+          for (let x = 0; x < curW; x++) {
+            if (data[row + x * 4 + 3] > 0) {
+              found = true;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
           }
+        }
+        if (found) {
+          bx = minX + ox;
+          by = minY + oy;
+          bw = maxX - minX + 1;
+          bh = maxY - minY + 1;
         }
       }
 
@@ -137,11 +152,6 @@ export class TransformManager {
         // Nothing to transform
         return false;
       }
-
-      bx = minX + ox;
-      by = minY + oy;
-      bw = maxX - minX + 1;
-      bh = maxY - minY + 1;
     }
 
     // Prepare transform buffer
@@ -325,16 +335,7 @@ export class TransformManager {
           newCtx.drawImage(activeLayer.canvas, oldOx - minX, oldOy - minY);
         }
 
-        newCtx.save();
-        newCtx.translate(cx - minX, cy - minY);
-        if (this.rotation !== 0) newCtx.rotate(this.rotation);
-        newCtx.scale(sx, sy);
-        newCtx.drawImage(
-          this.transformCanvas,
-          -this.origWidth / 2,
-          -this.origHeight / 2,
-        );
-        newCtx.restore();
+        this.rasterizeTransformedPatch(newCtx, cx - minX, cy - minY, sx, sy, this.rotation);
 
         activeLayer.canvas = newCanvas;
         activeLayer.context = newCtx;
@@ -343,16 +344,7 @@ export class TransformManager {
       } else {
         const ox = activeLayer.offsetX ?? 0;
         const oy = activeLayer.offsetY ?? 0;
-        activeLayer.context.save();
-        activeLayer.context.translate(cx - ox, cy - oy);
-        if (this.rotation !== 0) activeLayer.context.rotate(this.rotation);
-        activeLayer.context.scale(sx, sy);
-        activeLayer.context.drawImage(
-          this.transformCanvas,
-          -this.origWidth / 2,
-          -this.origHeight / 2,
-        );
-        activeLayer.context.restore();
+        this.rasterizeTransformedPatch(activeLayer.context, cx - ox, cy - oy, sx, sy, this.rotation);
       }
 
       // If a selection was active, transform the selection mask along with the pixels
@@ -379,6 +371,59 @@ export class TransformManager {
     if (this.engine) this.engine.compositeDirty = true;
     setTransformModalLocked(false);
     this.notify();
+  }
+
+  private rasterizeTransformedPatch(
+    targetCtx: CanvasRenderingContext2D,
+    destCenterX: number,
+    destCenterY: number,
+    scaleX: number,
+    scaleY: number,
+    rotationRad: number,
+  ): void {
+    const srcW = this.origWidth;
+    const srcH = this.origHeight;
+    const absW = Math.max(1, Math.round(srcW * Math.abs(scaleX)));
+    const absH = Math.max(1, Math.round(srcH * Math.abs(scaleY)));
+
+    // When scaling without rotation, use high quality bicubic resampling via WASM
+    if (
+      rotationRad === 0 &&
+      rustStrokeEngine.available &&
+      srcW > 0 &&
+      srcH > 0 &&
+      (absW !== srcW || absH !== srcH)
+    ) {
+      const srcImg = this.transformCtx.getImageData(0, 0, srcW, srcH);
+      const resampled = rustStrokeEngine.resampleScale(srcImg.data, srcW, srcH, absW, absH, 'bicubic');
+      if (resampled) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = absW;
+        tempCanvas.height = absH;
+        const tCtx = tempCanvas.getContext('2d')!;
+        const clamped = new Uint8ClampedArray(
+          resampled.buffer as ArrayBuffer,
+          resampled.byteOffset,
+          resampled.byteLength,
+        );
+        tCtx.putImageData(new ImageData(clamped, absW, absH), 0, 0);
+
+        targetCtx.save();
+        targetCtx.translate(destCenterX, destCenterY);
+        targetCtx.scale(scaleX < 0 ? -1 : 1, scaleY < 0 ? -1 : 1);
+        targetCtx.drawImage(tempCanvas, -absW / 2, -absH / 2);
+        targetCtx.restore();
+        return;
+      }
+    }
+
+    // Default Canvas2D affine draw
+    targetCtx.save();
+    targetCtx.translate(destCenterX, destCenterY);
+    if (rotationRad !== 0) targetCtx.rotate(rotationRad);
+    targetCtx.scale(scaleX, scaleY);
+    targetCtx.drawImage(this.transformCanvas, -srcW / 2, -srcH / 2);
+    targetCtx.restore();
   }
 
   /**

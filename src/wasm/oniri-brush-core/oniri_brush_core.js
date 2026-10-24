@@ -1060,6 +1060,16 @@ export class GifEncoderCore {
 if (Symbol.dispose) GifEncoderCore.prototype[Symbol.dispose] = GifEncoderCore.prototype.free;
 
 /**
+ * @enum {0 | 1 | 2 | 3}
+ */
+export const ResampleMode = Object.freeze({
+    Nearest: 0, "0": "Nearest",
+    Bilinear: 1, "1": "Bilinear",
+    Bicubic: 2, "2": "Bicubic",
+    Lanczos: 3, "3": "Lanczos",
+});
+
+/**
  * Motor nativo de selección, morfología y extracción de bordes (Marching Ants)
  */
 export class SelectionCore {
@@ -1501,6 +1511,83 @@ export class StrokeStabilizerCore {
 }
 if (Symbol.dispose) StrokeStabilizerCore.prototype[Symbol.dispose] = StrokeStabilizerCore.prototype.free;
 
+export class TransformResampleCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        TransformResampleCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_transformresamplecore_free(ptr, 0);
+    }
+    /**
+     * Helper to compute the 6-element inverse affine transform matrix
+     * for translation, rotation, scale and pivot offset:
+     * `P_src = Center_src + S^-1 * R^-1 * (P_dst - Center_dst)`
+     * @param {number} center_src_x
+     * @param {number} center_src_y
+     * @param {number} center_dst_x
+     * @param {number} center_dst_y
+     * @param {number} scale_x
+     * @param {number} scale_y
+     * @param {number} rotation_rad
+     * @returns {Float32Array}
+     */
+    static compute_inverse_transform_matrix(center_src_x, center_src_y, center_dst_x, center_dst_y, scale_x, scale_y, rotation_rad) {
+        const ret = wasm.transformresamplecore_compute_inverse_transform_matrix(center_src_x, center_src_y, center_dst_x, center_dst_y, scale_x, scale_y, rotation_rad);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Resample an RGBA patch applying an affine transformation with inverse mapping.
+     * `mat_inv` is the 6-element inverse affine matrix:
+     * `[a, b, c, d, tx, ty]` where
+     * `src_x = a * dst_x + c * dst_y + tx`
+     * `src_y = b * dst_x + d * dst_y + ty`
+     * @param {Uint8Array} src_rgba
+     * @param {number} src_w
+     * @param {number} src_h
+     * @param {number} dst_w
+     * @param {number} dst_h
+     * @param {Float32Array} mat_inv
+     * @param {ResampleMode} mode
+     * @returns {Uint8Array}
+     */
+    static resample_affine(src_rgba, src_w, src_h, dst_w, dst_h, mat_inv, mode) {
+        const ptr0 = passArray8ToWasm0(src_rgba, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF32ToWasm0(mat_inv, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.transformresamplecore_resample_affine(ptr0, len0, src_w, src_h, dst_w, dst_h, ptr1, len1, mode);
+        var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v3;
+    }
+    /**
+     * Resample an RGBA image from `(src_w, src_h)` to `(dst_w, dst_h)`.
+     * Returns a new RGBA vector of length `dst_w * dst_h * 4`.
+     * @param {Uint8Array} src_rgba
+     * @param {number} src_w
+     * @param {number} src_h
+     * @param {number} dst_w
+     * @param {number} dst_h
+     * @param {ResampleMode} mode
+     * @returns {Uint8Array}
+     */
+    static resample_scale(src_rgba, src_w, src_h, dst_w, dst_h, mode) {
+        const ptr0 = passArray8ToWasm0(src_rgba, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.transformresamplecore_resample_scale(ptr0, len0, src_w, src_h, dst_w, dst_h, mode);
+        var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v2;
+    }
+}
+if (Symbol.dispose) TransformResampleCore.prototype[Symbol.dispose] = TransformResampleCore.prototype.free;
+
 /**
  * Resultado del cálculo analítico de IK para extremidades de 2 huesos
  */
@@ -1639,6 +1726,9 @@ const StrokeEngineCoreFinalization = (typeof FinalizationRegistry === 'undefined
 const StrokeStabilizerCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_strokestabilizercore_free(ptr, 1));
+const TransformResampleCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_transformresamplecore_free(ptr, 1));
 const TwoBoneIKResultFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_twoboneikresult_free(ptr, 1));

@@ -80,6 +80,7 @@ export const __wbg_set_twoboneikresult_parent_d_rotation: (a: number, b: number)
 export const __wbg_smartfillcore_free: (a: number, b: number) => void;
 export const __wbg_strokeenginecore_free: (a: number, b: number) => void;
 export const __wbg_strokestabilizercore_free: (a: number, b: number) => void;
+export const __wbg_transformresamplecore_free: (a: number, b: number) => void;
 export const __wbg_twoboneikresult_free: (a: number, b: number) => void;
 export const boneikcore_compose_mat2d: (a: number, b: number, c: number, d: number) => [number, number];
 export const boneikcore_distance_to_segment: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
@@ -153,6 +154,9 @@ export const strokestabilizercore_get_emitted_len: (a: number) => number;
 export const strokestabilizercore_get_emitted_ptr: (a: number) => number;
 export const strokestabilizercore_get_speed: (a: number) => number;
 export const strokestabilizercore_new: () => number;
+export const transformresamplecore_compute_inverse_transform_matrix: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+export const transformresamplecore_resample_affine: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+export const transformresamplecore_resample_scale: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
