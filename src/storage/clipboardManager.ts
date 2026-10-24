@@ -131,7 +131,7 @@ export function loadUrlToImage(srcUrl: string): Promise<HTMLImageElement | null>
  * Extracts graphic image data from a DOM ClipboardEvent.
  * Supports:
  *  1. Files copied from Windows Explorer (JPG, PNG, WebP, BMP, GIF, SVG)
- *  2. Raw image items (e.g. Snipping Tool, Photoshop, Clip Studio, web browser "Copy Image")
+ *  2. Raw image items (e.g. Snipping Tool, image editors, web browser "Copy Image")
  *  3. HTML <img> tags (Discord, web pages)
  *  4. Data URIs (data:image/...)
  */
@@ -425,8 +425,7 @@ export async function openImageAsDocument(
 }
 
 /**
- * Creates a brand new document whose canvas dimensions match the clipboard image,
- * replicating Clip Studio Paint's "Create New from Clipboard" (filenewfromclipboard).
+ * Creates a brand new document whose canvas dimensions match the clipboard image.
  */
 export async function createNewFromClipboard(
   engine: BrushEngine,
@@ -553,7 +552,7 @@ export function showClipboardPasteModal(engine: BrushEngine, timeline: TimelineM
 /**
  * Pastes an image onto a new Raster Layer in the current document,
  * launching the Transform Gizmo immediately so it can be moved, scaled, and rotated
- * without any destructive canvas clipping (CSP behavior).
+ * without any destructive canvas clipping.
  */
 export function pasteImageElement(
   img: CanvasImageSource,

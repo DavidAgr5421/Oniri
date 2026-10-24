@@ -30,7 +30,7 @@ export interface PresetConfig {
 export const CANVAS_PRESETS: PresetConfig[] = [
   // --- Animación ---
   {
-    name: 'Animación Full HD (1920 × 1080) [Lienzo +20% CSP]',
+    name: 'Animación Full HD (1920 × 1080) [Lienzo +20%]',
     category: 'animation',
     width: 1920,
     height: 1080,
@@ -40,7 +40,7 @@ export const CANVAS_PRESETS: PresetConfig[] = [
     hasOverscan: true,
   },
   {
-    name: 'Animación 4K UHD (3840 × 2160) [Lienzo +20% CSP]',
+    name: 'Animación 4K UHD (3840 × 2160) [Lienzo +20%]',
     category: 'animation',
     width: 3840,
     height: 2160,
@@ -50,7 +50,7 @@ export const CANVAS_PRESETS: PresetConfig[] = [
     hasOverscan: true,
   },
   {
-    name: 'Animación HD (1280 × 720) [Lienzo +20% CSP]',
+    name: 'Animación HD (1280 × 720) [Lienzo +20%]',
     category: 'animation',
     width: 1280,
     height: 720,
@@ -179,9 +179,9 @@ export const CANVAS_PRESETS: PresetConfig[] = [
 ];
 
 /**
- * Opens Clip Studio Paint style "Nuevo Documento / Nuevo Lienzo" modal dialog
+ * Opens the "Nuevo Documento / Nuevo Lienzo" modal dialog
  * featuring Animation, Illustration, Comic/Manga, and Webtoon presets,
- * alongside CSP's Extended Animation Canvas (20% overscan margin & safe guides).
+ * alongside Extended Animation Canvas (20% overscan margin & safe guides).
  */
 export function openNewProjectModal(
   engine: BrushEngine,
@@ -251,7 +251,7 @@ export function openNewProjectModal(
     <!-- Body -->
     <div style="padding: 18px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; max-height: 82vh;">
       
-      <!-- Work Type Selector Tabs (Clip Studio Paint style) -->
+      <!-- Work Type Selector Tabs -->
       <div>
         <label style="display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #94a3b8; margin-bottom: 8px; font-weight: 600;">Tipo de obra</label>
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">
@@ -360,11 +360,11 @@ export function openNewProjectModal(
         </div>
       </div>
 
-      <!-- Extended Canvas Options for Animation (CSP Overscan Frame) -->
+      <!-- Extended Canvas Options for Animation (Overscan Frame) -->
       <div id="extended-canvas-box" style="padding: 12px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; display: flex; flex-direction: column; gap: 8px;">
         <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #38bdf8; cursor: pointer;">
           <input type="checkbox" id="extended-canvas-chk" checked style="cursor: pointer; accent-color: #38bdf8;">
-          Lienzo ampliado de animación (Margen de sobreescaneo +20% estilo CSP)
+          Lienzo ampliado de animación (Margen de sobreescaneo +20%)
         </label>
         <div id="extended-canvas-hint" style="font-size: 11px; color: #94a3b8; line-height: 1.4; padding-left: 22px;">
           Crea un área de dibujo de <strong>2304 × 1296 px</strong> con cuadro de cámara de <strong>1920 × 1080 px</strong>, permitiendo animar entradas/salidas de personajes y movimientos de cámara fuera del encuadre final.

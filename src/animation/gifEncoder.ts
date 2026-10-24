@@ -1,7 +1,8 @@
 /**
- * Pure TypeScript GIF89a Animation Encoder
- * Zero external dependencies, fast in-memory LZW compression and color quantization.
+ * GIF89a Animation Encoder accelerated via Rust + WebAssembly (with TypeScript fallback)
+ * Fast in-memory LZW compression and 5-bit LUT color quantization.
  */
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 
 export class ByteArrayWriter {
   private buffer: Uint8Array;
@@ -150,7 +151,12 @@ export function encodeGif(frames: GifFrameInput[], options: GifEncodeOptions): U
       }
     }
 
-    encodeLzw(indexedPixels, colorDepth, (b) => writer.writeByte(b));
+    const rustLzw = rustStrokeEngine.encodeLzwFrame(indexedPixels, colorDepth);
+    if (rustLzw) {
+      writer.writeBytes(rustLzw);
+    } else {
+      encodeLzw(indexedPixels, colorDepth, (b) => writer.writeByte(b));
+    }
   }
 
   // 5. GIF Trailer
@@ -166,6 +172,11 @@ export function quantizeRgba(
   width: number,
   height: number
 ): { palette: [number, number, number][]; indexedPixels: Uint8Array; transparentIndex: number } {
+  const rustQuantized = rustStrokeEngine.quantizeRgbaFrame(rgba, width, height);
+  if (rustQuantized) {
+    return rustQuantized;
+  }
+
   const totalPixels = width * height;
   const indexedPixels = new Uint8Array(totalPixels);
   const colorMap = new Map<number, number>();

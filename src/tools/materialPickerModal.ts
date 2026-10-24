@@ -61,7 +61,7 @@ export function openMaterialPickerModal(options: OpenMaterialPickerOptions): voi
     overflow: 'hidden',
   });
 
-  // Header (CSP Dialog Title Bar)
+  // Header (Dialog Title Bar)
   const header = document.createElement('div');
   Object.assign(header.style, {
     display: 'flex',
@@ -338,7 +338,7 @@ export function openMaterialPickerModal(options: OpenMaterialPickerOptions): voi
           maxWidth: '100%',
           maxHeight: '100%',
           objectFit: 'contain',
-          // Invert white-alpha brush tips so they appear dark on light paper like CSP's material viewer
+          // Invert white-alpha brush tips so they appear dark on light paper in the material viewer
           filter: options.category === 'tip' ? 'invert(0.85) contrast(1.4)' : 'contrast(1.15)',
         });
         thumbBox.appendChild(img);

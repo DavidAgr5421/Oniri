@@ -41,7 +41,7 @@ export interface TimelineManager {
   readonly boneKeyframes: Map<number, SkeletonKeyframe>;
   readonly selectedBoneId: string | null;
 
-  // Light Table (Mesa de Luz de Animación - Clip Studio Paint Style)
+  // Light Table (Mesa de Luz de Animación)
   toggleLightTable(force?: boolean): void;
   registerCelToLightTable(celId: string, customName?: string): LightTableRegistration | null;
   registerPrevCelToLightTable(trackId?: string): LightTableRegistration | null;
@@ -101,7 +101,7 @@ export interface TimelineManager {
   getCelsInTrack(trackId: string): LayerNode[];
   batchSpecifyCels(trackId: string, step: number): void;
 
-  // Keyframes & Interpolation (CSP Enable Keyframes on Layer)
+  // Keyframes & Interpolation (Enable Keyframes on Layer)
   toggleTrackKeyframes(trackId: string, force?: boolean): void;
   addOrUpdateKeyframe(
     trackId: string,
@@ -197,7 +197,7 @@ function makeDefaultSettings(): TimelineSettings {
     startFrame: 1,
     endFrame: 24,
     currentFrame: 1,
-    minFrame: 0, // Soporte estilo Clip Studio Paint para fotograma 0 y fotogramas negativos
+    minFrame: 0, // Soporte para fotograma 0 y fotogramas negativos
     loop: true,
     isPlaying: false,
     division: 5,
@@ -302,7 +302,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     enabled: false,
     prevFrames: 2,
     nextFrames: 2,
-    prevColor: '#38bdf8', // Blue for past (CSP animation standard)
+    prevColor: '#38bdf8', // Blue for past frames
     nextColor: '#4ade80', // Green for future
     startOpacity: 0.5,
     stepOpacity: 0.15,
@@ -1049,7 +1049,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
             manager.setTotalFrames(clip.endFrame, true);
           }
         } else if (mode === 'ripple') {
-          // Shift all subsequent exposures in this clip by delta (CSP ripple cel duration)
+          // Shift all subsequent exposures in this clip by delta (ripple cel duration)
           const rebuilt = new Map<number, string>();
           for (let i = 0; i <= idx; i++) {
             rebuilt.set(sorted[i][0], sorted[i][1]);
@@ -1222,7 +1222,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       notify();
     },
 
-    // --- Keyframes & Interpolation (CSP Style) ---
+    // --- Keyframes & Interpolation ---
     toggleTrackKeyframes(trackId: string, force?: boolean) {
       const { tracks, settings } = getActiveScene();
       const track = tracks.find((t) => t.id === trackId);
@@ -1924,7 +1924,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const track = tracks.find((t) => t.id === trackId || t.folderId === trackId);
       if (!track) return undefined;
 
-      // Check clip bounds first (CSP Clip duration cuts off visibility outside clip)
+      // Check clip bounds first (Clip duration cuts off visibility outside clip)
       const clip = track.clips.find((c) => frame >= c.startFrame && frame <= c.endFrame);
       if (!clip) return undefined;
 

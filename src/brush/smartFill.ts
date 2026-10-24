@@ -1,4 +1,5 @@
 import type { LayerNode } from './layers';
+import { rustStrokeEngine } from './rustStrokeEngine';
 
 export interface SmartFillResult {
   bounds: { x: number; y: number; w: number; h: number };
@@ -120,7 +121,7 @@ function hexToRgba(hex: string): [number, number, number, number] {
 }
 
 /**
- * Intelligent Flood Fill implementing Clip Studio Paint's core algorithms:
+ * Intelligent Flood Fill implementing morphological boundary algorithms:
  * 1. Reference Layer boundary isolation (editing, reference lighthouse, all, or below).
  * 2. Morphological Close Gap (seals lines with small openings without leaving unfilled margins).
  * 3. Area Scaling (expands color under anti-aliased lineart, removing white halos, or contracts if negative).
@@ -229,144 +230,156 @@ export function executeSmartFill(config: SmartFillConfig): SmartFillResult | nul
     return null;
   }
 
-  // 3. Build Obstacle / Boundary Mask
-  const obstacleMask = new Uint8Array(totalPixels);
-  const tolSq = ((Math.max(1, tolerance) / 100) * 255) ** 2 * 3;
+  let finalFillMask: Uint8Array;
+  if (rustStrokeEngine.available) {
+    const rustRes = rustStrokeEngine.computeSmartFillMask(
+      boundaryData,
+      docW,
+      docH,
+      seedX,
+      seedY,
+      tolerance,
+      closeGap,
+      areaScaling,
+      isMultiLayerBoundary,
+    );
+    if (!rustRes) return null;
+    finalFillMask = rustRes.mask;
+  } else {
+    // 3. Build Obstacle / Boundary Mask (JS Fallback)
+    const obstacleMask = new Uint8Array(totalPixels);
+    const tolSq = ((Math.max(1, tolerance) / 100) * 255) ** 2 * 3;
 
-  if (isMultiLayerBoundary) {
-    const isSeedEmpty = seedA < 20;
-    for (let i = 0; i < totalPixels; i++) {
-      const p = i * 4;
-      const a = boundaryData[p + 3];
-      if (isSeedEmpty) {
-        if (a > 30) obstacleMask[i] = 1;
-      } else {
+    if (isMultiLayerBoundary) {
+      const isSeedEmpty = seedA < 20;
+      for (let i = 0; i < totalPixels; i++) {
+        const p = i * 4;
+        const a = boundaryData[p + 3];
+        if (isSeedEmpty) {
+          if (a > 30) obstacleMask[i] = 1;
+        } else {
+          const dr = boundaryData[p] - seedR;
+          const dg = boundaryData[p + 1] - seedG;
+          const db = boundaryData[p + 2] - seedB;
+          const da = a - seedA;
+          if (dr * dr + dg * dg + db * db + da * da > tolSq || a > 200) {
+            obstacleMask[i] = 1;
+          }
+        }
+      }
+    } else {
+      for (let i = 0; i < totalPixels; i++) {
+        const p = i * 4;
         const dr = boundaryData[p] - seedR;
         const dg = boundaryData[p + 1] - seedG;
         const db = boundaryData[p + 2] - seedB;
-        const da = a - seedA;
-        if (dr * dr + dg * dg + db * db + da * da > tolSq || a > 200) {
+        const da = boundaryData[p + 3] - seedA;
+        if (dr * dr + dg * dg + db * db + da * da > tolSq) {
           obstacleMask[i] = 1;
         }
       }
     }
-  } else {
-    for (let i = 0; i < totalPixels; i++) {
-      const p = i * 4;
-      const dr = boundaryData[p] - seedR;
-      const dg = boundaryData[p + 1] - seedG;
-      const db = boundaryData[p + 2] - seedB;
-      const da = boundaryData[p + 3] - seedA;
-      if (dr * dr + dg * dg + db * db + da * da > tolSq) {
-        obstacleMask[i] = 1;
-      }
+
+    // If seed itself is an impenetrable obstacle, abort
+    if (obstacleMask[seedIdx] === 1) {
+      return null;
     }
-  }
 
-  // If seed itself is an impenetrable obstacle, abort
-  if (obstacleMask[seedIdx] === 1) {
-    return null;
-  }
+    // 4. Close Gap: Morphological Dilation of Obstacles
+    let obstaclesForFlood: Uint8Array = obstacleMask;
+    const bridgeMask = new Uint8Array(totalPixels);
 
-  // 4. Close Gap: Morphological Dilation of Obstacles
-  // Bridges small line openings so paint does not leak outside
-  let obstaclesForFlood: Uint8Array = obstacleMask;
-  const bridgeMask = new Uint8Array(totalPixels);
-
-  if (closeGap > 0) {
-    const dilated = dilateBinaryMask(obstacleMask, docW, docH, closeGap);
-    for (let i = 0; i < totalPixels; i++) {
-      if (dilated[i] === 1 && obstacleMask[i] === 0) {
-        bridgeMask[i] = 1;
+    if (closeGap > 0) {
+      const dilated = dilateBinaryMask(obstacleMask, docW, docH, closeGap);
+      for (let i = 0; i < totalPixels; i++) {
+        if (dilated[i] === 1 && obstacleMask[i] === 0) {
+          bridgeMask[i] = 1;
+        }
       }
-    }
-    obstaclesForFlood = new Uint8Array(dilated);
+      obstaclesForFlood = new Uint8Array(dilated);
 
-    // If seed was near a line and caught by dilated obstacle zone, free local seed neighborhood
-    if (obstaclesForFlood[seedIdx] === 1) {
-      const rad = Math.min(3, closeGap);
-      for (let dy = -rad; dy <= rad; dy++) {
-        const py = seedY + dy;
-        if (py < 0 || py >= docH) continue;
-        for (let dx = -rad; dx <= rad; dx++) {
-          const px = seedX + dx;
-          if (px < 0 || px >= docW) continue;
-          const pIdx = py * docW + px;
-          if (obstacleMask[pIdx] === 0) {
-            obstaclesForFlood[pIdx] = 0;
-            bridgeMask[pIdx] = 0;
+      if (obstaclesForFlood[seedIdx] === 1) {
+        const rad = Math.min(3, closeGap);
+        for (let dy = -rad; dy <= rad; dy++) {
+          const py = seedY + dy;
+          if (py < 0 || py >= docH) continue;
+          for (let dx = -rad; dx <= rad; dx++) {
+            const px = seedX + dx;
+            if (px < 0 || px >= docW) continue;
+            const pIdx = py * docW + px;
+            if (obstacleMask[pIdx] === 0) {
+              obstaclesForFlood[pIdx] = 0;
+              bridgeMask[pIdx] = 0;
+            }
           }
         }
       }
     }
-  }
 
-  // 5. Scanline Flood Fill on bounded grid
-  const visited = new Uint8Array(totalPixels);
-  const rawFillMask = new Uint8Array(totalPixels);
-  const stack: [number, number][] = [[seedX, seedY]];
-  visited[seedIdx] = 1;
+    // 5. Scanline Flood Fill on bounded grid
+    const visited = new Uint8Array(totalPixels);
+    const rawFillMask = new Uint8Array(totalPixels);
+    const stack: [number, number][] = [[seedX, seedY]];
+    visited[seedIdx] = 1;
 
-  while (stack.length > 0) {
-    const [cx, cy] = stack.pop()!;
-    const lineY = cy * docW;
+    while (stack.length > 0) {
+      const [cx, cy] = stack.pop()!;
+      const lineY = cy * docW;
 
-    let left = cx;
-    while (left > 0 && !visited[lineY + left - 1] && obstaclesForFlood[lineY + left - 1] === 0) {
-      left--;
-    }
-
-    let right = cx;
-    while (right < docW - 1 && !visited[lineY + right + 1] && obstaclesForFlood[lineY + right + 1] === 0) {
-      right++;
-    }
-
-    for (let x = left; x <= right; x++) {
-      const idx = lineY + x;
-      visited[idx] = 1;
-      if (obstacleMask[idx] === 0) {
-        rawFillMask[idx] = 1;
+      let left = cx;
+      while (left > 0 && !visited[lineY + left - 1] && obstaclesForFlood[lineY + left - 1] === 0) {
+        left--;
       }
-    }
 
-    // Inspect rows above and below
-    for (const nextY of [cy - 1, cy + 1]) {
-      if (nextY < 0 || nextY >= docH) continue;
-      const nextLine = nextY * docW;
-      let inSpan = false;
+      let right = cx;
+      while (right < docW - 1 && !visited[lineY + right + 1] && obstaclesForFlood[lineY + right + 1] === 0) {
+        right++;
+      }
 
       for (let x = left; x <= right; x++) {
-        const idx = nextLine + x;
-        const canFill = !visited[idx] && obstaclesForFlood[idx] === 0;
+        const idx = lineY + x;
+        visited[idx] = 1;
+        if (obstacleMask[idx] === 0) {
+          rawFillMask[idx] = 1;
+        }
+      }
 
-        if (!inSpan && canFill) {
-          stack.push([x, nextY]);
-          inSpan = true;
-        } else if (inSpan && !canFill) {
-          inSpan = false;
+      for (const nextY of [cy - 1, cy + 1]) {
+        if (nextY < 0 || nextY >= docH) continue;
+        const nextLine = nextY * docW;
+        let inSpan = false;
+
+        for (let x = left; x <= right; x++) {
+          const idx = nextLine + x;
+          const canFill = !visited[idx] && obstaclesForFlood[idx] === 0;
+
+          if (!inSpan && canFill) {
+            stack.push([x, nextY]);
+            inSpan = true;
+          } else if (inSpan && !canFill) {
+            inSpan = false;
+          }
         }
       }
     }
-  }
 
-  // Expand fill up to true obstacle border, strictly halted by closed gap bridges
-  if (closeGap > 0) {
-    const expanded = dilateBinaryMask(rawFillMask, docW, docH, closeGap);
-    for (let i = 0; i < totalPixels; i++) {
-      if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
-        rawFillMask[i] = 1;
+    if (closeGap > 0) {
+      const expanded = dilateBinaryMask(rawFillMask, docW, docH, closeGap);
+      for (let i = 0; i < totalPixels; i++) {
+        if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
+          rawFillMask[i] = 1;
+        }
       }
     }
-  }
 
-  // 6. Area Scaling: Expand outward to tuck under lineart (+), or shrink inward (-)
-  let finalFillMask: Uint8Array;
-  if (areaScaling > 0) {
-    finalFillMask = dilateBinaryMask(rawFillMask, docW, docH, areaScaling);
-  } else if (areaScaling < 0) {
-    finalFillMask = erodeBinaryMask(rawFillMask, docW, docH, Math.abs(areaScaling));
-  } else {
-    finalFillMask = rawFillMask;
+    // 6. Area Scaling
+    if (areaScaling > 0) {
+      finalFillMask = dilateBinaryMask(rawFillMask, docW, docH, areaScaling);
+    } else if (areaScaling < 0) {
+      finalFillMask = erodeBinaryMask(rawFillMask, docW, docH, Math.abs(areaScaling));
+    } else {
+      finalFillMask = rawFillMask;
+    }
   }
 
   // 7. Apply Selection Mask if active
@@ -511,7 +524,7 @@ export interface EncloseAndFillConfig {
 }
 
 /**
- * Clip Studio Paint "Cerrar y Rellenar" (Enclose and Fill / 囲んで塗る).
+ * "Cerrar y Rellenar" (Enclose and Fill).
  * The user draws a freehand lasso around a drawing. Interior enclosed regions
  * are detected and filled, while exterior transparent space is completely ignored.
  */
@@ -566,133 +579,147 @@ export function executeEncloseAndFill(config: EncloseAndFillConfig): SmartFillRe
 
   // 3. Extract boundary obstacles for this box
   const boundaryData = getBoundaryDataForRect(referMode, activeLayer, allLayers, rx, ry, rw, rh);
-  const total = rw * rh;
-  const obstacleMask = new Uint8Array(total);
-  for (let i = 0; i < total; i++) {
-    if (boundaryData[i * 4 + 3] > 30) {
-      obstacleMask[i] = 1;
-    }
-  }
-
-  // 4. Close Gaps (morphological dilation of obstacles)
-  let effectiveObstacles: Uint8Array = obstacleMask;
-  const bridgeMask = new Uint8Array(total);
-  if (closeGap > 0) {
-    const dilated = dilateBinaryMask(obstacleMask, rw, rh, closeGap);
-    for (let i = 0; i < total; i++) {
-      if (dilated[i] === 1 && obstacleMask[i] === 0) {
-        bridgeMask[i] = 1;
-      }
-    }
-    effectiveObstacles = dilated;
-  }
-
-  // 5. Exterior flood fill: start from all outer edges of the bounding box
-  const outsideVisited = new Uint8Array(total);
-  const queue: number[] = [];
-
-  for (let x = 0; x < rw; x++) {
-    const topIdx = x;
-    if (effectiveObstacles[topIdx] === 0 && outsideVisited[topIdx] === 0) {
-      outsideVisited[topIdx] = 1;
-      queue.push(topIdx);
-    }
-    const botIdx = (rh - 1) * rw + x;
-    if (effectiveObstacles[botIdx] === 0 && outsideVisited[botIdx] === 0) {
-      outsideVisited[botIdx] = 1;
-      queue.push(botIdx);
-    }
-  }
-  for (let y = 0; y < rh; y++) {
-    const leftIdx = y * rw;
-    if (effectiveObstacles[leftIdx] === 0 && outsideVisited[leftIdx] === 0) {
-      outsideVisited[leftIdx] = 1;
-      queue.push(leftIdx);
-    }
-    const rightIdx = y * rw + (rw - 1);
-    if (effectiveObstacles[rightIdx] === 0 && outsideVisited[rightIdx] === 0) {
-      outsideVisited[rightIdx] = 1;
-      queue.push(rightIdx);
-    }
-  }
-
-  let head = 0;
-  while (head < queue.length) {
-    const curr = queue[head++];
-    const cx = curr % rw;
-    const cy = Math.floor(curr / rw);
-
-    if (cx > 0) {
-      const left = curr - 1;
-      if (effectiveObstacles[left] === 0 && outsideVisited[left] === 0) {
-        outsideVisited[left] = 1;
-        queue.push(left);
-      }
-    }
-    if (cx < rw - 1) {
-      const right = curr + 1;
-      if (effectiveObstacles[right] === 0 && outsideVisited[right] === 0) {
-        outsideVisited[right] = 1;
-        queue.push(right);
-      }
-    }
-    if (cy > 0) {
-      const top = curr - rw;
-      if (effectiveObstacles[top] === 0 && outsideVisited[top] === 0) {
-        outsideVisited[top] = 1;
-        queue.push(top);
-      }
-    }
-    if (cy < rh - 1) {
-      const bot = curr + rw;
-      if (effectiveObstacles[bot] === 0 && outsideVisited[bot] === 0) {
-        outsideVisited[bot] = 1;
-        queue.push(bot);
-      }
-    }
-  }
-
-  // 6. Identify enclosed interior regions (Inside lasso, NOT outside, NOT lineart)
   const targetImg = activeLayer.context.getImageData(rx, ry, rw, rh);
   const targetData = targetImg.data;
-  const rawFillMask = new Uint8Array(total);
+  const total = rw * rh;
 
-  let filledCount = 0;
-  for (let i = 0; i < total; i++) {
-    const isInsideLasso = lassoImgData[i * 4 + 3] > 64;
-    const isOutsideDrawing = outsideVisited[i] === 1;
-    const isInkLine = obstacleMask[i] === 1;
-
-    if (isInsideLasso && !isOutsideDrawing && !isInkLine) {
-      if (targetData[i * 4 + 3] < 60) {
-        rawFillMask[i] = 1;
-        filledCount++;
-      }
-    }
-  }
-
-  if (filledCount === 0) {
-    return null;
-  }
-
-  // Expand fill up to true obstacle border, strictly halted by closed gap bridges
-  if (closeGap > 0) {
-    const expanded = dilateBinaryMask(rawFillMask, rw, rh, closeGap);
-    for (let i = 0; i < total; i++) {
-      if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
-        rawFillMask[i] = 1;
-      }
-    }
-  }
-
-  // 7. Area Scaling (expand to tuck underneath lineart or shrink inward)
   let finalFillMask: Uint8Array;
-  if (areaScaling > 0) {
-    finalFillMask = dilateBinaryMask(rawFillMask, rw, rh, areaScaling);
-  } else if (areaScaling < 0) {
-    finalFillMask = erodeBinaryMask(rawFillMask, rw, rh, Math.abs(areaScaling));
+  if (rustStrokeEngine.available) {
+    const rustRes = rustStrokeEngine.computeEncloseFillMask(
+      boundaryData,
+      targetData,
+      lassoImgData,
+      rw,
+      rh,
+      closeGap,
+      areaScaling,
+    );
+    if (!rustRes) return null;
+    finalFillMask = rustRes.mask;
   } else {
-    finalFillMask = rawFillMask;
+    const obstacleMask = new Uint8Array(total);
+    for (let i = 0; i < total; i++) {
+      if (boundaryData[i * 4 + 3] > 30) {
+        obstacleMask[i] = 1;
+      }
+    }
+
+    // 4. Close Gaps (morphological dilation of obstacles)
+    let effectiveObstacles: Uint8Array = obstacleMask;
+    const bridgeMask = new Uint8Array(total);
+    if (closeGap > 0) {
+      const dilated = dilateBinaryMask(obstacleMask, rw, rh, closeGap);
+      for (let i = 0; i < total; i++) {
+        if (dilated[i] === 1 && obstacleMask[i] === 0) {
+          bridgeMask[i] = 1;
+        }
+      }
+      effectiveObstacles = dilated;
+    }
+
+    // 5. Exterior flood fill: start from all outer edges of the bounding box
+    const outsideVisited = new Uint8Array(total);
+    const queue: number[] = [];
+
+    for (let x = 0; x < rw; x++) {
+      const topIdx = x;
+      if (effectiveObstacles[topIdx] === 0 && outsideVisited[topIdx] === 0) {
+        outsideVisited[topIdx] = 1;
+        queue.push(topIdx);
+      }
+      const botIdx = (rh - 1) * rw + x;
+      if (effectiveObstacles[botIdx] === 0 && outsideVisited[botIdx] === 0) {
+        outsideVisited[botIdx] = 1;
+        queue.push(botIdx);
+      }
+    }
+    for (let y = 0; y < rh; y++) {
+      const leftIdx = y * rw;
+      if (effectiveObstacles[leftIdx] === 0 && outsideVisited[leftIdx] === 0) {
+        outsideVisited[leftIdx] = 1;
+        queue.push(leftIdx);
+      }
+      const rightIdx = y * rw + (rw - 1);
+      if (effectiveObstacles[rightIdx] === 0 && outsideVisited[rightIdx] === 0) {
+        outsideVisited[rightIdx] = 1;
+        queue.push(rightIdx);
+      }
+    }
+
+    let head = 0;
+    while (head < queue.length) {
+      const curr = queue[head++];
+      const cx = curr % rw;
+      const cy = Math.floor(curr / rw);
+
+      if (cx > 0) {
+        const left = curr - 1;
+        if (effectiveObstacles[left] === 0 && outsideVisited[left] === 0) {
+          outsideVisited[left] = 1;
+          queue.push(left);
+        }
+      }
+      if (cx < rw - 1) {
+        const right = curr + 1;
+        if (effectiveObstacles[right] === 0 && outsideVisited[right] === 0) {
+          outsideVisited[right] = 1;
+          queue.push(right);
+        }
+      }
+      if (cy > 0) {
+        const top = curr - rw;
+        if (effectiveObstacles[top] === 0 && outsideVisited[top] === 0) {
+          outsideVisited[top] = 1;
+          queue.push(top);
+        }
+      }
+      if (cy < rh - 1) {
+        const bot = curr + rw;
+        if (effectiveObstacles[bot] === 0 && outsideVisited[bot] === 0) {
+          outsideVisited[bot] = 1;
+          queue.push(bot);
+        }
+      }
+    }
+
+    // 6. Identify enclosed interior regions (Inside lasso, NOT outside, NOT lineart)
+    const rawFillMask = new Uint8Array(total);
+
+    let filledCount = 0;
+    for (let i = 0; i < total; i++) {
+      const isInsideLasso = lassoImgData[i * 4 + 3] > 64;
+      const isOutsideDrawing = outsideVisited[i] === 1;
+      const isInkLine = obstacleMask[i] === 1;
+
+      if (isInsideLasso && !isOutsideDrawing && !isInkLine) {
+        if (targetData[i * 4 + 3] < 60) {
+          rawFillMask[i] = 1;
+          filledCount++;
+        }
+      }
+    }
+
+    if (filledCount === 0) {
+      return null;
+    }
+
+    if (closeGap > 0) {
+      const expanded = dilateBinaryMask(rawFillMask, rw, rh, closeGap);
+      for (let i = 0; i < total; i++) {
+        if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
+          rawFillMask[i] = 1;
+        }
+      }
+    }
+
+    // 7. Area Scaling
+    if (areaScaling > 0) {
+      finalFillMask = dilateBinaryMask(rawFillMask, rw, rh, areaScaling);
+    } else if (areaScaling < 0) {
+      finalFillMask = erodeBinaryMask(rawFillMask, rw, rh, Math.abs(areaScaling));
+    } else {
+      finalFillMask = rawFillMask;
+    }
   }
 
   const [fillR, fillG, fillB, fillA] = hexToRgba(fillColorHex);
@@ -745,7 +772,7 @@ export interface PaintUnfilledAreaConfig {
 }
 
 /**
- * Clip Studio Paint "Pintar área no rellenada" (Fill Unfilled Area Brush / 塗り残し部分を塗る).
+ * "Pintar área no rellenada" (Fill Unfilled Area Brush).
  * A touch-up brush that fills only unpainted crevices trapped by lineart under the brush footprint.
  */
 export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): SmartFillResult | null {
@@ -809,58 +836,73 @@ export function executePaintUnfilledArea(config: PaintUnfilledAreaConfig): Smart
 
   const strokeData = sCtx.getImageData(0, 0, rw, rh).data;
   const boundaryData = getBoundaryDataForRect(referMode, activeLayer, allLayers, rx, ry, rw, rh);
-  const total = rw * rh;
-  const obstacleMask = new Uint8Array(total);
-  for (let i = 0; i < total; i++) {
-    if (boundaryData[i * 4 + 3] > 30) obstacleMask[i] = 1;
-  }
-
-  // Gap Closing bridges
-  const bridgeMask = new Uint8Array(total);
-  if (closeGap > 0) {
-    const dilated = dilateBinaryMask(obstacleMask, rw, rh, closeGap);
-    for (let i = 0; i < total; i++) {
-      if (dilated[i] === 1 && obstacleMask[i] === 0) {
-        bridgeMask[i] = 1;
-      }
-    }
-  }
-
   const targetImg = activeLayer.context.getImageData(rx, ry, rw, rh);
   const targetData = targetImg.data;
-  const rawFillMask = new Uint8Array(total);
-
-  let filledCount = 0;
-  for (let i = 0; i < total; i++) {
-    if (strokeData[i * 4 + 3] > 64 && obstacleMask[i] === 0) {
-      if (targetData[i * 4 + 3] < 60) {
-        rawFillMask[i] = 1;
-        filledCount++;
-      }
-    }
-  }
-
-  if (filledCount === 0) {
-    return null;
-  }
-
-  // Expand fill up to true obstacle border, halted by closed gap bridges
-  if (closeGap > 0) {
-    const expanded = dilateBinaryMask(rawFillMask, rw, rh, closeGap);
-    for (let i = 0; i < total; i++) {
-      if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
-        rawFillMask[i] = 1;
-      }
-    }
-  }
+  const total = rw * rh;
 
   let finalMask: Uint8Array;
-  if (areaScaling > 0) {
-    finalMask = dilateBinaryMask(rawFillMask, rw, rh, areaScaling);
-  } else if (areaScaling < 0) {
-    finalMask = erodeBinaryMask(rawFillMask, rw, rh, Math.abs(areaScaling));
+  if (rustStrokeEngine.available) {
+    const rustRes = rustStrokeEngine.computeUnfilledAreaMask(
+      boundaryData,
+      targetData,
+      strokeData,
+      rw,
+      rh,
+      closeGap,
+      areaScaling,
+    );
+    if (!rustRes) return null;
+    finalMask = rustRes.mask;
   } else {
-    finalMask = rawFillMask;
+    const obstacleMask = new Uint8Array(total);
+    for (let i = 0; i < total; i++) {
+      if (boundaryData[i * 4 + 3] > 30) obstacleMask[i] = 1;
+    }
+
+    // Gap Closing bridges
+    const bridgeMask = new Uint8Array(total);
+    if (closeGap > 0) {
+      const dilated = dilateBinaryMask(obstacleMask, rw, rh, closeGap);
+      for (let i = 0; i < total; i++) {
+        if (dilated[i] === 1 && obstacleMask[i] === 0) {
+          bridgeMask[i] = 1;
+        }
+      }
+    }
+
+    const rawFillMask = new Uint8Array(total);
+
+    let filledCount = 0;
+    for (let i = 0; i < total; i++) {
+      if (strokeData[i * 4 + 3] > 64 && obstacleMask[i] === 0) {
+        if (targetData[i * 4 + 3] < 60) {
+          rawFillMask[i] = 1;
+          filledCount++;
+        }
+      }
+    }
+
+    if (filledCount === 0) {
+      return null;
+    }
+
+    // Expand fill up to true obstacle border, halted by closed gap bridges
+    if (closeGap > 0) {
+      const expanded = dilateBinaryMask(rawFillMask, rw, rh, closeGap);
+      for (let i = 0; i < total; i++) {
+        if (expanded[i] === 1 && obstacleMask[i] === 0 && bridgeMask[i] === 0) {
+          rawFillMask[i] = 1;
+        }
+      }
+    }
+
+    if (areaScaling > 0) {
+      finalMask = dilateBinaryMask(rawFillMask, rw, rh, areaScaling);
+    } else if (areaScaling < 0) {
+      finalMask = erodeBinaryMask(rawFillMask, rw, rh, Math.abs(areaScaling));
+    } else {
+      finalMask = rawFillMask;
+    }
   }
 
   const [fillR, fillG, fillB, fillA] = hexToRgba(fillColorHex);

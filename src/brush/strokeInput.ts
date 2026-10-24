@@ -81,9 +81,9 @@ function predictedSamples(event: PointerEvent): PointerEvent[] {
  * tapers handle the finesse instead.
  *
  * For a physical pen stylus, we read the analog value (0.0 to 1.0) and pass
- * it through the device response curve (CSP Preferences > Tablet, REA study 5.3).
+ * it through the device response curve.
  * When the stylus is lifting or hovering, event.pressure drops naturally to 0.0,
- * which produces the authentic razor-sharp tapered ending ("抜き" - Nuki).
+ * which produces the razor-sharp tapered ending.
  */
 function pressureOf(event: PointerLike, isStart = false): number {
   if (event.pointerType === 'pen') {
@@ -159,7 +159,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   let rotStartAngle = 0;
   let rotStartCanvasAngle = 0;
 
-  // CSP Ergonomic Modifier States (Ctrl+Alt+Drag Brush Resize & Alt Eyedropper)
+  // Ergonomic Modifier States (Ctrl+Alt+Drag Brush Resize & Alt Eyedropper)
   let isCtrlAltPressed = false;
   let isAltPressed = false;
   let isResizingBrush = false;
@@ -301,7 +301,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   /**
-   * Feeds the pen lean of a sample into the engine (REA study 5.1). Everything
+   * Feeds the pen lean of a sample into the engine. Everything
    * that is not an active ink stroke with tilt enabled drops back to an
    * upright nib, so the last tilt of a stroke can never leak into the next one.
    */
@@ -345,7 +345,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const m2p = (p1.p + pt.p) / 2;
 
     const segDist = Math.hypot(m2x - m1x, m2y - m1y);
-    // Adaptive Bezier subdivision (CSP SamplingBySpeed): avoids generating 6 sub-samples for 0.5px movements
+    // Adaptive Bezier subdivision based on segment distance: avoids generating 6 sub-samples for 0.5px movements
     const subdivisions = segDist > 24 ? 5 : segDist > 8 ? 3 : 2;
 
     for (let i = 1; i <= subdivisions; i++) {
@@ -387,7 +387,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       smoothedX = doc.x;
       smoothedY = doc.y;
     } else {
-      // CSP Velocity-Adaptive Stabilization (SmoothStroke / SamplingBySpeed in iswCoreTG.dll):
+      // Velocity-adaptive stabilization:
       // Slow precision work gets strong stabilization, while fast sweeping curves catch up
       // smoothly without rubber-band lag.
       const baseAlpha = 1 / (1 + stab * 0.42);
@@ -696,8 +696,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     if (!doc) return;
 
     if (transformManager.isTransforming()) {
-      // CSP modal state: the gizmo owns the pointer. Drawing tools, fills and
-      // new selections stay blocked until confirm/cancel (REA study, 2.1).
+      // Modal transform state: the gizmo owns the pointer. Drawing tools, fills and
+      // new selections stay blocked until confirm/cancel.
       const handled = transformManager.handlePointerDown(doc.x, doc.y, event);
       if (handled) {
         activePointerId = event.pointerId;
@@ -712,7 +712,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
-    // Move Layer Tool (CSP Move Layer / Mouse Tool)
+    // Move Layer Tool
     if (tool === 'move') {
       const activeLayer = engine.layerManager.getActiveDrawableLayer();
       if (activeLayer && !activeLayer.locked && !activeLayer.isPaper) {
@@ -732,7 +732,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
-    // Physical eraser tip (REA study 5.4): erases with the current sub tool
+    // Physical eraser tip: erases with the current sub tool
     // settings without touching the selected tool, and restores it as soon as
     // the pen is flipped back.
     if (isPhysicalEraser(event)) {
@@ -817,9 +817,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       if (event.shiftKey) combineMode = 'add';
       else if (event.altKey) combineMode = 'subtract';
 
-      // Drag inside an existing selection moves only the selection tent
-      // (CSP "move selection", REA study 4.1). Modifiers still create a new
-      // combined selection instead.
+      // Drag inside an existing selection moves only the selection mask.
+      // Modifiers still create a new combined selection instead.
       if (
         !event.shiftKey &&
         !event.altKey &&
@@ -1474,7 +1473,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
-    // Bracket keys [ and ] for discrete brush size steps (CSP standard)
+    // Bracket keys [ and ] for discrete brush size steps
     if (event.key === '[' || event.key === ']') {
       event.preventDefault();
       const SIZES = [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 100, 120, 150, 200, 250, 300, 400, 500];
@@ -1506,7 +1505,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const isCtrl = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
 
-    // CSP modal transform state (REA study, 2.1): only confirm / cancel / the
+    // Modal transform state: only confirm / cancel / the
     // transform toggle itself may run. Every other command is refused.
     if (isTransformModalLocked()) {
       if (event.key === 'Enter' || event.key === 'NumpadEnter') {
@@ -1519,7 +1518,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
         event.preventDefault();
         transformManager.commitTransform();
       } else if (isCtrl && key === 'z' && !event.shiftKey) {
-        // CSP: undo while transforming discards the in-flight transform
+        // Undo while transforming discards the in-flight transform
         event.preventDefault();
         transformManager.cancelTransform();
       } else if (!isSpacePressed && !['control', 'meta', 'shift', 'alt'].includes(key)) {
@@ -1613,7 +1612,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const onDblClick = (): void => {
-    // CSP: double click on the canvas commits an active transform
+    // Double click on the canvas commits an active transform
     if (transformManager.isTransforming()) {
       transformManager.commitTransform();
       return;

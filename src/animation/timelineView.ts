@@ -138,7 +138,7 @@ export function mountTimelineView(
 
   const sceneSelect = document.createElement('select');
   sceneSelect.className = 'timeline-select scene-select';
-  sceneSelect.title = 'Seleccionar Escena de Animación (Clip Studio Paint Multi-Timeline)';
+  sceneSelect.title = 'Seleccionar Escena de Animación';
   sceneSelect.addEventListener('change', () => {
     timeline.switchScene(sceneSelect.value);
   });
@@ -285,7 +285,7 @@ export function mountTimelineView(
   });
   transportGroup.appendChild(frameDisplay);
 
-  // Dedicated Timeline Settings Button (CSP Change Timeline Settings)
+  // Dedicated Timeline Settings Button
   const timelineEditBtn = document.createElement('button');
   timelineEditBtn.className = 'timeline-btn icon-only';
   timelineEditBtn.title = 'Edición de Línea de Tiempo (Cantidad de fotogramas, FPS, Rango In/Out, División)';
@@ -378,14 +378,14 @@ export function mountTimelineView(
   });
   actionsGroup.appendChild(delCelBtn);
 
-  // --- Keyframe Controls (CSP Style: Enable Keyframes + Add/Delete Keyframe + Interpolation) ---
+  // --- Keyframe Controls (Enable Keyframes + Add/Delete Keyframe + Interpolation) ---
   const sepKf = document.createElement('div');
   sepKf.className = 'timeline-separator';
   actionsGroup.appendChild(sepKf);
 
   const toggleKfModeBtn = document.createElement('button');
   toggleKfModeBtn.className = 'timeline-btn icon-only';
-  toggleKfModeBtn.title = 'Activar / Desactivar fotogramas clave en esta pista (CSP Enable Keyframes)';
+  toggleKfModeBtn.title = 'Activar / Desactivar fotogramas clave en esta pista';
   toggleKfModeBtn.innerHTML = `
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ffd43b" stroke-width="2.2">
       <polygon points="12 2 22 12 12 22 2 12 12 2"/>
@@ -565,7 +565,7 @@ export function mountTimelineView(
   leftCol.appendChild(trackHeadersList);
   body.appendChild(leftCol);
 
-  // Track Column Width Splitter (Clip Studio Paint style)
+  // Track Column Width Splitter
   const trackSplitter = document.createElement('div');
   trackSplitter.className = 'csp-timeline-track-splitter';
   trackSplitter.title = 'Arrastrar para cambiar el ancho de la columna de pistas';
@@ -865,7 +865,7 @@ export function mountTimelineView(
       ruler.appendChild(cell);
     }
 
-    // Playback Start Frame Bracket Handle (Blue left bracket in CSP)
+    // Playback Start Frame Bracket Handle
     const startBracket = document.createElement('div');
     startBracket.className = 'timeline-range-bracket start-bracket';
     startBracket.title = `Inicio de reproducción (Fotograma ${timeline.settings.startFrame}). Arrastra para cambiar inicio.`;
@@ -873,7 +873,7 @@ export function mountTimelineView(
     attachRangeBracketDrag(startBracket, 'start');
     ruler.appendChild(startBracket);
 
-    // Playback End Frame Bracket Handle (Blue right bracket in CSP)
+    // Playback End Frame Bracket Handle
     const endBracket = document.createElement('div');
     endBracket.className = 'timeline-range-bracket end-bracket';
     endBracket.title = `Fin de reproducción (Fotograma ${timeline.settings.endFrame}). Arrastra para cambiar fin.`;
@@ -881,7 +881,7 @@ export function mountTimelineView(
     attachRangeBracketDrag(endBracket, 'end');
     ruler.appendChild(endBracket);
 
-    // Total Frames End-Boundary Drag Handle on Ruler & Full Height (CSP Red/Cyan End Wall)
+    // Total Frames End-Boundary Drag Handle on Ruler & Full Height
     const endTimelineHandle = document.createElement('div');
     endTimelineHandle.className = 'timeline-total-end-handle';
     endTimelineHandle.style.left = `${totalW}px`;
@@ -1024,7 +1024,7 @@ export function mountTimelineView(
         row.appendChild(fcell);
       }
 
-      // Render CSP Clips & Cel spans inside each clip
+      // Render Clips & Cel spans inside each clip
       for (const clip of track.clips) {
         const clipStart = Math.max(minF, clip.startFrame);
         const clipEnd = Math.min(totalFrames, clip.endFrame);
@@ -1092,7 +1092,7 @@ export function mountTimelineView(
           lbl.textContent = `${celLabel} (${spanLength}f)`;
           block.appendChild(lbl);
 
-          // Right resize handle on cel block (CSP drag cel duration right/left)
+          // Right resize handle on cel block (drag cel duration right/left)
           const rightResizeHandle = document.createElement('div');
           rightResizeHandle.className = 'cel-resize-handle right';
           rightResizeHandle.title =
@@ -1498,7 +1498,7 @@ export function mountTimelineView(
       return;
     }
 
-    // CSP modal transform state: timeline playback & scrubbing are locked
+    // Modal transform state: timeline playback & scrubbing are locked
     if (isTransformModalLocked()) {
       e.preventDefault();
       return;
@@ -1555,7 +1555,7 @@ export function mountTimelineView(
   render();
 }
 
-// --- Modal: CSP-Style Timeline & Playback Settings Modal ---
+// --- Modal: Timeline & Playback Settings Modal ---
 function openTimelineSettingsModal(timeline: TimelineManager): void {
   const backdrop = document.createElement('div');
   backdrop.className = 'onion-modal-backdrop';
@@ -1575,7 +1575,7 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
         <line x1="2" y1="9" x2="22" y2="9"/>
         <line x1="2" y1="15" x2="22" y2="15"/>
       </svg>
-      Ajustes de Línea de Tiempo (Clip Studio Paint)
+      Ajustes de Línea de Tiempo
     </h3>
 
     <div class="onion-setting-row">
@@ -1604,7 +1604,7 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
     </div>
 
     <div class="onion-setting-row">
-      <label>Fotograma mínimo visible (CSP Frame 0 / Negativos)</label>
+      <label>Fotograma mínimo visible (Frame 0 / Negativos)</label>
       <input type="number" id="tl-min-frame" min="-200" max="1" value="${s.minFrame ?? 0}"/>
     </div>
 
@@ -1720,7 +1720,7 @@ function openTimelineSettingsModal(timeline: TimelineManager): void {
   });
 }
 
-// --- Modal: Scene Manager & Scene Editor (CSP Multi-Timeline Management) ---
+// --- Modal: Scene Manager & Scene Editor (Multi-Timeline Management) ---
 function openSceneManagerModal(timeline: TimelineManager): void {
   const backdrop = document.createElement('div');
   backdrop.className = 'onion-modal-backdrop';
@@ -1914,7 +1914,7 @@ function openSceneManagerModal(timeline: TimelineManager): void {
   });
 }
 
-// --- Modal: Keyframe Inspector & Transform Editor (CSP Object Tool / Keyframe Params) ---
+// --- Modal: Keyframe Inspector & Transform Editor ---
 function openKeyframeEditorModal(
   timeline: TimelineManager,
   track: AnimationTrack,
@@ -2100,7 +2100,7 @@ function openOnionSkinModal(timeline: TimelineManager, _layerManager: LayerManag
         <div class="onion-setting-row">
           <label>Modo de visualización</label>
           <select id="onion-mode">
-            <option value="tint" ${skin.mode === 'tint' ? 'selected' : ''}>Tintado Monocromo (CSP)</option>
+            <option value="tint" ${skin.mode === 'tint' ? 'selected' : ''}>Tintado Monocromo</option>
             <option value="color" ${skin.mode === 'color' ? 'selected' : ''}>Color Original</option>
           </select>
         </div>
@@ -2542,7 +2542,7 @@ function showTimelineContextMenu(
   header.innerHTML = `<span>${track.name}</span><span style="color:#00e5ff;">Fotograma ${targetFrame}</span>`;
   menu.appendChild(header);
 
-  // 2. Section: Asignar Celda Existente (Specify Cel - CSP Style)
+  // 2. Section: Asignar Celda Existente (Specify Cel)
   const cels = timeline.getCelsInTrack(track.id);
   const currentAssignedCelId = track.exposures.get(targetFrame);
   const activeCelAtFrame = timeline.getActiveCelForFrame(track.id, targetFrame);
@@ -2629,7 +2629,7 @@ function showTimelineContextMenu(
   });
   menu.appendChild(addKfItem);
 
-  // 5. Option: Dividir Clip aquí (CSP Split Clip)
+  // 5. Option: Dividir Clip aquí (Split Clip)
   const splitClipItem = document.createElement('div');
   splitClipItem.className = 'context-menu-item';
   splitClipItem.innerHTML = `

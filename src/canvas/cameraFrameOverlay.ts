@@ -51,7 +51,7 @@ export class CameraFrameOverlay {
       this.ctx.restore();
     }
 
-    // 2. Output Camera Frame Boundary (CSP Cyan/Blue Border)
+    // 2. Output Camera Frame Boundary (Cyan/Blue Border)
     if (state.showFrame) {
       this.ctx.save();
       this.ctx.strokeStyle = '#38bdf8';

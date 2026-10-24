@@ -49,7 +49,7 @@ export type { PressureCurveMode, PressureCurveSettings } from '../brush/pressure
 import type { PressureCurveSettings } from '../brush/pressureResponse';
 
 /**
- * Device-level input response (CSP File > Preferences > Tablet). Not part of a
+ * Device-level input response. Not part of a
  * sub tool: the pressure curve and the tilt behaviour belong to the tablet, the
  * sub tool only decides how the responded pressure is spent.
  */
@@ -175,15 +175,15 @@ export interface ToolState {
   brush: BrushSettings;
   tablet: TabletSettings;
   propertiesOpen: boolean;
-  dockLayout: DockLayoutMode; // CSP Two-column (Side-by-Side) vs Single column (Stacked)
-  // Sub Tool Detail: which properties are pinned/visible in the main Tool Property panel (CSP Eye icon)
+  dockLayout: DockLayoutMode; // Two-column (Side-by-Side) vs Single column (Stacked)
+  // Sub Tool Detail: which properties are pinned/visible in the main Tool Property panel (Eye icon)
   visibleProperties: BrushPropKey[];
   previewBgMode: PreviewBgMode;
   // Bone Rigging & Animation state
   boneMode: BoneToolMode;
   showBonesOverlay: boolean;
   autoKeyBones: boolean;
-  // Clip Studio Paint Color System
+  // Color System
   colorTab: ColorTabId;
   primaryColor: string;
   secondaryColor: string;
@@ -321,7 +321,7 @@ function persistTabletSettings(settings: TabletSettings): void {
 }
 
 // ---------------------------------------------------------------------------
-// Sub Tool persistence (Clip Studio Paint "Sub Tool Detail" style)
+// Sub Tool persistence
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = 'oniri.subtools.v14';
@@ -724,7 +724,7 @@ export function setBrushSettings(patch: Partial<BrushSettings>): void {
     brush: { ...state.brush, ...patch },
   };
 
-  // Every sub tool remembers its own configuration (like CSP sub tools).
+  // Every sub tool remembers its own configuration.
   const sub = findSubTool(state.activeSubToolId);
   if (sub) {
     const subPatch: Partial<BrushSettings> = { ...patch };

@@ -11,7 +11,7 @@ export interface SubTool {
 }
 
 export const SUBTOOLS: SubTool[] = [
-  // Move / Object tool (V / K) - CSP Move layer / Operación
+  // Move / Object tool (V / K)
   {
     id: 'move-layer',
     name: 'Mover capa',
@@ -21,18 +21,16 @@ export const SUBTOOLS: SubTool[] = [
   },
 
   // =========================================================================
-  // Pen / Marker / Ink / Pencil tools (P) — Imitación exacta de Clip Studio Paint
-  // Incluye Plumillas oficiales (G, G real, Maru, Saji, Caligrafía, Texturizada),
-  // Marcadores (Millipen, Rotulador, Punta plana, Punto), Tinta (Punta pincel,
-  // Tinta seca), Lápices (Lápiz, Lápiz real, Portaminas, Carboncillo) y todos
-  // los pinceles/submateriales descargados en CSP (ガサ伽サ線画ペン, 怠けものブラシ,
-  // ◇ラフペン, ◇スケッチ).
+  // Pen / Marker / Ink / Pencil tools (P)
+  // Incluye Plumillas de entintado (G, G orgánica, Maru, Saji, Caligrafía, Texturizada),
+  // Marcadores (Estilógrafo, Rotulador, Punta plana, Punto), Tinta (Punta pincel,
+  // Tinta seca), y Lápices (Lápiz de dibujo, Grafito, Portaminas, Carboncillo).
   // =========================================================================
   {
     id: 'g-pen',
     name: 'Pluma G (G-Pen)',
     tool: 'pen',
-    description: 'Plumilla G oficial de CSP: trazo de entintado nítido y dinámico con fuerte modulación de grosor por presión.',
+    description: 'Plumilla G clásica: trazo de entintado nítido y dinámico con fuerte modulación de grosor por presión.',
     settings: {
       size: 6,
       minSizeRatio: 0.02,
@@ -58,9 +56,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'real-g-pen',
-    name: 'Pluma G real (リアGルペン)',
+    name: 'Pluma G Orgánica',
     tool: 'pen',
-    description: 'Plumilla G real oficial de CSP con el submaterial auténtico リアGルペン: borde orgánico irregular que imita la mordida de una plumilla metálica sobre papel.',
+    description: 'Plumilla G con borde orgánico irregular que simula la mordida de una plumilla metálica sobre papel.',
     settings: {
       size: 6,
       minSizeRatio: 0.04,
@@ -88,9 +86,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'maru-pen',
-    name: 'Pluma Maru (丸ペン)',
+    name: 'Pluma Maru',
     tool: 'pen',
-    description: 'Plumilla redonda fina oficial de CSP para trazar cabello, pestañas, ojos y detalles delicados de manga.',
+    description: 'Plumilla redonda fina para trazar cabello, pestañas, ojos y detalles delicados.',
     settings: {
       size: 3.5,
       minSizeRatio: 0.02,
@@ -116,9 +114,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'turnip-pen',
-    name: 'Pluma Saji / Cuchara (カブラペン)',
+    name: 'Pluma Saji / Cuchara',
     tool: 'pen',
-    description: 'Plumilla Kabura (Saji) oficial de CSP: línea firme y controlada con menor variación de grosor, ideal para fondos y viñetas.',
+    description: 'Plumilla Saji: línea firme y controlada con menor variación de grosor, ideal para fondos y viñetas.',
     settings: {
       size: 5,
       minSizeRatio: 0.15,
@@ -144,9 +142,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'calligraphy-pen',
-    name: 'Caligrafía (カリグラフィ)',
+    name: 'Caligrafía',
     tool: 'pen',
-    description: 'Pluma caligráfica biselada oficial de CSP (achatamiento 18%, ángulo 60°) que varía el grosor según la dirección del trazo.',
+    description: 'Pluma caligráfica biselada (achatamiento 18%, ángulo 60°) que varía el grosor según la dirección del trazo.',
     settings: {
       size: 14,
       minSizeRatio: 0.30,
@@ -172,9 +170,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'textured-pen',
-    name: 'Pluma texturizada (ザラつきペン)',
+    name: 'Pluma Texturizada',
     tool: 'pen',
-    description: 'Plumilla texturizada oficial de CSP (dureza 60%, achatamiento 60%) con aspereza natural en el contorno.',
+    description: 'Plumilla texturizada (dureza 60%, achatamiento 60%) con aspereza natural en el contorno.',
     settings: {
       size: 6,
       minSizeRatio: 0.05,
@@ -202,9 +200,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'gasa-pen',
-    name: 'Pluma Gasa Gasa (ガサ伽サ線画ペン)',
+    name: 'Pluma de Tinta Rasgada',
     tool: 'pen',
-    description: 'Pincel descargado de CSP Assets con su submaterial original (ガサカサ線画用 23×91 + grano Oil paint 90% escala 25% + tamaño aleatorio 55%): entintado manga analógico con textura rasgada auténtica.',
+    description: 'Pluma de entintado analógico con punta fibrosa, grano de papel al 90% y variación aleatoria de diámetro.',
     settings: {
       size: 10,
       minSizeRatio: 0.04,
@@ -242,9 +240,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'lazy-line-pen',
-    name: 'Pluma Perezosa Todo-en-Uno (怠けものブラシ)',
+    name: 'Pluma Biselada Versátil',
     tool: 'pen',
-    description: 'El famoso pincel descargado de CSP (主線も水彩も厚塗りも一本でやる怠けものブラシ) con su submaterial Flat_Square en configuración de línea principal (tamaño 4-5px, ángulo 111.4°).',
+    description: 'Pluma de punta cuadrada con ligera mezcla de color en configuración de línea principal.',
     settings: {
       size: 5,
       minSizeRatio: 0.05,
@@ -274,9 +272,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'rough-pen',
-    name: 'Pluma Rugosa (◇ラフペン - 塗りセット)',
+    name: 'Pluma Rugosa de Boceto',
     tool: 'pen',
-    description: 'Pluma rápida de boceto y entintado expresivo del pack descargado 塗りセット de CSP, con rotación direccional y punta orgánica.',
+    description: 'Pluma rápida de boceto y entintado expresivo con rotación direccional y punta orgánica.',
     settings: {
       size: 7,
       minSizeRatio: 0.06,
@@ -304,9 +302,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'sketch-pencil',
-    name: 'Lápiz de Boceto (◇スケッチ - 塗りセット)',
+    name: 'Lápiz de Boceto',
     tool: 'pen',
-    description: 'Lápiz de dibujo del pack descargado 塗りセット de CSP con grano de papel auténtico y respuesta a la inclinación del lápiz (tilt).',
+    description: 'Lápiz de dibujo con grano de papel poroso y respuesta a la inclinación del lápiz (tilt).',
     settings: {
       size: 7,
       minSizeRatio: 0.45,
@@ -336,9 +334,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'millipen',
-    name: 'Marcador Millipen (ミリペン)',
+    name: 'Estilógrafo Millipen',
     tool: 'pen',
-    description: 'Estilógrafo técnico oficial de CSP (Categoría Marcador): trazo continuo de grosor constante para detalles técnicos y marcos.',
+    description: 'Estilógrafo técnico de trazo continuo y grosor constante para detalles técnicos y marcos.',
     settings: {
       size: 5,
       minSizeRatio: 1.0,
@@ -363,9 +361,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'felt-pen',
-    name: 'Rotulador de fieltro (サインペン)',
+    name: 'Rotulador de Fieltro',
     tool: 'pen',
-    description: 'Rotulador de fieltro oficial de CSP (Categoría Marcador, achatamiento 80%, ángulo 90°) con acumulación progresiva de tinta.',
+    description: 'Rotulador de fieltro (achatamiento 80%, ángulo 90°) con acumulación progresiva de tinta.',
     settings: {
       size: 12,
       minSizeRatio: 0.45,
@@ -391,9 +389,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'flat-marker',
-    name: 'Marcador de punta plana (フラットマーカー)',
+    name: 'Marcador de Punta Plana',
     tool: 'pen',
-    description: 'Marcador biselado estilo Copic de CSP (dureza 70%, achatamiento 30%, mezcla de color) que sigue la dirección del trazo.',
+    description: 'Marcador biselado de alcohol (dureza 70%, achatamiento 30%, mezcla de color) que sigue la dirección del trazo.',
     settings: {
       size: 18,
       minSizeRatio: 0.75,
@@ -422,9 +420,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'dot-pen',
-    name: 'Lápiz de punto (ドットペン 1px)',
+    name: 'Lápiz de Punto (1px)',
     tool: 'pen',
-    description: 'Lápiz binario de 1 píxel sin suavizado (anti-aliasing: none) oficial de CSP para pixel art y retoque de precisión.',
+    description: 'Lápiz binario de 1 píxel sin suavizado (anti-aliasing: none) para pixel art y retoque de precisión.',
     settings: {
       size: 1,
       minSizeRatio: 1.0,
@@ -449,9 +447,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'brush-pen',
-    name: 'Rotulador punta pincel (筆ペン)',
+    name: 'Rotulador Punta Pincel (Fude)',
     tool: 'pen',
-    description: 'Pincel de tinta japonés (Fude Pen) oficial de CSP con las dos puntas originales 筆ペン01 y 筆ペン02 para entintado expresivo.',
+    description: 'Pincel de tinta tradicional con doble punta de cerdas sintéticas para entintado expresivo.',
     settings: {
       size: 12,
       minSizeRatio: 0.03,
@@ -486,9 +484,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'dry-ink',
-    name: 'Tinta seca (かすれ墨)',
+    name: 'Tinta Seca (Sumi)',
     tool: 'pen',
-    description: 'Pincel de tinta sumi seca oficial de CSP con el submaterial original かすれ墨 y textura de papel poroso.',
+    description: 'Pincel de tinta sumi seca con estriado de cerdas y textura de papel poroso.',
     settings: {
       size: 11,
       minSizeRatio: 0.05,
@@ -517,9 +515,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'csp-pencil',
-    name: 'Lápiz de dibujo (デッサン鉛筆)',
+    name: 'Lápiz de Dibujo',
     tool: 'pen',
-    description: 'Lápiz de dibujo oficial de CSP con sus 3 submateriales cíclicos originales (デッサン鉛筆01, 02, 03) y textura de papel granulado.',
+    description: 'Lápiz de dibujo con 3 puntas cíclicas de grafito y textura de papel granulado.',
     settings: {
       size: 8,
       minSizeRatio: 0.42,
@@ -556,9 +554,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'real-pencil',
-    name: 'Lápiz real (リアル鉛筆)',
+    name: 'Lápiz de Grafito',
     tool: 'pen',
-    description: 'Lápiz de grafito clásico de CSP con mina suave, sombreado lateral por inclinación del lápiz (tilt) y grano profundo.',
+    description: 'Lápiz de grafito clásico con mina suave, sombreado lateral por inclinación del lápiz (tilt) y grano profundo.',
     settings: {
       size: 9,
       minSizeRatio: 0.48,
@@ -588,9 +586,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'mechanical-pencil',
-    name: 'Portaminas (シャープペン)',
+    name: 'Portaminas',
     tool: 'pen',
-    description: 'Portaminas fino oficial de CSP (tamaño 4-5px, intervalo denso 0.3, submaterial デッサン鉛筆02 y densidad de papel 45%) para bocetos limpios.',
+    description: 'Portaminas fino (tamaño 4px, densidad de papel 45%) para bocetos limpios y constructivos.',
     settings: {
       size: 4,
       minSizeRatio: 0.35,
@@ -618,9 +616,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'charcoal-pencil',
-    name: 'Carboncillo (木炭)',
+    name: 'Carboncillo',
     tool: 'pen',
-    description: 'Carboncillo seco oficial de CSP con su submaterial original 木炭01 y grano de papel al 95% para trazos expresivos y sombreado.',
+    description: 'Carboncillo seco con grano de papel al 95% para trazos expresivos y sombreado tonal.',
     settings: {
       size: 14,
       minSizeRatio: 0.35,
@@ -658,9 +656,9 @@ export const SUBTOOLS: SubTool[] = [
   // Brush / Painting tools (B)
   {
     id: 'lazy-brush',
-    name: 'Pincel Perezoso Todo-en-Uno (怠けものブラシ)',
+    name: 'Pincel Pictórico Todo-en-Uno',
     tool: 'brush',
-    description: 'Réplica fiel del pincel japonés más aclamado de CSP: con presión suave mezcla colores y difumina como acuarela/óleo; con presión fuerte traza líneas nítidas y opacas.',
+    description: 'Pincel híbrido de pintura: con presión suave mezcla colores y difumina; con presión fuerte traza líneas nítidas y opacas.',
     settings: {
       size: 10,
       minSizeRatio: 0.10,
@@ -689,9 +687,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'blend-brush',
-    name: 'Pincel Fundir y Mezclar (◇重ね/なじませ)',
+    name: 'Pincel Fundir y Mezclar',
     tool: 'brush',
-    description: 'Pincel de mezcla y fusión de capas de CSP. Muestrea y arrastra los tonos existentes en el lienzo logrando transiciones pictóricas y difuminados suaves.',
+    description: 'Pincel de mezcla y fusión tonal. Muestrea y arrastra los tonos existentes en el lienzo logrando transiciones pictóricas y difuminados suaves.',
     settings: {
       size: 16,
       minSizeRatio: 0.25,
@@ -923,12 +921,12 @@ export const SUBTOOLS: SubTool[] = [
     },
   },
 
-  // Effect / Decoration tools (D) (CSP デコレーション / エフェクト)
+  // Effect / Decoration tools (D)
   {
     id: 'effect-sparkle',
-    name: 'Destellos Brillantes (◇エフェクト)',
+    name: 'Destellos Brillantes',
     tool: 'effect',
-    description: 'Pincel de efectos atmosféricos y destellos estelares para magias, brillos y acabados de anime de CSP.',
+    description: 'Pincel de efectos atmosféricos y destellos estelares para luces mágicas y brillos.',
     settings: {
       size: 32,
       minSizeRatio: 0.35,
@@ -1044,9 +1042,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'effect-lightning',
-    name: 'Rayo Realista (realistic lightning brush)',
+    name: 'Rayo Eléctrico',
     tool: 'effect',
-    description: 'Pincel descargado de CSP Assets con sus 4 submateriales originales (LB1, LB2, LB3, LB4) que encadena arcos eléctricos siguiendo la dirección del trazo.',
+    description: 'Pincel de efectos con 4 variaciones procedimentales (LB1–LB4) que encadena arcos eléctricos siguiendo la dirección del trazo.',
     settings: {
       size: 58,
       minSizeRatio: 0.25,
@@ -1076,9 +1074,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'effect-rain-1',
-    name: 'Lluvia Fuerte (rain 1 - 비 브러시)',
+    name: 'Lluvia Fuerte',
     tool: 'effect',
-    description: 'Pincel de lluvia intensa descargado de CSP Assets (비 브러시 1) con su submaterial original 레이어 13 para escenas atmosféricas.',
+    description: 'Pincel de lluvia intensa con trazos diagonales densos para escenas atmosféricas.',
     settings: {
       size: 110,
       minSizeRatio: 0.65,
@@ -1107,9 +1105,9 @@ export const SUBTOOLS: SubTool[] = [
   },
   {
     id: 'effect-rain-2',
-    name: 'Lluvia Fina (rain 2 - 비 브러시)',
+    name: 'Lluvia Fina',
     tool: 'effect',
-    description: 'Pincel de lluvia fina descargado de CSP Assets (비 브러시 2) con su submaterial original 레이어 6 para cortinas de lluvia suaves.',
+    description: 'Pincel de lluvia fina para cortinas de llovizna suaves y ambientes húmedos.',
     settings: {
       size: 110,
       minSizeRatio: 0.65,
@@ -1228,12 +1226,12 @@ export const SUBTOOLS: SubTool[] = [
     settings: { shapeType: 'ellipse', shapeFill: 'stroke', size: 4 },
   },
 
-  // Bucket tools (G) - Las 4 herramientas maestras de relleno de Clip Studio Paint
+  // Bucket tools (G) - Herramientas de relleno inteligente
   {
     id: 'bucket-reference',
     name: 'Referir a Capa de Referencia',
     tool: 'bucket',
-    description: 'Bote inteligente de CSP: toma el lineart de la Capa de Referencia, cerrando fisuras y metiendo el color bajo la línea sin halos blancos.',
+    description: 'Bote inteligente: toma el lineart de la Capa de Referencia, cerrando fisuras y extendiendo el color bajo la línea sin halos blancos.',
     settings: {
       tolerance: 30,
       closeGap: 2,
@@ -1245,7 +1243,7 @@ export const SUBTOOLS: SubTool[] = [
     id: 'bucket-enclose',
     name: 'Cerrar y Rellenar (Lazo)',
     tool: 'bucket',
-    description: 'Cerrar y rellenar de CSP (囲んで塗る): dibuja un lazo libre alrededor de tu personaje para rellenar de una sola vez todas las zonas interiores cerradas.',
+    description: 'Cerrar y rellenar: dibuja un lazo libre alrededor de tu personaje para rellenar de una sola vez todas las zonas interiores cerradas.',
     settings: {
       tolerance: 30,
       closeGap: 3,
@@ -1257,7 +1255,7 @@ export const SUBTOOLS: SubTool[] = [
     id: 'bucket-unfilled',
     name: 'Pintar Área no Rellenada',
     tool: 'bucket',
-    description: 'Pincel inteligente de remates de CSP (塗り残し部分を塗る): pasa el pincel sobre las esquinas vacías para cubrirlas sin salirte del dibujo.',
+    description: 'Pincel inteligente de remates: pasa el pincel sobre las esquinas vacías para cubrirlas sin salirte del dibujo.',
     settings: {
       tolerance: 30,
       closeGap: 1,

@@ -21,8 +21,7 @@ export function closePressureCalibrationModal(): void {
 }
 
 /**
- * Interactive Pen Pressure Calibration Modal (Clip Studio Paint style)
- * 筆圧検知レベルの調節 (Adjust pen pressure detection level)
+ * Interactive Pen Pressure Calibration Modal
  *
  * Allows digital artists to draw naturally on a live test canvas. The system
  * samples the physical hand force, renders the live Bézier/Gamma transfer curve,
@@ -154,7 +153,7 @@ export function openPressureCalibrationModal(): void {
   const presetsWrap = document.createElement('div');
   presetsWrap.className = 'csp-calib-presets-row';
   presetsWrap.innerHTML = `
-    <span class="presets-title">Preajustes CSP:</span>
+    <span class="presets-title">Preajustes:</span>
     <div class="preset-buttons">
       <button class="csp-preset-btn" id="btn-p-soft" title="Curva blanda: líneas gruesas con menos esfuerzo">Suave (0.70)</button>
       <button class="csp-preset-btn" id="btn-p-linear" title="Curva lineal 1:1">Lineal (1.00)</button>

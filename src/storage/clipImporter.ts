@@ -149,7 +149,7 @@ function getSqlJs(): Promise<any> {
 }
 
 /**
- * Checks if a binary buffer is a Clip Studio Paint .clip file.
+ * Checks if a binary buffer is a .clip container file.
  */
 export function isClipBuffer(buffer: Uint8Array): boolean {
   if (!buffer || buffer.length < 16) return false;
@@ -226,7 +226,7 @@ export function decodeCelToCanvas(
   if (desc.offset + desc.length > clipBuffer.length) return false;
 
   const chunkData = clipBuffer.subarray(desc.offset, desc.offset + desc.length);
-  let curr = 130; // Standard CSP tile payload start
+  let curr = 130; // Standard tile payload start
   const cols = Math.ceil(desc.docW / 256);
   const rows = Math.ceil(desc.docH / 256);
   const tileW = 256;
@@ -234,7 +234,7 @@ export function decodeCelToCanvas(
   const originX = desc.originX ?? 0;
   const originY = desc.originY ?? 0;
 
-  // Offscreen canvas at native CSP resolution
+  // Offscreen canvas at native document resolution
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = desc.docW;
   tempCanvas.height = desc.docH;
@@ -266,7 +266,7 @@ export function decodeCelToCanvas(
           const c2 = decomp.subarray(131072, 196608); // Green or White mask
           const c3 = decomp.subarray(196608, 262144); // Blue
 
-          // Clip Studio Paint monochrome lineart uses plane 0 as density and planes 1/2 as ink flags.
+          // Monochrome lineart uses plane 0 as density and planes 1/2 as ink flags.
           // In monochrome (0) or grayscale (1), reading planes 1, 2, 3 directly as RGB causes rainbow chromatic scanline glitches.
           const isMonochrome = desc.colorType === 0 || desc.colorType === 1 || desc.colorType === undefined;
 
@@ -285,7 +285,7 @@ export function decodeCelToCanvas(
 
               const pidx = (rowOffset + px) * 4;
               if (isMonochrome) {
-                // Clean, crisp solid black lineart (#000000) with authentic CSP alpha density.
+                // Clean, crisp solid black lineart (#000000) with alpha density.
                 // Eliminates false white scanline striping caused by screentone dither planes in c2.
                 rgba[pidx] = 0;
                 rgba[pidx + 1] = 0;
@@ -319,14 +319,14 @@ export function decodeCelToCanvas(
 }
 
 /**
- * Ultra-fast extractor of SQLite database from Clip Studio Paint CSFCHUNK container.
+ * Ultra-fast extractor of SQLite database from a .clip CSFCHUNK container.
  */
 export function extractSqliteFromClipBuffer(clipBuffer: Uint8Array): Uint8Array {
   if (!clipBuffer || clipBuffer.length < 64) {
     throw new Error('El archivo es demasiado pequeño para ser un archivo .clip válido.');
   }
 
-  // 1. Direct header lookup (Standard Clip Studio Paint CSFCHUNK)
+  // 1. Direct header lookup (CSFCHUNK)
   try {
     const view = new DataView(clipBuffer.buffer, clipBuffer.byteOffset, clipBuffer.byteLength);
     const sqliOffset = Number(view.getBigUint64(48, false));
@@ -681,16 +681,16 @@ function parseTrackMixerExposures(
 }
 
 /**
- * Imports a Clip Studio Paint .clip file into Oniri's engine and timeline manager.
+ * Imports a .clip container file into Oniri's engine and timeline manager.
  */
 export async function importClipProject(
   clipBuffer: Uint8Array,
   engine: BrushEngine,
   timeline: TimelineManager,
-  title = 'Ilustración Clip Studio Paint'
+  title = 'Ilustración importada'
 ): Promise<ClipImportResult> {
   if (!isClipBuffer(clipBuffer)) {
-    throw new Error('El archivo seleccionado no es un archivo .clip válido de Clip Studio Paint.');
+    throw new Error('El archivo seleccionado no es un archivo .clip válido.');
   }
 
   lastImportedClipBuffer = clipBuffer;
@@ -701,7 +701,7 @@ export async function importClipProject(
   // Resize engine & viewport to imported clip dimensions
   engine.setDocumentSize(meta.width, meta.height);
 
-  // Configure Clip Studio Paint Output Camera Frame & Overscan
+  // Configure Output Camera Frame & Overscan
   if (meta.cropWidth && meta.cropHeight && (meta.cropWidth < meta.width || meta.cropHeight < meta.height)) {
     cameraFrameManager.configure({
       enabled: true,
@@ -776,7 +776,7 @@ export async function importClipProject(
         layers.push({
           id: `layer-clip-composite-ref`,
           type: 'raster',
-          name: '[Referencia Compuesta CSP]',
+          name: '[Referencia Compuesta]',
           canvas: artCanvas,
           context: artCtx,
           visible: false, // Inactive so real animation cels show
@@ -795,7 +795,7 @@ export async function importClipProject(
     }
   }
 
-  // 3. Reconstruct Layer Hierarchy from Clip Studio Paint
+  // 3. Reconstruct Layer Hierarchy
   const animFolders: { node: LayerNode; info: ClipLayerInfo; trackId: string }[] = [];
 
   function buildSubtree(startId: number, parentId: string | null) {
@@ -1020,7 +1020,7 @@ function startProgressiveCelDecoder(
 }
 
 /**
- * Packs a SQLite database buffer into a standard Clip Studio Paint CSFCHUNK container.
+ * Packs a SQLite database buffer into a CSFCHUNK container.
  */
 export function createClipContainer(sqliteBytes: Uint8Array): Uint8Array {
   const headerSize = 24;
@@ -1058,7 +1058,7 @@ export function createClipContainer(sqliteBytes: Uint8Array): Uint8Array {
 }
 
 /**
- * Exports the active project as a Clip Studio Paint .clip file.
+ * Exports the active project as a .clip container file.
  */
 export async function exportClipPackage(
   engine: BrushEngine,

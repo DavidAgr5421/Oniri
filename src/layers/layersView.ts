@@ -242,7 +242,7 @@ export function mountLayersView(
   boneRow.append(boneSelect, meshSkinBtn);
   panel.appendChild(boneRow);
 
-  // --- 4. Palette Actions Toolbar (Clip Studio Paint Authentic) ---
+  // --- 4. Palette Actions Toolbar ---
   const actionsBar = document.createElement('div');
   actionsBar.className = 'layers-actions-bar';
 
@@ -264,7 +264,7 @@ export function mountLayersView(
   // 1b. Layer Color (Color de capa - Azul de boceto / Sketch Cyan)
   const layerColorBtn = document.createElement('button');
   layerColorBtn.className = 'layer-action-btn layer-color-btn';
-  layerColorBtn.title = 'Color de capa (Azul de boceto CSP: colorea temporalmente el dibujo para entintar encima. Clic derecho para cambiar color)';
+  layerColorBtn.title = 'Color de capa (Azul de boceto: colorea temporalmente el dibujo para entintar encima. Clic derecho para cambiar color)';
   layerColorBtn.innerHTML = `
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
       <rect x="3" y="3" width="18" height="18" rx="3"/>
@@ -327,7 +327,7 @@ export function mountLayersView(
     layerManager.toggleLayerLock(layerManager.activeLayerId);
   });
 
-  // 3b. Reference Layer (Faro - Capa de Referencia CSP para Bote Inteligente)
+  // 3b. Reference Layer (Faro - Capa de Referencia para Bote Inteligente)
   const refLayerBtn = document.createElement('button');
   refLayerBtn.className = 'layer-action-btn ref-layer-btn';
   refLayerBtn.title = 'Establecer como capa de referencia (Faro: guía para el Bote de pintura inteligente)';
@@ -370,7 +370,7 @@ export function mountLayersView(
   `;
   addFolderBtn.addEventListener('click', () => layerManager.createFolder());
 
-  // 6. New Animation Folder (🎞️ Track CSP)
+  // 6. New Animation Folder (🎞️ Track)
   const addAnimFolderBtn = document.createElement('button');
   addAnimFolderBtn.className = 'layer-action-btn';
   addAnimFolderBtn.title = 'Nueva carpeta de animación (Track de animación)';
@@ -620,7 +620,7 @@ export function mountLayersView(
       });
       item.appendChild(eyeBtn);
 
-      // 3. Clipping Mask Indicator (Clip Studio Paint Pink/Red Bar)
+      // 3. Clipping Mask Indicator (Pink/Red Bar)
       if (node.clipped) {
         const clipIndicator = document.createElement('div');
         clipIndicator.className = 'layer-clip-indicator';
@@ -708,7 +708,7 @@ export function mountLayersView(
       });
       item.appendChild(nameText);
 
-      // 5b. Reference Layer Badge (Faro CSP)
+      // 5b. Reference Layer Badge (Faro)
       if (node.isReference) {
         const refBadge = document.createElement('span');
         refBadge.className = 'layer-badge';
@@ -724,7 +724,7 @@ export function mountLayersView(
         item.appendChild(refBadge);
       }
 
-      // 5b2. Layer Color Badge (CSP sketch cyan indicator)
+      // 5b2. Layer Color Badge (sketch cyan indicator)
       if (node.useLayerColor) {
         const colorBadge = document.createElement('span');
         colorBadge.className = 'layer-badge layer-color-badge';
@@ -738,7 +738,7 @@ export function mountLayersView(
         item.appendChild(colorBadge);
       }
 
-      // 5c. Alpha Lock Badge (CSP checkerboard lock)
+      // 5c. Alpha Lock Badge (checkerboard lock)
       if (node.lockAlpha) {
         const alphaBadge = document.createElement('span');
         alphaBadge.className = 'layer-badge alpha-lock-badge';

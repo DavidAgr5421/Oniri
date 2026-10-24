@@ -235,7 +235,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       row2.append(eye2, main2);
       contentCol.appendChild(row2);
 
-      // 3. Velocity Dynamics Box (CSP 速度によるサイズ影響)
+      // 3. Velocity Dynamics Box
       const row3 = document.createElement('div');
       row3.className = 'csp-detail-prop-row';
       const eye3 = makeEyeButton('velocitySize');
@@ -281,7 +281,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       row3.append(eye3, main3);
       contentCol.appendChild(row3);
 
-      // 4. Random Size Dynamics (CSP ランダムによるサイズ影響)
+      // 4. Random Size Dynamics
       const row4 = document.createElement('div');
       row4.className = 'csp-detail-prop-row';
       const eye4 = makeEyeButton('size');
@@ -529,7 +529,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       }
       mainMat.appendChild(matGroup);
 
-      // Visual CSP Material Picker Trigger Button
+      // Visual Material Picker Trigger Button
       const curTipItem = TIP_MATERIAL_CATALOG.find((c) => c.id === (b.tipTexture || 'default'));
       const pickTipBtn = document.createElement('button');
       pickTipBtn.className = 'csp-seg-btn';
@@ -649,7 +649,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
       const eye1 = makeEyeButton('paperTexture');
       const main1 = document.createElement('div');
       main1.className = 'csp-detail-prop-main';
-      main1.innerHTML = `<span class="prop-label">Textura (Material de papel CSP)</span>`;
+      main1.innerHTML = `<span class="prop-label">Textura (Material de papel)</span>`;
 
       const curPaperItem = PAPER_MATERIAL_CATALOG.find((c) => c.id === (b.paperTexture ?? 'none'));
       const pickPaperCard = document.createElement('div');
@@ -672,7 +672,7 @@ export function openSubToolDetailModal(subTool: SubTool): void {
           </div>
           <div>
             <div style="font-weight:600;color:#f3f4f6;font-size:12px;">${curPaperItem?.name ?? 'Ninguna'}</div>
-            <div style="font-size:10.5px;color:#9ca3af;">Haz clic para abrir el catálogo de materiales de CSP</div>
+            <div style="font-size:10.5px;color:#9ca3af;">Haz clic para abrir el catálogo de materiales</div>
           </div>
         </div>
         <button class="csp-seg-btn" style="padding:4px 8px;">Cambiar...</button>

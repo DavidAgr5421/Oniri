@@ -14,10 +14,10 @@ export interface LayerNode {
   parentId: string | null;
   collapsed: boolean;
   clipped: boolean; // Clip at layer below
-  locked?: boolean; // CSP Lock layer (padlock)
-  lockAlpha?: boolean; // CSP Lock transparent pixels (checkerboard lock)
-  isReference?: boolean; // CSP Reference layer (lighthouse beacon for smart fill)
-  useLayerColor?: boolean; // CSP Layer Color effect (sketch blue/cyan)
+  locked?: boolean; // Lock layer (padlock)
+  lockAlpha?: boolean; // Lock transparent pixels (checkerboard lock)
+  isReference?: boolean; // Reference layer (lighthouse beacon for smart fill)
+  useLayerColor?: boolean; // Layer Color effect (sketch blue/cyan)
   layerColor?: string; // Hex color (default '#00a0e9')
   boundBoneId?: string | null; // Rigid cutout binding to a Bone2D
   meshSkinningEnabled?: boolean; // Automatic multi-bone LBS mesh deformation
@@ -366,7 +366,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       if (color) {
         target.layerColor = color;
       } else if (!target.layerColor) {
-        target.layerColor = '#00a0e9'; // CSP standard sketch cyan
+        target.layerColor = '#00a0e9'; // Standard sketch cyan
       }
       notify();
     },

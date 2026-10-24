@@ -22,7 +22,7 @@ export const DEFAULT_HISTORY = [
 export const DEFAULT_COLOR_SETS: ColorSet[] = [
   {
     id: 'csp-standard',
-    name: 'Conjunto Estándar CSP',
+    name: 'Conjunto Estándar',
     colors: [
       '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
       '#e53935', '#fb8c00', '#fdd835', '#43a047', '#00acc1', '#1e88e5',

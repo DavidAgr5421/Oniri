@@ -1,10 +1,7 @@
 /**
- * REA study: docs/csp_tablet_and_mouse_recognition_system.md
- *
- * Device-level input response (what CSP configures under
- * File > Preferences > Tablet). Everything here is pure math over the W3C
- * PointerEvent fields, so it can be reused by the engine, the input layer and
- * tests without touching the DOM state.
+ * Device-level tablet and stylus response curves.
+ * Everything here is pure math over the W3C PointerEvent fields, so it can be
+ * reused by the engine, the input layer and tests without touching DOM state.
  */
 
 export type PressureCurveMode = 'linear' | 'soft' | 'hard' | 'custom';
@@ -14,7 +11,7 @@ export interface PressureCurveSettings {
   gamma: number;
 }
 
-/** Preset exponents from the study: soft 0.85-0.90, hard 1.3-1.5. */
+/** Standard preset gamma exponents: soft 0.88, hard 1.35. */
 const PRESET_GAMMA: Record<PressureCurveMode, number> = {
   linear: 1,
   soft: 0.88,
@@ -40,7 +37,7 @@ export function gammaForMode(mode: PressureCurveMode, currentGamma: number): num
 }
 
 /**
- * Transfer function applied to the raw tablet pressure (REA study 5.3).
+ * Transfer function applied to the raw tablet pressure.
  * 0 = fully open hand, 1 = pressed to the stop.
  */
 export function evaluatePressure(rawPressure: number, settings: PressureCurveSettings): number {
@@ -59,7 +56,7 @@ export function evaluatePressure(rawPressure: number, settings: PressureCurveSet
 }
 
 /**
- * Physical eraser tip touching the surface (REA study 5.4).
+ * Physical eraser tip touching the surface.
  * W3C Pointer Events: erase is reported as button 5 / buttons bit 5 (mask 32).
  */
 export function isPhysicalEraser(event: {
@@ -86,7 +83,7 @@ function clamp01(v: number): number {
 }
 
 /**
- * Maps tiltX/tiltY (REA study 5.1) onto the nib footprint: the contact ellipse
+ * Maps tiltX/tiltY onto the nib footprint: the contact ellipse
  * follows the lean direction and elongates as the pen lies flatter against the
  * glass. Returns null when the pen is effectively upright (or reports no tilt),
  * so the regular stroke-direction tip angle stays in charge.

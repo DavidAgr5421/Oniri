@@ -339,7 +339,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   container.innerHTML = '';
   container.className = 'tools-root';
 
-  // --- 1. Column 1: Lateral Tools Strip (CSP Style) ---
+  // --- 1. Column 1: Lateral Tools Strip ---
   const lateralBar = document.createElement('aside');
   lateralBar.className = 'lateral-toolbar';
 
@@ -419,7 +419,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   spacer.style.flex = '1';
   lateralBar.appendChild(spacer);
 
-  // CSP Color Widget at Bottom of Column 1
+  // Color Widget at Bottom of Column 1
   const colorWidget = document.createElement('div');
   colorWidget.className = 'csp-color-widget';
   colorWidget.title = 'Colores (X: Alternar principal/secundario, C: Color transparente)';
@@ -496,7 +496,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
 
   container.appendChild(lateralBar);
 
-  // --- 2. Column 2: Docked Palettes Panel (CSP Style) ---
+  // --- 2. Column 2: Docked Palettes Panel ---
   const dock = document.createElement('div');
   dock.className = 'csp-sidebar-dock';
 
@@ -762,7 +762,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   subtoolActions.append(layoutModeBtn, moveCatBtn, createBtn, resetBtn, deleteBtn);
   subtoolHeader.appendChild(subtoolActions);
 
-  // Subtool Group Tabs (CSP Style e.g. [Plumilla] [Marcador] [Lápiz])
+  // Subtool Group Tabs (e.g. [Plumilla] [Marcador] [Lápiz])
   const subtoolTabs = document.createElement('div');
   subtoolTabs.className = 'csp-subtool-tabs';
 
@@ -1201,7 +1201,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(psizeBox);
   inkPropertyBoxes.set('pressureSize', psizeBox);
 
-  // 6b. Velocity Size Box (CSP 速度によるサイズ影響)
+  // 6b. Velocity Size Box
   const vsizeBox = document.createElement('div');
   vsizeBox.className = 'prop-row-box';
   const vsizeHeader = makePropHeader('Afinado por velocidad', '35%');
@@ -1235,7 +1235,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(taperBox);
   inkPropertyBoxes.set('taper', taperBox);
 
-  // 8. Tip Shape & Material Box (CSP ブラシ先端形状: 円形 / 素材 + 向き)
+  // 8. Tip Shape & Material Box
   const tipBox = document.createElement('div');
   tipBox.className = 'prop-row-box';
   const tipLabel = document.createElement('span');
@@ -1246,7 +1246,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   const tipMatLabel = document.createElement('span');
   tipMatLabel.className = 'prop-label';
   tipMatLabel.style.marginTop = '4px';
-  tipMatLabel.textContent = 'Material de punta (CSP)';
+  tipMatLabel.textContent = 'Material de punta';
 
   const tipMatPreviewCard = document.createElement('div');
   Object.assign(tipMatPreviewCard.style, {
@@ -1261,7 +1261,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     cursor: 'pointer',
     marginBottom: '4px',
   });
-  tipMatPreviewCard.title = 'Haz clic para ver la imagen del material y elegir entre todos los submateriales de punta de CSP';
+  tipMatPreviewCard.title = 'Haz clic para ver la imagen del material y elegir entre las puntas disponibles';
   tipMatPreviewCard.addEventListener('click', () => {
     openMaterialPickerModal({
       category: 'tip',
@@ -1407,12 +1407,12 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(colorMixBox);
   inkPropertyBoxes.set('colorMix', colorMixBox);
 
-  // 12. Paper Texture Box (CSP テクスチャ: 減算 / 乗算 / 高さ / 輪郭 + 反転 + 描画ごと)
+  // 12. Paper Texture Box
   const paperBox = document.createElement('div');
   paperBox.className = 'prop-row-box';
   const paperLabel = document.createElement('span');
   paperLabel.className = 'prop-label';
-  paperLabel.textContent = 'Textura de papel (Grano CSP)';
+  paperLabel.textContent = 'Textura de papel (Grano)';
 
   const paperPreviewCard = document.createElement('div');
   Object.assign(paperPreviewCard.style, {
@@ -1427,7 +1427,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
     cursor: 'pointer',
     marginBottom: '4px',
   });
-  paperPreviewCard.title = 'Haz clic para ver la imagen de la textura y abrir el selector de materiales de papel de CSP';
+  paperPreviewCard.title = 'Haz clic para ver la imagen de la textura y abrir el selector de materiales de papel';
   paperPreviewCard.addEventListener('click', () => {
     openMaterialPickerModal({
       category: 'paper',
@@ -1507,7 +1507,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(densityBox);
   inkPropertyBoxes.set('textureDensity', densityBox);
 
-  // 13a. Dual Brush Box (CSP 2-Shape / デュアルブラシ)
+  // 13a. Dual Brush Box (2-Shape / Dual Brush)
   const dualBrushBox = document.createElement('div');
   dualBrushBox.className = 'prop-row-box';
   const dualEnableChk = makeCheckbox('dual-enable-check', 'Doble Pincel (2-Shape / Dual Brush)');
@@ -1563,7 +1563,7 @@ export function mountToolsView(container: HTMLElement, options?: ToolsViewOption
   propBody.appendChild(dualBrushBox);
   inkPropertyBoxes.set('dualBrush', dualBrushBox);
 
-  // 13b. Tablet device settings (REA study 5.1/5.3): the pressure response and
+  // 13b. Tablet device settings: the pressure response and
   // the nib tilt belong to the tablet, not to a sub tool, so this box is always
   // visible for ink tools instead of being pinned like the brush properties.
   const tabletBox = document.createElement('div');

@@ -1,4 +1,5 @@
 import type { InterpolationType } from './timelineModel';
+import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 
 export type BoneInteractionMode = 'rig' | 'pose_fk' | 'pose_ik' | 'mesh_weights';
 
@@ -75,6 +76,10 @@ export interface LayerMeshSkin {
   }[];
   // Triangle index triplets into vertices[]
   indices: [number, number, number][];
+  // Optional packed typed arrays for zero-copy Rust/WASM Linear Blend Skinning
+  packedVertices?: Float32Array;
+  packedIndices?: Uint32Array;
+  boneOrderIds?: string[];
 }
 
 // --- 2D Affine Matrix Math ([a, b, c, d, tx, ty] matching Canvas2D transform(a,b,c,d,e,f)) ---
@@ -348,79 +353,125 @@ export function buildLayerMeshSkin(
   const img = ctx.getImageData(0, 0, w, h).data;
 
   // Compute non-transparent pixel bounding box (with margin)
-  let minX = w;
-  let minY = h;
-  let maxX = 0;
-  let maxY = 0;
-  let foundPixels = false;
+  let minX = 0;
+  let minY = 0;
+  let bw = w;
+  let bh = h;
 
-  const step = 4; // Fast scan stride
-  for (let y = 0; y < h; y += step) {
-    for (let x = 0; x < w; x += step) {
-      const alpha = img[(y * w + x) * 4 + 3];
-      if (alpha > 8) {
-        foundPixels = true;
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
+  const rustBounds = rustStrokeEngine.scanLayerBounds(img, w, h, 4, 24);
+  if (rustBounds) {
+    [minX, minY, bw, bh] = rustBounds;
+  } else {
+    minX = w;
+    minY = h;
+    let maxX = 0;
+    let maxY = 0;
+    let foundPixels = false;
+
+    const step = 4; // Fast scan stride
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        const alpha = img[(y * w + x) * 4 + 3];
+        if (alpha > 8) {
+          foundPixels = true;
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (!foundPixels) {
+      minX = 0;
+      minY = 0;
+      maxX = w;
+      maxY = h;
+    } else {
+      const pad = 24;
+      minX = Math.max(0, minX - pad);
+      minY = Math.max(0, minY - pad);
+      maxX = Math.min(w, maxX + pad);
+      maxY = Math.min(h, maxY + pad);
+    }
+
+    bw = Math.max(32, maxX - minX);
+    bh = Math.max(32, maxY - minY);
+  }
+
+  // Evaluate bind pose of all bones
+  const bindEval = Array.from(evaluateArmatureWorld(bones).values());
+  const boneOrderIds = bindEval.map((b) => b.id);
+  const boneSegments = new Float32Array(bindEval.length * 4);
+  for (let i = 0; i < bindEval.length; i++) {
+    const b = bindEval[i];
+    boneSegments[i * 4] = b.bindHeadX;
+    boneSegments[i * 4 + 1] = b.bindHeadY;
+    boneSegments[i * 4 + 2] = b.bindTailX;
+    boneSegments[i * 4 + 3] = b.bindTailY;
+  }
+
+  const packedVertices =
+    rustStrokeEngine.buildMeshVertices(minX, minY, bw, bh, cols, rows, boneSegments) ?? undefined;
+
+  const vertices: LayerMeshSkin['vertices'] = [];
+  if (packedVertices) {
+    const totalVerts = packedVertices.length / 10;
+    for (let i = 0; i < totalVerts; i++) {
+      const base = i * 10;
+      const weights: { boneId: string; weight: number }[] = [];
+      for (let k = 0; k < 3; k++) {
+        const bIdx = Math.round(packedVertices[base + 4 + k * 2]);
+        const wVal = packedVertices[base + 5 + k * 2];
+        if (bIdx >= 0 && bIdx < boneOrderIds.length && wVal > 0) {
+          weights.push({ boneId: boneOrderIds[bIdx], weight: wVal });
+        }
+      }
+      vertices.push({
+        x: packedVertices[base],
+        y: packedVertices[base + 1],
+        u: packedVertices[base + 2],
+        v: packedVertices[base + 3],
+        weights,
+      });
+    }
+  } else {
+    for (let r = 0; r <= rows; r++) {
+      const v = r / rows;
+      const vy = minY + v * bh;
+      for (let c = 0; c <= cols; c++) {
+        const u = c / cols;
+        const vx = minX + u * bw;
+
+        // Compute inverse-distance squared weights to each bone in bind pose (top 3 influences)
+        const rawWeights = bindEval.map((b) => {
+          const d = distanceToSegment(vx, vy, b.bindHeadX, b.bindHeadY, b.bindTailX, b.bindTailY);
+          const wVal = 1 / Math.pow(Math.max(6, d), 2.2);
+          return { boneId: b.id, weight: wVal };
+        });
+
+        rawWeights.sort((a, b) => b.weight - a.weight);
+        const top = rawWeights.slice(0, Math.min(3, rawWeights.length));
+        const sum = top.reduce((acc, item) => acc + item.weight, 0) || 1;
+        const normalized = top.map((item) => ({
+          boneId: item.boneId,
+          weight: item.weight / sum,
+        }));
+
+        vertices.push({
+          x: vx,
+          y: vy,
+          u,
+          v,
+          weights: normalized,
+        });
       }
     }
   }
 
-  if (!foundPixels) {
-    minX = 0;
-    minY = 0;
-    maxX = w;
-    maxY = h;
-  } else {
-    const pad = 24;
-    minX = Math.max(0, minX - pad);
-    minY = Math.max(0, minY - pad);
-    maxX = Math.min(w, maxX + pad);
-    maxY = Math.min(h, maxY + pad);
-  }
-
-  const bw = Math.max(32, maxX - minX);
-  const bh = Math.max(32, maxY - minY);
-
-  // Evaluate bind pose of all bones
-  const bindEval = Array.from(evaluateArmatureWorld(bones).values());
-
-  const vertices: LayerMeshSkin['vertices'] = [];
-  for (let r = 0; r <= rows; r++) {
-    const v = r / rows;
-    const vy = minY + v * bh;
-    for (let c = 0; c <= cols; c++) {
-      const u = c / cols;
-      const vx = minX + u * bw;
-
-      // Compute inverse-distance squared weights to each bone in bind pose (top 3 influences)
-      const rawWeights = bindEval.map((b) => {
-        const d = distanceToSegment(vx, vy, b.bindHeadX, b.bindHeadY, b.bindTailX, b.bindTailY);
-        const wVal = 1 / Math.pow(Math.max(6, d), 2.2);
-        return { boneId: b.id, weight: wVal };
-      });
-
-      rawWeights.sort((a, b) => b.weight - a.weight);
-      const top = rawWeights.slice(0, Math.min(3, rawWeights.length));
-      const sum = top.reduce((acc, item) => acc + item.weight, 0) || 1;
-      const normalized = top.map((item) => ({
-        boneId: item.boneId,
-        weight: item.weight / sum,
-      }));
-
-      vertices.push({
-        x: vx,
-        y: vy,
-        u,
-        v,
-        weights: normalized,
-      });
-    }
-  }
-
   const indices: [number, number, number][] = [];
+  const packedIndices = new Uint32Array(rows * cols * 6);
+  let pIdx = 0;
   const stride = cols + 1;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -430,6 +481,12 @@ export function buildLayerMeshSkin(
       const i3 = i2 + 1;
       indices.push([i0, i1, i2]);
       indices.push([i1, i3, i2]);
+      packedIndices[pIdx++] = i0;
+      packedIndices[pIdx++] = i1;
+      packedIndices[pIdx++] = i2;
+      packedIndices[pIdx++] = i1;
+      packedIndices[pIdx++] = i3;
+      packedIndices[pIdx++] = i2;
     }
   }
 
@@ -440,6 +497,9 @@ export function buildLayerMeshSkin(
     bounds: { x: minX, y: minY, w: bw, h: bh },
     vertices,
     indices,
+    packedVertices,
+    packedIndices,
+    boneOrderIds,
   };
 }
 
@@ -451,7 +511,70 @@ export function renderSkinnedLayerMesh(
   mesh: LayerMeshSkin,
   evaluatedBones: Map<string, EvaluatedBoneWorld>
 ): void {
-  // Compute deformed vertex positions via Linear Blend Skinning (LBS)
+  const { x: bx, y: by, w: bw, h: bh } = mesh.bounds;
+
+  if (
+    rustStrokeEngine.available &&
+    mesh.packedVertices &&
+    mesh.packedIndices &&
+    mesh.boneOrderIds &&
+    mesh.boneOrderIds.length > 0
+  ) {
+    const boneCount = mesh.boneOrderIds.length;
+    const skinMatrices = new Float32Array(boneCount * 6);
+    for (let i = 0; i < boneCount; i++) {
+      const bEval = evaluatedBones.get(mesh.boneOrderIds[i]);
+      const base = i * 6;
+      if (bEval) {
+        const m = bEval.skinMatrix;
+        skinMatrices[base] = m[0];
+        skinMatrices[base + 1] = m[1];
+        skinMatrices[base + 2] = m[2];
+        skinMatrices[base + 3] = m[3];
+        skinMatrices[base + 4] = m[4];
+        skinMatrices[base + 5] = m[5];
+      } else {
+        skinMatrices[base] = 1;
+        skinMatrices[base + 3] = 1;
+      }
+    }
+
+    const batch = rustStrokeEngine.computeSkinnedTriangles(
+      mesh.packedVertices,
+      mesh.packedIndices,
+      skinMatrices,
+      bx,
+      by,
+      bw,
+      bh,
+    );
+    if (batch && batch.count > 0) {
+      const tris = batch.triangles;
+      for (let t = 0; t < batch.count; t++) {
+        const base = t * 12;
+        targetCtx.save();
+        targetCtx.beginPath();
+        targetCtx.moveTo(tris[base], tris[base + 1]);
+        targetCtx.lineTo(tris[base + 2], tris[base + 3]);
+        targetCtx.lineTo(tris[base + 4], tris[base + 5]);
+        targetCtx.closePath();
+        targetCtx.clip();
+        targetCtx.transform(
+          tris[base + 6],
+          tris[base + 7],
+          tris[base + 8],
+          tris[base + 9],
+          tris[base + 10],
+          tris[base + 11],
+        );
+        targetCtx.drawImage(sourceCanvas, 0, 0);
+        targetCtx.restore();
+      }
+      return;
+    }
+  }
+
+  // JS Fallback: Compute deformed vertex positions via Linear Blend Skinning (LBS)
   const deformed: { x: number; y: number }[] = new Array(mesh.vertices.length);
   for (let i = 0; i < mesh.vertices.length; i++) {
     const vtx = mesh.vertices[i];
@@ -474,8 +597,6 @@ export function renderSkinnedLayerMesh(
       deformed[i] = { x: vtx.x, y: vtx.y };
     }
   }
-
-  const { x: bx, y: by, w: bw, h: bh } = mesh.bounds;
 
   // Draw textured triangles using affine UV-to-XY triangle mapping
   for (const [i0, i1, i2] of mesh.indices) {

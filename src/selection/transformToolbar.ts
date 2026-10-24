@@ -81,7 +81,7 @@ export function mountTransformToolbar(options: TransformToolbarOptions): () => v
 
     bar.style.display = 'flex';
 
-    // CSP placement: bottom-center of the gizmo bounds at Y_max, flipping
+    // Placement: bottom-center of the gizmo bounds at Y_max, flipping
     // above the gizmo when the bar would leave the viewport.
     placeLauncherNearBounds(bar, camera, canvas, transformManager.getGizmoBoundsDoc());
   }

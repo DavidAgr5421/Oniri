@@ -326,7 +326,7 @@ export class NavigatorPalette {
       }
       ctx.closePath();
 
-      // Semi-transparent red fill & crisp red outline (CSP hallmark)
+      // Semi-transparent red fill & crisp red outline
       ctx.fillStyle = 'rgba(235, 60, 60, 0.12)';
       ctx.fill();
 

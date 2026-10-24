@@ -76,7 +76,7 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
   });
   commandDispatcher.register({
     id: 'file.saveClip',
-    label: 'Guardar .clip (Clip Studio Paint)',
+    label: 'Guardar formato compatible (.clip)',
     category: 'file',
     execute: async () => {
       const { saveClipToFile } = await import('../storage/clipImporter');
@@ -624,7 +624,7 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
         { id: 'file.newFromClipboard', label: 'Crear nuevo desde portapapeles' },
         { id: 'file.open', label: 'Abrir...', shortcut: 'Ctrl+O' },
         { id: 'file.save', label: 'Guardar .oniri', shortcut: 'Ctrl+S' },
-        { id: 'file.saveClip', label: 'Guardar .clip (Clip Studio Paint)' },
+        { id: 'file.saveClip', label: 'Guardar formato compatible (.clip)' },
         { divider: true },
         { id: 'file.exportPng', label: 'Exportar imagen (PNG)...' },
         { id: 'file.exportAnimation', label: 'Exportar animación (GIF/Video/PNGs)...' },
@@ -744,7 +744,7 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
       title: 'Ayuda',
       entries: [
         { id: 'help.shortcuts', label: 'Atajos de teclado...' },
-        { id: 'help.formatInfo', label: 'Formatos .oniri y .clip (CSP)...' },
+        { id: 'help.formatInfo', label: 'Formatos .oniri y .clip...' },
         { divider: true },
         { id: 'help.about', label: 'Acerca de Oniri Studio Paint...' },
       ],

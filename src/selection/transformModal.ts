@@ -1,5 +1,5 @@
 /**
- * CSP-style modal transform lock (REA study, section 2).
+ * Modal transform lock.
  *
  * While a Free Transform gizmo is active the application is in an exclusive
  * modal state: drawing tools, layer operations and timeline scrubbing are
@@ -32,8 +32,7 @@ let toastEl: HTMLElement | null = null;
 let toastTimer: number | null = null;
 
 /**
- * Non-blocking feedback used when a refused action is attempted mid-transform
- * (CSP shows a dialog; Oniri flashes a hint so the modal state stays strict).
+ * Non-blocking feedback used when a refused action is attempted mid-transform.
  */
 export function warnTransformModalBlocked(action: string): void {
   if (!toastEl) {

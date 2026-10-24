@@ -1,5 +1,5 @@
 /**
- * Canvas Interactive Overlays for CSP-style Ergonomics:
+ * Canvas Interactive Overlays for Studio Ergonomics:
  * 1. Dynamic Brush Sizing Circle (Ctrl+Alt+Drag)
  * 2. Eyedropper Loupe Color Picker Ring (Hold Alt)
  */

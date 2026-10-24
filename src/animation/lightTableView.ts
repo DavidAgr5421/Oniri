@@ -11,7 +11,7 @@ export interface LightTableViewHandle {
 }
 
 /**
- * Mesa de Luz ha sido unificada dentro del sistema de Papel Cebolla (Clip Studio Paint style).
+ * Mesa de Luz ha sido unificada dentro del sistema de Papel Cebolla.
  * Esta función se mantiene por compatibilidad.
  */
 export function createLightTableView(

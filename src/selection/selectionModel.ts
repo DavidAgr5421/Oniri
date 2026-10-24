@@ -20,7 +20,7 @@ export class SelectionModel {
   private _combineMode: SelectionCombineMode = 'replace';
   private listeners: Set<() => void> = new Set();
 
-  // Selection-mask move state (CSP "move the selection tent", REA study 4.1)
+  // Selection-mask move state
   private moveSnapshot: ImageData | null = null;
   private moveBaseBounds: SelectionBounds | null = null;
   private moveOffsetX = 0;
@@ -66,9 +66,9 @@ export class SelectionModel {
   }
 
   /**
-   * Moves only the selection mask ("marching ants" tent) without touching any
+   * Moves only the selection mask ("marching ants") without touching any
    * layer pixels. Used by the selection tool when dragging inside an existing
-   * selection, and by the arrow-key nudge (CSP behavior, REA study 4.1).
+   * selection, and by the arrow-key nudge.
    */
   public isMovingMask(): boolean {
     return this.moveSnapshot !== null;
@@ -236,7 +236,7 @@ export class SelectionModel {
   }
 
   /**
-   * CSP Expand Selection (selectexpand): morphological dilation by radius in pixels.
+   * Expand Selection: morphological dilation by radius in pixels.
    */
   public expandSelection(radiusPx: number): void {
     if (!this._hasSelection || radiusPx <= 0) return;
@@ -263,7 +263,7 @@ export class SelectionModel {
   }
 
   /**
-   * CSP Contract / Reduce Selection (selectreduce): morphological erosion by radius in pixels.
+   * Contract / Reduce Selection: morphological erosion by radius in pixels.
    */
   public contractSelection(radiusPx: number): void {
     if (!this._hasSelection || radiusPx <= 0) return;

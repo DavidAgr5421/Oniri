@@ -1,4 +1,4 @@
-/* Timeline Palette - Clip Studio Paint Style */
+/* Timeline Palette */
 
 .timeline-panel {
   position: absolute;
@@ -316,7 +316,7 @@
   border-left: 1px solid #555555;
 }
 
-/* CSP Frame 0: Distinctive demarcation line and accent */
+/* Frame 0: Distinctive demarcation line and accent */
 .timeline-ruler-cell.frame-zero {
   color: #00e5ff;
   font-weight: 800;
@@ -329,7 +329,7 @@
   height: 10px;
 }
 
-/* CSP Negative Frames (Pre-roll / Anticipation / Audio Lead-in) */
+/* Negative Frames (Pre-roll / Anticipation / Audio Lead-in) */
 .timeline-ruler-cell.negative-frame {
   background: #171620;
   border-right-color: #262335;
@@ -610,7 +610,7 @@
   z-index: 5;
 }
 
-/* Timeline Context Menu (CSP Style) */
+/* Timeline Context Menu */
 .timeline-context-menu {
   position: fixed;
   background: #222222;
@@ -915,7 +915,7 @@
   transform: rotate(0deg) scale(1.25);
 }
 
-/* --- Clip Container & Cel Edge Resize Handles (CSP Style) --- */
+/* --- Clip Container & Cel Edge Resize Handles --- */
 .timeline-clip-container {
   position: absolute;
   top: 1px;
@@ -1086,7 +1086,7 @@
 }
 
 /* ==========================================================================
-   Animation Light Table Palette (Mesa de Luz - Clip Studio Paint Style)
+   Animation Light Table Palette (Mesa de Luz)
    ========================================================================== */
 .csp-light-table-palette {
   width: 320px;

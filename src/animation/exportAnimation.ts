@@ -215,7 +215,7 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 /**
- * Opens the interactive Clip Studio Paint-style Animation Export Modal.
+ * Opens the interactive Animation Export Modal.
  */
 export function openExportAnimationModal(engine: BrushEngine, timeline: TimelineManager): void {
   const existing = document.querySelector('.csp-export-modal');
@@ -236,7 +236,7 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
   modal.innerHTML = `
     <div class="csp-detail-window" style="width: 520px; max-width: 92vw;">
       <div class="csp-detail-header">
-        <span class="detail-title">Exportar Animación (Clip Studio Paint Style)</span>
+        <span class="detail-title">Exportar Animación</span>
         <button class="csp-detail-close-btn" id="export-close-btn">✕</button>
       </div>
 

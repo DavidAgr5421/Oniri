@@ -1,6 +1,7 @@
 import type { AntiAliasingLevel, DualBlendMode, ThicknessDirection, TipShape } from '../tools/toolState';
 import { getBrushTextureAsset, subscribeTextureAssets } from './brushTextureAssets';
 import { brushDiagnostics } from './brushDiagnostics';
+import { rustStrokeEngine } from './rustStrokeEngine';
 
 // Room for the pressure steps and the tilt squash levels of one stroke.
 const CACHE_LIMIT = 512;
@@ -10,7 +11,7 @@ subscribeTextureAssets(() => {
   cache.clear();
 });
 
-// Anti-aliasing transition width in pixels (Clip Studio Paint style levels).
+// Anti-aliasing transition width in pixels.
 const AA_WIDTH: Record<AntiAliasingLevel, number> = {
   none: 0,
   weak: 0.6,
@@ -55,7 +56,7 @@ function parseHexColor(hex: string): [number, number, number] {
 
 /**
  * Builds a stamp by evaluating a signed distance field per pixel, optionally
- * modulated by a CSP brush tip material ('gasagasa', 'brush02', 'flat-square').
+ * modulated by a procedural brush tip material ('gasagasa', 'brush02', 'flat-square').
  * This gives true sub-pixel anti-aliased edges for every tip shape (circle,
  * flat square chisel, or 45° calligraphic ribbon) while preserving organic
  * bristle/rough nib textures across any tip geometry.
@@ -117,6 +118,42 @@ function buildStamp(
   const matW = hasMat ? asset!.width : 1;
   const matH = hasMat ? asset!.height : 1;
 
+  if (rustStrokeEngine.available) {
+    const shapeCode = isBox ? 1 : isCalligraphic ? 2 : 0;
+    const matMode = !hasMat
+      ? 0
+      : isGasa
+        ? 1
+        : isRealG
+          ? 2
+          : isPencilTip || isInkOrCharcoal || isBristle
+            ? 3
+            : 4;
+    const wasmBytes = rustStrokeEngine.buildSdfStamp({
+      size,
+      diameter,
+      hardness,
+      cr,
+      cg,
+      cb,
+      aaWidth,
+      threshold,
+      shapeCode,
+      scaleY,
+      matMode,
+      matW: hasMat ? matW : 0,
+      matH: hasMat ? matH : 0,
+      matRgba: matData
+        ? new Uint8Array(matData.buffer, matData.byteOffset, matData.byteLength)
+        : new Uint8Array(0),
+    });
+    if (wasmBytes && wasmBytes.length === data.length) {
+      data.set(wasmBytes);
+      ctx.putImageData(image, 0, 0);
+      return canvas;
+    }
+  }
+
   let i = 0;
   for (let y = 0; y < size; y++) {
     const rawUy = y + 0.5 - half;
@@ -160,7 +197,7 @@ function buildStamp(
         const ma = matData[mIdx + 3] / 255;
 
         if (isGasa) {
-          // CSP Gasa-Gasa (ガサガサ): organic rough nib edge perturbation + porous core
+          // Rough nib (gasagasa): organic rough nib edge perturbation + porous core
           const angleIdx = Math.floor(((Math.atan2(localY, localX) + Math.PI) / (Math.PI * 2)) * matH) % matH;
           const radIdx = Math.min(matW - 1, Math.floor(Math.min(1, Math.hypot(localX / halfW, localY / halfH)) * matW));
           const polarAlpha = matData[(angleIdx * matW + radIdx) * 4 + 3] / 255;
@@ -168,12 +205,12 @@ function buildStamp(
           sd -= edgeJitter;
           matFactor = 0.72 + 0.28 * ma;
         } else if (isRealG) {
-          // CSP Real G-Pen (リアGルペン): organic jagged nib silhouette + subtle edge bleed
+          // Organic G-Pen (real-g): jagged nib silhouette + subtle edge bleed
           const edgeJitter = (ma - 0.5) * Math.min(2.6, Math.max(0.6, r * 0.28));
           sd -= edgeJitter;
           matFactor = ma;
         } else if (isPencilTip || isInkOrCharcoal || isBristle) {
-          // CSP Dessin Pencil / Brush Pen / Dry Ink / Charcoal / Bristle02:
+          // Pencil / Brush Pen / Dry Ink / Charcoal / Bristle:
           // 2D organic silhouette shaped by the SDF envelope
           const edgeSoft = Math.max(aaWidth, r * 0.16);
           sd += (1 - ma) * edgeSoft * 0.85;
@@ -222,9 +259,8 @@ function buildSpriteStamp(
     return buildStamp(diameter, hardness, color, antiAliasing, tipShape, tipRoundness, tipTextureId);
   }
 
-  // Authentic CSP Material Sprite rendering (`BrushUsePatternImage = 1`):
-  // Preserves the true bitmap aspect ratio (e.g. gasagasa 23x91, real-g 107x133, dry-ink 190x121)
-  // and applies BrushThickness (`tipRoundness`) along horizontal or vertical axis.
+  // Procedural tip sprite rendering:
+  // Preserves the bitmap aspect ratio and applies tipRoundness along horizontal or vertical axis.
   const asset = getBrushTextureAsset(tipTextureId);
   if (asset && asset.loaded && asset.image && asset.width > 0 && asset.height > 0) {
     const thickness = Math.max(0.08, Math.min(1.0, tipRoundness));

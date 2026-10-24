@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Clip Studio Paint Docked Layers Panel
+   Docked Layers Panel
    ========================================================================== */
 #layers-container {
   position: absolute !important;
@@ -298,7 +298,7 @@
   color: #ffffff;
 }
 
-/* CSP Style Pink Clipping Indicator Bar */
+/* Pink Clipping Indicator Bar */
 .layer-clip-indicator {
   width: 4px;
   height: 22px;

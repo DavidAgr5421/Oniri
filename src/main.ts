@@ -100,7 +100,7 @@ const canvasMat = new MeshBasicMaterial({ map: canvasTexture, side: DoubleSide }
 const canvasMesh = new Mesh(canvasGeo, canvasMat);
 scene.add(canvasMesh);
 
-// 2. In-Flight Live Inking Stroke Mesh (CSP-style ultra-fast GPU overlay quad)
+// 2. In-Flight Live Inking Stroke Mesh (ultra-fast GPU overlay quad)
 let liveStrokeTexture = new CanvasTexture(engine.liveStrokeCanvas);
 liveStrokeTexture.minFilter = LinearFilter;
 liveStrokeTexture.magFilter = LinearFilter;
@@ -150,7 +150,7 @@ const selectionMesh = new Mesh(canvasGeo, selectionMat);
 selectionMesh.position.set(0, 0, 0.006);
 scene.add(selectionMesh);
 
-// Camera Frame & Overscan Mask Overlay (Clip Studio Paint style)
+// Camera Frame & Overscan Mask Overlay
 let cameraFrameTexture = new CanvasTexture(cameraFrameOverlay.canvas);
 cameraFrameTexture.minFilter = LinearFilter;
 cameraFrameTexture.magFilter = LinearFilter;
@@ -176,7 +176,7 @@ viewportNav.init({
   },
 });
 
-// Mount CSP Navigator Palette
+// Mount Navigator Palette
 const appEl = document.getElementById('app') ?? document.body;
 const navPalette = mountNavigatorPalette(appEl, {
   engine,
@@ -308,20 +308,20 @@ if (toolsContainer) {
   });
 }
 
-// Mount Layers Panel (CSP Style)
+// Mount Layers Panel
 const layersContainer = document.getElementById('layers-container');
 if (layersContainer) {
   mountLayersView(layersContainer, engine.layerManager, timeline, engine);
 }
 
-// Mount Timeline Palette (CSP Style)
+// Mount Timeline Palette
 const timelineContainer = document.getElementById('timeline-container');
 if (timelineContainer) {
   mountTimelineView(timelineContainer, timeline, engine.layerManager, engine);
   mountTransformToolbar({ camera, canvas });
 }
 
-// Mount CSP-style floating launchers (Selection Launcher + Transform Launcher)
+// Mount floating launchers (Selection Launcher + Transform Launcher)
 mountSelectionLauncher({ camera, canvas, engine });
 
 let renderNeeded = true;
@@ -367,7 +367,7 @@ function syncLiveStrokeSubImage(
   );
 }
 
-// Render Loop (CSP-style Render-on-Demand + 2-Plane Inking Overlay)
+// Render Loop (Render-on-Demand + 2-Plane Inking Overlay)
 function animate(): void {
   requestAnimationFrame(animate);
 

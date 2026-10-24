@@ -33,7 +33,7 @@ export function setActiveProjectName(name: string): void {
 }
 
 /**
- * Creates and mounts the CSP-style 2-tier Top Command Bar & Menu System.
+ * Creates and mounts the 2-tier Top Command Bar & Menu System.
  */
 export function mountFileMenu(container: HTMLElement, options: FileMenuOptions): void {
   const { engine, timeline, onToggleNavigator, isNavigatorVisible } = options;
@@ -96,7 +96,7 @@ export function mountFileMenu(container: HTMLElement, options: FileMenuOptions):
   container.appendChild(topMenuRow);
 
   // =========================================================================
-  // LEVEL 2: Canvas Command Bar / Quick Access Strip (CSP workspacetoolbaritem)
+  // LEVEL 2: Canvas Command Bar / Quick Access Strip
   // Docked directly above the canvas, bounded between left and right docks
   // =========================================================================
   const commandBarRow = document.createElement('div');
@@ -118,7 +118,7 @@ export function mountFileMenu(container: HTMLElement, options: FileMenuOptions):
     </svg>
   `, () => commandDispatcher.execute('edit.redo'), false, true);
 
-  // 2. Edit & Selection Operations (CSP workspacetoolbaritem items 10-13)
+  // 2. Edit & Selection Operations
   const clearBtn = createCmdBtn('clear', 'Borrar contenido (Delete)', `
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <polyline points="3 6 5 6 21 6"/>
@@ -154,7 +154,7 @@ export function mountFileMenu(container: HTMLElement, options: FileMenuOptions):
     </svg>
   `, () => commandDispatcher.execute('edit.transform'), false, true);
 
-  // 3. Selection Group (CSP workspacetoolbaritem items 14-16)
+  // 3. Selection Group
   const deselectBtn = createCmdBtn('deselect', 'Deseleccionar (Ctrl+D)', `
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 2"/>
@@ -293,7 +293,7 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
       const res = await importClipProject(buffer, engine, timeline, file.name);
       setActiveProjectName(file.name);
       showNotification(
-        'Archivo .clip de Clip Studio importado',
+        'Archivo .clip importado',
         `Lienzo ${res.width}×${res.height} px, ${res.layersCount} capas, ${res.tracksCount} pistas de animación (${res.totalFrames} frames @ ${res.fps} fps).`
       );
     } else if (
@@ -328,7 +328,7 @@ function setupDragAndDrop(engine: BrushEngine, timeline: TimelineManager): void 
         <line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
       <h3>Soltar archivo en Oniri</h3>
-      <p>Compatible con proyectos nativos <strong>.oniri</strong> y archivos de Clip Studio Paint <strong>.clip</strong></p>
+      <p>Compatible con proyectos nativos <strong>.oniri</strong> y archivos contenedores <strong>.clip</strong></p>
     </div>
   `;
   document.body.appendChild(overlay);
@@ -450,15 +450,15 @@ function showFormatInfoModal(): void {
   modal.innerHTML = `
     <div class="csp-detail-window" style="width: 580px; max-width: 90vw;">
       <div class="csp-detail-header">
-        <span class="detail-title">Formatos Oniri (.oniri) y Clip Studio Paint (.clip)</span>
+        <span class="detail-title">Formatos compatibles (.oniri y .clip)</span>
         <button class="csp-detail-close-btn" id="close-info-btn">✕</button>
       </div>
       <div style="padding: 16px 20px; font-size: 13px; line-height: 1.6; color: #d0d0d0; max-height: 70vh; overflow-y: auto;">
         <h4 style="color: #60a5fa; margin: 0 0 8px;">1. Formato Nativo de Oniri (.oniri)</h4>
         <p>Contenedor de paquete ZIP de alta velocidad con fflate. Almacena capas individuales PNG, cels de animación, armaduras de huesos 2D y metadatos JSON completos.</p>
         
-        <h4 style="color: #4ade80; margin: 16px 0 8px;">2. Compatibilidad Clip Studio Paint (.clip)</h4>
-        <p>Decodificador del formato binario CSFCHUNK de Celsys. Extrae la base de datos relacional SQLite 3 (CHNKSQLi), la miniatura aplanada CanvasPreview y reconstruye la jerarquía de capas de CSP.</p>
+        <h4 style="color: #4ade80; margin: 16px 0 8px;">2. Interoperabilidad con formato .clip</h4>
+        <p>Soporte de lectura y escritura para contenedores .clip (bloques CSFCHUNK y base de datos SQLite 3 interna), permitiendo importar y exportar la jerarquía de capas, miniaturas y líneas de tiempo de animación.</p>
         
         <div style="margin-top: 18px; text-align: right;">
           <button class="csp-calib-preset-btn active" id="modal-ok-btn" style="padding: 6px 18px;">Entendido</button>
@@ -485,7 +485,7 @@ function showShortcutsModal(): void {
   modal.innerHTML = `
     <div class="csp-detail-window" style="width: 540px; max-width: 90vw;">
       <div class="csp-detail-header">
-        <span class="detail-title">Atajos de Teclado (Estándar Clip Studio Paint)</span>
+        <span class="detail-title">Atajos de Teclado de Oniri Studio</span>
         <button class="csp-detail-close-btn" id="close-sc-btn">✕</button>
       </div>
       <div style="padding: 16px 20px; font-size: 12px; line-height: 1.7; color: #d0d0d0; max-height: 70vh; overflow-y: auto;">
@@ -537,7 +537,7 @@ function showAboutModal(): void {
       <div style="padding: 24px 20px; font-size: 13px; line-height: 1.6; color: #d0d0d0;">
         <h2 style="margin: 0 0 4px 0; background: linear-gradient(135deg, #38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 26px;">ONIRI STUDIO PAINT</h2>
         <div style="color: #94a3b8; font-size: 12px; margin-bottom: 16px;">Versión 0.2.0 Beta · Open Source 2D Animation & Illustration</div>
-        <p style="color: #cbd5e1; margin: 0 0 16px;">Diseñado para replicar fielmente el rendimiento, la sensibilidad del lápiz, el sistema de capas y el flujo de trabajo profesional de Clip Studio Paint.</p>
+        <p style="color: #cbd5e1; margin: 0 0 16px;">Estudio profesional de ilustración digital y animación 2D acelerado por Rust + WebAssembly y WebGL, diseñado para ofrecer máxima sensibilidad de lápiz, sistema de capas avanzado y flujo de trabajo fluido.</p>
         <div style="font-size: 11px; color: #64748b; border-top: 1px solid #333; padding-top: 12px;">Construido con Tauri v2, Vite, TypeScript, Three.js y WebGL.</div>
         <div style="margin-top: 20px;">
           <button class="csp-calib-preset-btn active" id="about-ok-btn" style="padding: 6px 24px;">Aceptar</button>

@@ -41,11 +41,11 @@ export interface AnimationTrack {
   folderId: string;
   name: string;
   visible: boolean;
-  // Clips along the track (CSP Clip & Cel architecture)
+  // Clips along the track (Clip & Cel architecture)
   clips: AnimationClip[];
   // Legacy / convenience flat exposure map (synced with clips)
   exposures: Map<number, string>;
-  // Keyframe mode enabled on this track (CSP "Enable keyframes on this layer")
+  // Keyframe mode enabled on this track
   keyframesEnabled: boolean;
   // Frame number -> TransformKeyframe
   keyframes: Map<number, TransformKeyframe>;
@@ -106,7 +106,7 @@ export interface TimelineSettings {
   startFrame: number;  // Playback start frame (e.g. 1 or 0 or -12)
   endFrame: number;    // Playback end frame (e.g. 24)
   currentFrame: number;// Currently viewed/edited frame
-  minFrame?: number;   // Lowest display frame (CSP support for frame 0 and negative frames, e.g. -12, 0)
+  minFrame?: number;   // Lowest display frame (support for frame 0 and negative frames, e.g. -12, 0)
   loop: boolean;       // Repeat playback continuously
   isPlaying: boolean;  // Active playback status
   division?: number;   // Ruler major division (e.g. 4, 5, 6, 8, 12)

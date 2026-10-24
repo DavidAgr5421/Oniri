@@ -2,7 +2,7 @@
   "name": "animacion-app",
   "productName": "AnimacionApp",
   "version": "0.1.0",
-  "description": "Aplicación de animación estilo Clip Studio Paint, open source, multiplataforma",
+  "description": "Aplicación profesional de ilustración y animación 2D open source y multiplataforma",
   "main": "src-tauri/src/main.rs",
   "scripts": {
     "dev": "vite",

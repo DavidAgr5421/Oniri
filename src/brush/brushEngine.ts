@@ -18,6 +18,7 @@ import { getPaperGrainPattern, samplePaperGrain } from './brushTextureAssets';
 import { DOC_H, DOC_W } from './docConstants';
 import { selectionModel, SelectionModel } from '../selection/selectionModel';
 import { brushDiagnostics } from './brushDiagnostics';
+import { rustStrokeEngine, DAB_STRIDE } from './rustStrokeEngine';
 
 export { DOC_H, DOC_W } from './docConstants';
 
@@ -93,7 +94,7 @@ function clamp01(v: number): number {
 /**
  * Diameter in px for a stamp given pressure, distance walked along stroke, and
  * speed. Combines the pressure curve, the minimum size ratio, the starting
- * taper (smoothstep), and the CSP-style velocity dynamics (tapering when moving fast).
+ * taper (smoothstep), and the velocity dynamics (tapering when moving fast).
  */
 export function brushDiameterAt(
   s: BrushSettings,
@@ -107,14 +108,14 @@ export function brushDiameterAt(
   const curvedP = s.pressureSize ? Math.pow(p, Math.max(0.1, s.pressureCurve)) : 1;
   let smoothStart = 1;
 
-  // In CSP, taperStart (simulated starting needle) is NOT applied to mouse strokes
+  // taperStart (simulated starting needle) is NOT applied to mouse strokes
   // because mouse clicks draw natural full-size stamps without artificial needle points.
   if (!isMouse && s.taperStart > 0) {
     const t = Math.min(1, distance / s.taperStart);
     smoothStart = t * t * (3 - 2 * t);
   }
 
-  // Velocity dynamic factor (CSP 速度によるサイズ影響: quick flicks taper down)
+  // Velocity dynamic factor (quick flicks taper down)
   let speedFactor = 1.0;
   if (s.velocitySize && speed > 1.0) {
     const minRatio = Math.max(0.05, Math.min(1.0, s.velocityMinRatio ?? 0.35));
@@ -124,7 +125,7 @@ export function brushDiameterAt(
     speedFactor = 1.0 - (1.0 - minRatio) * vFactor;
   }
 
-  // Deterministic per-dab Random Size dynamic (CSP ランダムによるサイズ影響, e.g. ガサ伽サ線画ペン = 55%)
+  // Deterministic per-dab Random Size dynamic
   let randomFactor = 1.0;
   const minRand = s.randomSizeRatio ?? 1.0;
   if (minRand < 0.995) {
@@ -150,7 +151,7 @@ export function brushDiameterAt(
  * Alpha for a single stamp. 'uniform' pens without pressure on density stay
  * fully solid (no overlapping-scale artifacts). Accumulated ink scales the raw
  * flow by the stamp spacing so dense spacing converges smoothly instead of
- * saturating or leaving visible steps. Also supports CSP velocity flow dynamics.
+ * saturating or leaving visible steps. Also supports velocity flow dynamics.
  */
 export function brushStampAlpha(s: BrushSettings, pressure: number, speed = 0): number {
   const p = clamp01(pressure);
@@ -208,7 +209,7 @@ export function selectTipAtStamp(s: BrushSettings, stampIndex: number): TipTextu
 }
 
 /**
- * Evaluates CSP's 4 paper texture modes ('subtract' | 'multiply' | 'height' | 'outline')
+ * Evaluates the 4 paper texture modes ('subtract' | 'multiply' | 'height' | 'outline')
  * with optional texture inversion at document coordinate (docX, docY).
  */
 export function evaluatePaperTextureAtPixel(
@@ -249,7 +250,7 @@ export function evaluatePaperTextureAtPixel(
     return Math.round(baseAlpha255 * mod);
   }
 
-  // Default 'height' (Comparar altura / Realzar textura de CSP)
+  // Default 'height' (Comparar altura / Realzar textura)
   const press = clamp01(pressure);
   const effDrive = dabA * (0.62 + 0.38 * press);
   const denom = Math.max(0.12, 1.0 - density * 0.78);
@@ -409,7 +410,7 @@ export function createBrushEngine(): BrushEngine {
     const effectiveTip = tipTextureOverride !== undefined ? tipTextureOverride : s.tipTexture;
     let stampColor = erase ? '#000000' : currentColorHex;
 
-    // 1. Dual Color / Sub Color Mix (CSP サブカラーの混合)
+    // 1. Dual Color / Sub Color Mix
     if (!erase && s.subColorMix) {
       const sec = getToolState().secondaryColor || '#ffffff';
       const { r: r2, g: g2, b: b2 } = hexToRgb(sec);
@@ -422,7 +423,7 @@ export function createBrushEngine(): BrushEngine {
       currentColorHex = stampColor;
     }
 
-    // 2. Color Mix and Smudge handling (CSP 色混ぜ / 重ね / なじませ)
+    // 2. Color Mix and Smudge handling
     if (!erase && ((s.colorMix && s.colorMix > 0) || (s.smudge && s.smudge > 0))) {
       const sampled = samplePreStrokeColor(x, y);
       const isPureSmudger = s.smudge && s.smudge > 0 && (!s.colorMix || s.colorMix >= 0.8);
@@ -441,7 +442,7 @@ export function createBrushEngine(): BrushEngine {
           stampColor = rgbToHex(strokePickedColor[0], strokePickedColor[1], strokePickedColor[2]);
           currentColorHex = stampColor;
         } else {
-          // Standard watercolor / oil mixing (e.g. lazy-brush 怠けものブラシ)
+          // Standard watercolor / oil mixing
           const [lr, lg, lb, la] = sampled;
           const { r: br, g: bg, b: bb } = hexToRgb(s.color);
           const baseMix = s.colorMix! * Math.max(0.05, 1.0 - Math.pow(pressure, 1.3) * 0.85);
@@ -479,7 +480,7 @@ export function createBrushEngine(): BrushEngine {
       !erase && !!(s.paperTexture && s.paperTexture !== 'none' && (s.textureDensity ?? 0) > 0);
     const isPencilMedium = hasPaperTooth && s.inkMode === 'accumulate';
 
-    // Pen tilt (REA study 5.1): inking pens ('uniform') never distort diameter
+    // Pen tilt: inking pens ('uniform') never distort diameter
     // or squash circular nibs into directional ribbons. Pencil/pastel brushes
     // ('accumulate' + paperTexture) shade with the side of the lead when tilted!
     let drawDiameter = diameter;
@@ -562,6 +563,26 @@ export function createBrushEngine(): BrushEngine {
     p1: number,
   ): void {
     const s = strokeSettings;
+
+    if (rustStrokeEngine.available) {
+      const batch = rustStrokeEngine.addPoint(x1, y1, p1);
+      if (!batch || batch.count === 0) return;
+      const dabs = batch.dabs;
+      for (let i = 0; i < batch.count; i++) {
+        const base = i * DAB_STRIDE;
+        const dx = dabs[base];
+        const dy = dabs[base + 1];
+        const diam = dabs[base + 2];
+        const press = dabs[base + 3];
+        const angle = dabs[base + 5];
+        const tipIdx = dabs[base + 6];
+        lastAngleRad = angle;
+        const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, s.tipTexture);
+        stampAt(ctx, erase, dx, dy, diam, press, angle, activeTip);
+      }
+      return;
+    }
+
     const dx = x1 - x0;
     const dy = y1 - y0;
     const segment = Math.hypot(dx, dy);
@@ -582,7 +603,7 @@ export function createBrushEngine(): BrushEngine {
       const u = pos / segment;
       const pAt = p0 + (p1 - p0) * u;
       const diam = brushDiameterAt(s, pAt, strokeDistance + pos, currentStrokeSpeed, isCurrentStrokeMouse);
-      // CSP-style StrokeIntervalMinimum: bounds minimum distance between dabs so fine needle ends don't create thousands of overlapping stamps
+      // Minimum stroke interval: bounds minimum distance between dabs so fine needle ends don't create thousands of overlapping stamps
       const minStep = Math.max(MIN_STAMP_STEP, Math.min(3.0, diam * 0.16));
       const effectiveSpacing = Math.max(0.09, spacing);
       const step = Math.max(minStep, diam * effectiveSpacing);
@@ -609,7 +630,7 @@ export function createBrushEngine(): BrushEngine {
           const th = Math.random() * Math.PI * 2;
           const sx = x0 + dx * u2 + r * Math.cos(th);
           const sy = y0 + dy * u2 + r * Math.sin(th);
-          // CSP Spray Bucketing: discrete scale factors guarantee 100% texture cache hits
+          // Spray Bucketing: discrete scale factors guarantee 100% texture cache hits
           const bucket = SPRAY_SCALE_BUCKETS[Math.floor(Math.random() * SPRAY_SCALE_BUCKETS.length)];
           const pSize = Math.max(MIN_STAMP_DIAMETER, Math.round(baseDiam * bucket));
           const pAngle = getSprayParticleAngle(s, activeTip, angleRad);
@@ -732,6 +753,7 @@ export function createBrushEngine(): BrushEngine {
 
     brushDiagnostics.inPredictedStroke = true;
     isPredictingStroke = true;
+    rustStrokeEngine.saveCheckpoint();
     try {
       for (const pt of points) {
         stampAlong(predictedContext, isEraseOp, prevX, prevY, prevP, pt.x, pt.y, pt.pressure);
@@ -740,6 +762,7 @@ export function createBrushEngine(): BrushEngine {
         prevP = pt.pressure;
       }
     } finally {
+      rustStrokeEngine.restoreCheckpoint();
       brushDiagnostics.inPredictedStroke = false;
       isPredictingStroke = false;
     }
@@ -788,7 +811,7 @@ export function createBrushEngine(): BrushEngine {
 
     if (mode === 'paint' || mode === 'shape') {
       if (active.context) {
-        // Apply GPU paper grain texture across stroke bounds (CSP style single-pass continuous texture)
+        // Apply GPU paper grain texture across stroke bounds (single-pass continuous texture)
         if (
           mode === 'paint' &&
           strokeSettings.paperTexture &&
@@ -1110,7 +1133,7 @@ export function createBrushEngine(): BrushEngine {
       let sourceCanvasToDraw = layer.canvas;
       let liveStrokeDrawnInTint = false;
 
-      // Real-time GPU Paper/Canvas grain & Selection mask compositing (Clip Studio Paint style live texture)
+      // Real-time GPU Paper/Canvas grain & Selection mask compositing
       const hasPaperTooth =
         mode === 'paint' &&
         !!(
@@ -1188,7 +1211,7 @@ export function createBrushEngine(): BrushEngine {
         sourceCanvasToDraw = lockAlphaCanvas;
       }
 
-      // CSP Layer Color Effect (Azul de boceto / Sketch cyan non-destructive tint)
+      // Layer Color Effect (Azul de boceto / Sketch cyan non-destructive tint)
       if (layer.useLayerColor && !layer.isPaper) {
         layerColorContext.clearRect(0, 0, curDocW, curDocH);
         layerColorContext.drawImage(sourceCanvasToDraw, 0, 0);
@@ -1507,7 +1530,24 @@ export function createBrushEngine(): BrushEngine {
     const targetCtx = erase ? (eraseToStroke ? strokeContext : active.context) : strokeContext;
     const isEraseOp = erase && !eraseToStroke;
 
-    if (strokeSettings.spray) {
+    if (rustStrokeEngine.available) {
+      const batch = rustStrokeEngine.startStroke(x, y, pressure, strokeSettings, isCurrentStrokeMouse);
+      if (batch && batch.count > 0) {
+        const dabs = batch.dabs;
+        for (let i = 0; i < batch.count; i++) {
+          const base = i * DAB_STRIDE;
+          const dx = dabs[base];
+          const dy = dabs[base + 1];
+          const diam = dabs[base + 2];
+          const press = dabs[base + 3];
+          const angle = dabs[base + 5];
+          const tipIdx = dabs[base + 6];
+          lastAngleRad = angle;
+          const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, strokeSettings.tipTexture);
+          stampAt(targetCtx, isEraseOp, dx, dy, diam, press, angle, activeTip);
+        }
+      }
+    } else if (strokeSettings.spray) {
       const count = Math.max(1, Math.round(strokeSettings.sprayDensity ?? 5));
       const baseDiam = brushDiameterAt(strokeSettings, pressure, 0, 0, isCurrentStrokeMouse);
       const radius = strokeSettings.sprayRadius ?? Math.max(12, baseDiam * 1.5);
@@ -1628,6 +1668,7 @@ export function createBrushEngine(): BrushEngine {
     },
     setStrokeSpeed(speed) {
       currentStrokeSpeed = Math.max(0, speed);
+      rustStrokeEngine.setSpeed(currentStrokeSpeed);
     },
     renderPredictedStroke(points) {
       renderPredictedStroke(points);
@@ -1691,11 +1732,13 @@ export function createBrushEngine(): BrushEngine {
       engine.compositeDirty = true;
     },
     endStroke(_tail) {
+      rustStrokeEngine.endStroke();
       finishStroke();
       strokeTilt = null;
       currentStrokeSpeed = 0;
     },
     cancelStroke() {
+      rustStrokeEngine.endStroke();
       clearPredictedStroke();
       strokeContext.clearRect(0, 0, curDocW, curDocH);
       if (mode === 'erase' && preStrokeSnapshot && preStrokeRect) {

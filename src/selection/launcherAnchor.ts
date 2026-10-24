@@ -36,7 +36,7 @@ export function projectDocToScreen(
 }
 
 /**
- * CSP launcher placement (REA study, section 3.1): anchor at the horizontal
+ * Floating launcher placement: anchor at the horizontal
  * center of the bounds, directly below `bbox.maxY`, then flip above the
  * selection when the bar would overflow the bottom of the viewport.
  * If the bounds fill the screen the bar is clamped to the inner bottom edge.

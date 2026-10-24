@@ -69,10 +69,10 @@ function saveVisibleButtonsSet(visibleSet: Set<string>): void {
 let launcherStateNotifier = (): void => {};
 
 /**
- * CSP "Selection Launcher" (Menú flotante de selección / 選択範囲ランチャー):
+ * Selection Launcher (Menú flotante de selección):
  * Floating action bar anchored at Y_max of the active selection mask bounding box.
  * Follows canvas navigation, flips above when near screen edge, and provides
- * instant access to canonical CSP selection operations.
+ * instant access to selection operations.
  */
 export function mountSelectionLauncher(options: SelectionLauncherOptions): () => void {
   const { camera, canvas, engine, root = document.body } = options;
@@ -401,7 +401,7 @@ function showRadiusPopover(
 }
 
 /**
- * Settings modal for customizing which buttons are shown on the CSP Selection Launcher.
+ * Settings modal for customizing which buttons are shown on the Selection Launcher.
  */
 export function openSelectionLauncherSettingsModal(): void {
   document.querySelector('.csp-launcher-modal-backdrop')?.remove();
@@ -417,7 +417,7 @@ export function openSelectionLauncherSettingsModal(): void {
 
   modal.innerHTML = `
     <div class="csp-calibration-header">
-      <span>Ajustes del menú flotante de selección (CSP)</span>
+      <span>Ajustes del menú flotante de selección</span>
       <button class="csp-nav-close-btn" id="modal-close">&times;</button>
     </div>
     <div class="csp-calibration-banner">
