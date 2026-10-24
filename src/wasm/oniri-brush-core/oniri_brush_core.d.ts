@@ -88,6 +88,37 @@ export class ClipTileCore {
 }
 
 /**
+ * Motor nativo de mezcla cromática, difuminado (smudge) y tintado de color
+ */
+export class ColorBlendCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Aplica tintado monocromo in-place (Color de capa / Papel cebolla) sobre un buffer RGBA
+     */
+    static apply_tint_in_place(rgba_buffer: Uint8Array, tint_r: number, tint_g: number, tint_b: number): void;
+    /**
+     * Mezcla el color del pincel con el color muestreado del lienzo (acuarela/óleo)
+     */
+    static blend_color_mix(brush_r: number, brush_g: number, brush_b: number, sampled_r: number, sampled_g: number, sampled_b: number, sampled_a: number, color_mix: number, pressure: number): Uint8Array;
+    /**
+     * Mezcla dos colores (Principal y Subcolor/Secundario) en función de la presión
+     */
+    static blend_dual_color(r1: number, g1: number, b1: number, r2: number, g2: number, b2: number, pressure: number): Uint8Array;
+    /**
+     * Evalúa la respuesta del grano de textura de papel sobre el canal alpha
+     * `mode`: 0 = height (comparar altura), 1 = subtract, 2 = multiply, 3 = outline
+     */
+    static evaluate_paper_texture(grain_val: number, base_alpha: number, pressure: number, density: number, mode: number, invert: boolean): number;
+    /**
+     * Actualiza el estado acumulado de arrastre / difuminado (Smudge / Blender)
+     * Retorna `[r, g, b, alpha]`
+     */
+    static step_smudge(current_r: number, current_g: number, current_b: number, current_a: number, sampled_r: number, sampled_g: number, sampled_b: number, sampled_a: number, pick_rate: number): Float32Array;
+}
+
+/**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
 export class GifEncoderCore {
@@ -223,6 +254,7 @@ export interface InitOutput {
     readonly __wbg_boneskincore_free: (a: number, b: number) => void;
     readonly __wbg_brushdynamicsconfig_free: (a: number, b: number) => void;
     readonly __wbg_cliptilecore_free: (a: number, b: number) => void;
+    readonly __wbg_colorblendcore_free: (a: number, b: number) => void;
     readonly __wbg_get_brushdynamicsconfig_base_size: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_flow: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_follow_direction: (a: number) => number;
@@ -289,6 +321,11 @@ export interface InitOutput {
     readonly boneskincore_scan_layer_bounds: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly brushdynamicsconfig_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number) => number;
     readonly cliptilecore_blit_planar_tile: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+    readonly colorblendcore_apply_tint_in_place: (a: number, b: number, c: any, d: number, e: number, f: number) => void;
+    readonly colorblendcore_blend_color_mix: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
+    readonly colorblendcore_blend_dual_color: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+    readonly colorblendcore_evaluate_paper_texture: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly colorblendcore_step_smudge: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
     readonly gifencodercore_encode_lzw_frame: (a: number, b: number, c: number, d: number) => number;
     readonly gifencodercore_get_indexed_len: (a: number) => number;
     readonly gifencodercore_get_indexed_ptr: (a: number) => number;

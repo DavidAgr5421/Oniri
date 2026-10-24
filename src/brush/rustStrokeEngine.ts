@@ -2,6 +2,7 @@ import initWasm, {
   BoneSkinCore,
   BrushDynamicsConfig,
   ClipTileCore,
+  ColorBlendCore,
   GifEncoderCore,
   SelectionCore,
   SmartFillCore,
@@ -545,6 +546,103 @@ class RustStrokeEngineWrapper {
     } catch (e) {
       console.warn('WASM ClipTileCore.blit_planar_tile fallback:', e);
       return false;
+    }
+  }
+
+  blendDualColor(
+    r1: number, g1: number, b1: number,
+    r2: number, g2: number, b2: number,
+    pressure: number,
+  ): [number, number, number] | null {
+    if (!this.available) return null;
+    try {
+      const res = ColorBlendCore.blend_dual_color(r1, g1, b1, r2, g2, b2, pressure);
+      return [res[0], res[1], res[2]];
+    } catch (e) {
+      console.warn('WASM ColorBlendCore.blend_dual_color fallback:', e);
+      return null;
+    }
+  }
+
+  blendColorMix(
+    brushR: number, brushG: number, brushB: number,
+    sampleR: number, sampleG: number, sampleB: number,
+    sampleA: number,
+    colorMix: number,
+    pressure: number,
+  ): [number, number, number] | null {
+    if (!this.available) return null;
+    try {
+      const res = ColorBlendCore.blend_color_mix(
+        brushR, brushG, brushB,
+        sampleR, sampleG, sampleB,
+        sampleA,
+        colorMix,
+        pressure,
+      );
+      return [res[0], res[1], res[2]];
+    } catch (e) {
+      console.warn('WASM ColorBlendCore.blend_color_mix fallback:', e);
+      return null;
+    }
+  }
+
+  stepSmudge(
+    currR: number, currG: number, currB: number, currA: number,
+    sampleR: number, sampleG: number, sampleB: number, sampleA: number,
+    pickRate: number,
+  ): [number, number, number, number] | null {
+    if (!this.available) return null;
+    try {
+      const res = ColorBlendCore.step_smudge(
+        currR, currG, currB, currA,
+        sampleR, sampleG, sampleB, sampleA,
+        pickRate,
+      );
+      return [res[0], res[1], res[2], res[3]];
+    } catch (e) {
+      console.warn('WASM ColorBlendCore.step_smudge fallback:', e);
+      return null;
+    }
+  }
+
+  applyTintInPlace(
+    rgbaBuffer: Uint8Array,
+    tintR: number,
+    tintG: number,
+    tintB: number,
+  ): boolean {
+    if (!this.available) return false;
+    try {
+      ColorBlendCore.apply_tint_in_place(rgbaBuffer, tintR, tintG, tintB);
+      return true;
+    } catch (e) {
+      console.warn('WASM ColorBlendCore.apply_tint_in_place fallback:', e);
+      return false;
+    }
+  }
+
+  evaluatePaperTexture(
+    grainVal: number,
+    baseAlpha: number,
+    pressure: number,
+    density: number,
+    mode: number,
+    invert: boolean,
+  ): number | null {
+    if (!this.available) return null;
+    try {
+      return ColorBlendCore.evaluate_paper_texture(
+        grainVal,
+        baseAlpha,
+        pressure,
+        density,
+        mode,
+        invert,
+      );
+    } catch (e) {
+      console.warn('WASM ColorBlendCore.evaluate_paper_texture fallback:', e);
+      return null;
     }
   }
 }

@@ -543,6 +543,106 @@ export class ClipTileCore {
 if (Symbol.dispose) ClipTileCore.prototype[Symbol.dispose] = ClipTileCore.prototype.free;
 
 /**
+ * Motor nativo de mezcla cromática, difuminado (smudge) y tintado de color
+ */
+export class ColorBlendCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        ColorBlendCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_colorblendcore_free(ptr, 0);
+    }
+    /**
+     * Aplica tintado monocromo in-place (Color de capa / Papel cebolla) sobre un buffer RGBA
+     * @param {Uint8Array} rgba_buffer
+     * @param {number} tint_r
+     * @param {number} tint_g
+     * @param {number} tint_b
+     */
+    static apply_tint_in_place(rgba_buffer, tint_r, tint_g, tint_b) {
+        var ptr0 = passArray8ToWasm0(rgba_buffer, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        wasm.colorblendcore_apply_tint_in_place(ptr0, len0, rgba_buffer, tint_r, tint_g, tint_b);
+    }
+    /**
+     * Mezcla el color del pincel con el color muestreado del lienzo (acuarela/óleo)
+     * @param {number} brush_r
+     * @param {number} brush_g
+     * @param {number} brush_b
+     * @param {number} sampled_r
+     * @param {number} sampled_g
+     * @param {number} sampled_b
+     * @param {number} sampled_a
+     * @param {number} color_mix
+     * @param {number} pressure
+     * @returns {Uint8Array}
+     */
+    static blend_color_mix(brush_r, brush_g, brush_b, sampled_r, sampled_g, sampled_b, sampled_a, color_mix, pressure) {
+        const ret = wasm.colorblendcore_blend_color_mix(brush_r, brush_g, brush_b, sampled_r, sampled_g, sampled_b, sampled_a, color_mix, pressure);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * Mezcla dos colores (Principal y Subcolor/Secundario) en función de la presión
+     * @param {number} r1
+     * @param {number} g1
+     * @param {number} b1
+     * @param {number} r2
+     * @param {number} g2
+     * @param {number} b2
+     * @param {number} pressure
+     * @returns {Uint8Array}
+     */
+    static blend_dual_color(r1, g1, b1, r2, g2, b2, pressure) {
+        const ret = wasm.colorblendcore_blend_dual_color(r1, g1, b1, r2, g2, b2, pressure);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * Evalúa la respuesta del grano de textura de papel sobre el canal alpha
+     * `mode`: 0 = height (comparar altura), 1 = subtract, 2 = multiply, 3 = outline
+     * @param {number} grain_val
+     * @param {number} base_alpha
+     * @param {number} pressure
+     * @param {number} density
+     * @param {number} mode
+     * @param {boolean} invert
+     * @returns {number}
+     */
+    static evaluate_paper_texture(grain_val, base_alpha, pressure, density, mode, invert) {
+        const ret = wasm.colorblendcore_evaluate_paper_texture(grain_val, base_alpha, pressure, density, mode, invert);
+        return ret;
+    }
+    /**
+     * Actualiza el estado acumulado de arrastre / difuminado (Smudge / Blender)
+     * Retorna `[r, g, b, alpha]`
+     * @param {number} current_r
+     * @param {number} current_g
+     * @param {number} current_b
+     * @param {number} current_a
+     * @param {number} sampled_r
+     * @param {number} sampled_g
+     * @param {number} sampled_b
+     * @param {number} sampled_a
+     * @param {number} pick_rate
+     * @returns {Float32Array}
+     */
+    static step_smudge(current_r, current_g, current_b, current_a, sampled_r, sampled_g, sampled_b, sampled_a, pick_rate) {
+        const ret = wasm.colorblendcore_step_smudge(current_r, current_g, current_b, current_a, sampled_r, sampled_g, sampled_b, sampled_a, pick_rate);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) ColorBlendCore.prototype[Symbol.dispose] = ColorBlendCore.prototype.free;
+
+/**
  * Codificador GIF89a en Rust + WASM con cuantización 5-bit O(1) y tabla LZW plana sin asignaciones
  */
 export class GifEncoderCore {
@@ -1057,6 +1157,9 @@ const BrushDynamicsConfigFinalization = (typeof FinalizationRegistry === 'undefi
 const ClipTileCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_cliptilecore_free(ptr, 1));
+const ColorBlendCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_colorblendcore_free(ptr, 1));
 const GifEncoderCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_gifencodercore_free(ptr, 1));

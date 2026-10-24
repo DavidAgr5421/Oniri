@@ -225,6 +225,19 @@ export function evaluatePaperTextureAtPixel(
 ): number {
   if (baseAlpha255 <= 0 || density <= 0) return baseAlpha255;
   const rawGrain = samplePaperGrain(paperTexture, docX, docY, scale);
+  const modeCode = mode === 'subtract' ? 1 : mode === 'multiply' ? 2 : mode === 'outline' ? 3 : 0;
+  if (modeCode !== 3) {
+    const rustA = rustStrokeEngine.evaluatePaperTexture(
+      rawGrain,
+      baseAlpha255,
+      pressure,
+      density,
+      modeCode,
+      invert,
+    );
+    if (rustA !== null) return rustA;
+  }
+
   // valley = 0 at paper peak, 1 at deep paper pore
   const valley = invert ? rawGrain : 1.0 - rawGrain;
   const dabA = baseAlpha255 / 255;
@@ -415,11 +428,16 @@ export function createBrushEngine(): BrushEngine {
       const sec = getToolState().secondaryColor || '#ffffff';
       const { r: r2, g: g2, b: b2 } = hexToRgb(sec);
       const { r: r1, g: g1, b: b1 } = hexToRgb(s.color);
-      const t = Math.pow(clamp01(pressure), 1.2);
-      const r = Math.round(r2 * (1 - t) + r1 * t);
-      const g = Math.round(g2 * (1 - t) + g1 * t);
-      const b = Math.round(b2 * (1 - t) + b1 * t);
-      stampColor = rgbToHex(r, g, b);
+      const rustDual = rustStrokeEngine.blendDualColor(r1, g1, b1, r2, g2, b2, pressure);
+      if (rustDual) {
+        stampColor = rgbToHex(rustDual[0], rustDual[1], rustDual[2]);
+      } else {
+        const t = Math.pow(clamp01(pressure), 1.2);
+        const r = Math.round(r2 * (1 - t) + r1 * t);
+        const g = Math.round(g2 * (1 - t) + g1 * t);
+        const b = Math.round(b2 * (1 - t) + b1 * t);
+        stampColor = rgbToHex(r, g, b);
+      }
       currentColorHex = stampColor;
     }
 
@@ -433,11 +451,29 @@ export function createBrushEngine(): BrushEngine {
           if (!strokePickedColor) {
             strokePickedColor = [sampled[0], sampled[1], sampled[2], sampled[3]];
           } else {
-            const pickRate = 0.35;
-            strokePickedColor[0] = Math.round(strokePickedColor[0] * (1 - pickRate) + sampled[0] * pickRate);
-            strokePickedColor[1] = Math.round(strokePickedColor[1] * (1 - pickRate) + sampled[1] * pickRate);
-            strokePickedColor[2] = Math.round(strokePickedColor[2] * (1 - pickRate) + sampled[2] * pickRate);
-            strokePickedColor[3] = Math.max(strokePickedColor[3], sampled[3]);
+            const rustSmudge = rustStrokeEngine.stepSmudge(
+              strokePickedColor[0],
+              strokePickedColor[1],
+              strokePickedColor[2],
+              strokePickedColor[3],
+              sampled[0],
+              sampled[1],
+              sampled[2],
+              sampled[3],
+              0.35,
+            );
+            if (rustSmudge) {
+              strokePickedColor[0] = Math.round(rustSmudge[0]);
+              strokePickedColor[1] = Math.round(rustSmudge[1]);
+              strokePickedColor[2] = Math.round(rustSmudge[2]);
+              strokePickedColor[3] = rustSmudge[3];
+            } else {
+              const pickRate = 0.35;
+              strokePickedColor[0] = Math.round(strokePickedColor[0] * (1 - pickRate) + sampled[0] * pickRate);
+              strokePickedColor[1] = Math.round(strokePickedColor[1] * (1 - pickRate) + sampled[1] * pickRate);
+              strokePickedColor[2] = Math.round(strokePickedColor[2] * (1 - pickRate) + sampled[2] * pickRate);
+              strokePickedColor[3] = Math.max(strokePickedColor[3], sampled[3]);
+            }
           }
           stampColor = rgbToHex(strokePickedColor[0], strokePickedColor[1], strokePickedColor[2]);
           currentColorHex = stampColor;
@@ -445,12 +481,23 @@ export function createBrushEngine(): BrushEngine {
           // Standard watercolor / oil mixing
           const [lr, lg, lb, la] = sampled;
           const { r: br, g: bg, b: bb } = hexToRgb(s.color);
-          const baseMix = s.colorMix! * Math.max(0.05, 1.0 - Math.pow(pressure, 1.3) * 0.85);
-          const mix = baseMix * la;
-          const r = Math.round(br * (1 - mix) + lr * mix);
-          const g = Math.round(bg * (1 - mix) + lg * mix);
-          const b = Math.round(bb * (1 - mix) + lb * mix);
-          stampColor = rgbToHex(r, g, b);
+          const rustMix = rustStrokeEngine.blendColorMix(
+            br, bg, bb,
+            lr, lg, lb,
+            la,
+            s.colorMix ?? 0.5,
+            pressure,
+          );
+          if (rustMix) {
+            stampColor = rgbToHex(rustMix[0], rustMix[1], rustMix[2]);
+          } else {
+            const baseMix = s.colorMix! * Math.max(0.05, 1.0 - Math.pow(pressure, 1.3) * 0.85);
+            const mix = baseMix * la;
+            const r = Math.round(br * (1 - mix) + lr * mix);
+            const g = Math.round(bg * (1 - mix) + lg * mix);
+            const b = Math.round(bb * (1 - mix) + lb * mix);
+            stampColor = rgbToHex(r, g, b);
+          }
           currentColorHex = stampColor;
         }
       } else {

@@ -2,11 +2,13 @@ use wasm_bindgen::prelude::*;
 
 pub mod bones;
 pub mod clip_tiles;
+pub mod color_blend;
 pub mod fill;
 pub mod gif;
 pub mod selection;
 pub use bones::BoneSkinCore;
 pub use clip_tiles::ClipTileCore;
+pub use color_blend::ColorBlendCore;
 pub use fill::SmartFillCore;
 pub use gif::GifEncoderCore;
 pub use selection::SelectionCore;
@@ -959,6 +961,31 @@ mod tests {
         assert!(ok);
         assert_eq!(dest[0], 200); // R
         assert_eq!(dest[3], 255); // A
+    }
+
+    #[test]
+    fn test_color_blend_core() {
+        // Dual color: full pressure should pick primary
+        let mixed = ColorBlendCore::blend_dual_color(255, 0, 0, 0, 0, 255, 1.0);
+        assert_eq!(mixed, vec![255, 0, 0]);
+
+        // Dual color: zero pressure should pick secondary
+        let mixed_zero = ColorBlendCore::blend_dual_color(255, 0, 0, 0, 0, 255, 0.0);
+        assert_eq!(mixed_zero, vec![0, 0, 255]);
+
+        // Smudge step
+        let smudge = ColorBlendCore::step_smudge(100.0, 100.0, 100.0, 1.0, 200, 200, 200, 1.0, 0.5);
+        assert_eq!(smudge[0], 150.0);
+
+        // Tint in place
+        let mut rgba = vec![255, 255, 255, 255, 0, 0, 0, 0];
+        ColorBlendCore::apply_tint_in_place(&mut rgba, 0, 160, 233);
+        assert_eq!(rgba[0], 0);
+        assert_eq!(rgba[1], 160);
+        assert_eq!(rgba[2], 233);
+        assert_eq!(rgba[3], 255);
+        // transparent pixel untouched
+        assert_eq!(rgba[7], 0);
     }
 }
 
