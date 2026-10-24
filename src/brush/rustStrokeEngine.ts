@@ -1,4 +1,5 @@
 import initWasm, {
+  BoneIKCore,
   BoneSkinCore,
   BrushDynamicsConfig,
   ClipTileCore,
@@ -681,6 +682,83 @@ class RustStrokeEngineWrapper {
     const len = this.stabilizerCore.get_emitted_len();
     const points = new Float32Array(this.wasmMemory.buffer, ptr, len);
     return { points, count };
+  }
+
+  solveTwoBoneIK(
+    rootX: number,
+    rootY: number,
+    targetX: number,
+    targetY: number,
+    l1: number,
+    l2: number,
+    bendPositive: boolean,
+    grandparentWorldAngle: number,
+    parentRestRotation: number,
+    childRestRotation: number,
+  ): { parentDRotation: number; childDRotation: number } | null {
+    if (!this.available) return null;
+    try {
+      const res = BoneIKCore.solve_two_bone_ik(
+        rootX,
+        rootY,
+        targetX,
+        targetY,
+        l1,
+        l2,
+        bendPositive,
+        grandparentWorldAngle,
+        parentRestRotation,
+        childRestRotation,
+      );
+      return {
+        parentDRotation: res.parent_d_rotation,
+        childDRotation: res.child_d_rotation,
+      };
+    } catch (e) {
+      console.warn('WASM BoneIKCore.solve_two_bone_ik fallback:', e);
+      return null;
+    }
+  }
+
+  solveOneBoneAim(
+    headX: number,
+    headY: number,
+    targetX: number,
+    targetY: number,
+    parentWorldAngle: number,
+    restRotation: number,
+  ): number | null {
+    if (!this.available) return null;
+    try {
+      return BoneIKCore.solve_one_bone_aim(
+        headX,
+        headY,
+        targetX,
+        targetY,
+        parentWorldAngle,
+        restRotation,
+      );
+    } catch (e) {
+      console.warn('WASM BoneIKCore.solve_one_bone_aim fallback:', e);
+      return null;
+    }
+  }
+
+  distanceToSegment(
+    px: number,
+    py: number,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ): number | null {
+    if (!this.available) return null;
+    try {
+      return BoneIKCore.distance_to_segment(px, py, x1, y1, x2, y2);
+    } catch (e) {
+      console.warn('WASM BoneIKCore.distance_to_segment fallback:', e);
+      return null;
+    }
   }
 }
 

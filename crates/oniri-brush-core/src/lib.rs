@@ -1,5 +1,6 @@
 use wasm_bindgen::prelude::*;
 
+pub mod bone_ik;
 pub mod bones;
 pub mod clip_tiles;
 pub mod color_blend;
@@ -7,6 +8,7 @@ pub mod fill;
 pub mod gif;
 pub mod selection;
 pub mod stabilizer;
+pub use bone_ik::BoneIKCore;
 pub use bones::BoneSkinCore;
 pub use clip_tiles::ClipTileCore;
 pub use color_blend::ColorBlendCore;
@@ -1008,6 +1010,41 @@ mod tests {
         // Flush tail
         let tail_count = stab.flush_tail();
         assert_eq!(tail_count, 2);
+    }
+
+    #[test]
+    fn test_bone_ik_core() {
+        // Arm pointing right (root at 0,0, L1=50, L2=50), target at (100, 0)
+        let res = BoneIKCore::solve_two_bone_ik(
+            0.0, 0.0,
+            100.0, 0.0,
+            50.0, 50.0,
+            true,
+            0.0, 0.0, 0.0,
+        );
+        assert!(res.parent_d_rotation.abs() < 2.0);
+        assert!(res.child_d_rotation.abs() < 2.0);
+
+        // Target at (50, 50): 90-degree bend
+        let res_bent = BoneIKCore::solve_two_bone_ik(
+            0.0, 0.0,
+            50.0, 50.0,
+            50.0, 50.0,
+            true,
+            0.0, 0.0, 0.0,
+        );
+        assert_eq!(res_bent.child_d_rotation, 90.0);
+
+        // 1-bone aim directly up (0, -10)
+        let aim = BoneIKCore::solve_one_bone_aim(0.0, 0.0, 0.0, -10.0, 0.0, 0.0);
+        assert!((aim - (-90.0)).abs() < 1.0);
+
+        // Mat2D identity compose
+        let m1 = [1.0, 0.0, 0.0, 1.0, 10.0, 20.0];
+        let m2 = [1.0, 0.0, 0.0, 1.0, 5.0, 5.0];
+        let composed = BoneIKCore::compose_mat2d(&m1, &m2);
+        assert_eq!(composed[4], 15.0);
+        assert_eq!(composed[5], 25.0);
     }
 }
 

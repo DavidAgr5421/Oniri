@@ -244,8 +244,21 @@ export function solveTwoBoneIK(
 
   // Fallback to 1-bone Aim if there is no parent bone
   if (!parentBone || !parentEval) {
-    const desiredWorldAngle = (Math.atan2(targetY - childEval.headY, targetX - childEval.headX) * 180) / Math.PI;
-    const dRot = normalizeAngleDeg(desiredWorldAngle - childBone.restRotation);
+    const rustAim = rustStrokeEngine.solveOneBoneAim(
+      childEval.headX,
+      childEval.headY,
+      targetX,
+      targetY,
+      0,
+      childBone.restRotation,
+    );
+    const dRot =
+      rustAim !== null
+        ? rustAim
+        : normalizeAngleDeg(
+            (Math.atan2(targetY - childEval.headY, targetX - childEval.headX) * 180) / Math.PI -
+              childBone.restRotation,
+          );
     const prev = updated.get(childBone.id) ?? { dX: 0, dY: 0, dRotation: 0, scaleX: 1, scaleY: 1 };
     updated.set(childBone.id, { ...prev, dRotation: dRot });
     return updated;
@@ -256,6 +269,44 @@ export function solveTwoBoneIK(
   const rootY = parentEval.headY;
   const L1 = Math.max(1, Math.hypot(childEval.headX - rootX, childEval.headY - rootY));
   const L2 = Math.max(1, childBone.length * childEval.worldScaleX);
+  const grandParentEval = parentBone.parentId ? evalMap.get(parentBone.parentId) : undefined;
+  const grandParentWorldAngle = grandParentEval ? grandParentEval.worldAngleDeg : 0;
+  const bendPositive = childBone.ikBendPositive !== false;
+
+  const rustIK = rustStrokeEngine.solveTwoBoneIK(
+    rootX,
+    rootY,
+    targetX,
+    targetY,
+    L1,
+    L2,
+    bendPositive,
+    grandParentWorldAngle,
+    parentBone.restRotation,
+    childBone.restRotation,
+  );
+
+  if (rustIK) {
+    const prevParentPose = updated.get(parentBone.id) ?? {
+      dX: 0,
+      dY: 0,
+      dRotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    };
+    updated.set(parentBone.id, { ...prevParentPose, dRotation: rustIK.parentDRotation });
+
+    const prevChildPose = updated.get(childBone.id) ?? {
+      dX: 0,
+      dY: 0,
+      dRotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+    };
+    updated.set(childBone.id, { ...prevChildPose, dRotation: rustIK.childDRotation });
+
+    return updated;
+  }
 
   const dx = targetX - rootX;
   const dy = targetY - rootY;
@@ -276,9 +327,6 @@ export function solveTwoBoneIK(
   const childLocalAngleRad = bendSign * (Math.PI - interiorKneeRad);
 
   // Convert parent desired world angle to parent's dRotation
-  const grandParentEval = parentBone.parentId ? evalMap.get(parentBone.parentId) : undefined;
-  const grandParentWorldAngle = grandParentEval ? grandParentEval.worldAngleDeg : 0;
-
   const desiredParentWorldDeg = (angle1Rad * 180) / Math.PI;
   const newParentDRot = normalizeAngleDeg(
     desiredParentWorldDeg - grandParentWorldAngle - parentBone.restRotation
@@ -324,6 +372,9 @@ export function distanceToSegment(
   x2: number,
   y2: number
 ): number {
+  const rustDist = rustStrokeEngine.distanceToSegment(px, py, x1, y1, x2, y2);
+  if (rustDist !== null) return rustDist;
+
   const vx = x2 - x1;
   const vy = y2 - y1;
   const lenSq = vx * vx + vy * vy;

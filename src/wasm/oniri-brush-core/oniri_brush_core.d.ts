@@ -2,6 +2,37 @@
 /* eslint-disable */
 
 /**
+ * Motor nativo de Cinemática Directa (FK), Cinemática Inversa (IK) y matrices 2D de Armadura
+ */
+export class BoneIKCore {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Multiplicación de matrices afines 2D [a, b, c, d, tx, ty]
+     */
+    static compose_mat2d(m1: Float32Array, m2: Float32Array): Float32Array;
+    /**
+     * Distancia mínima de un punto (px, py) al segmento (x1, y1)-(x2, y2)
+     */
+    static distance_to_segment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number;
+    /**
+     * Inversión de matriz afín 2D
+     */
+    static invert_mat2d(m: Float32Array): Float32Array;
+    static normalize_angle_deg(deg: number): number;
+    /**
+     * Resuelve IK de 1 hueso (Look-At / Aim)
+     */
+    static solve_one_bone_aim(head_x: number, head_y: number, target_x: number, target_y: number, parent_world_angle: number, rest_rotation: number): number;
+    /**
+     * Resuelve la cinemática inversa analítica de 2 huesos (Law of Cosines)
+     * Retorna `TwoBoneIKResult` con las rotaciones delta para el padre y el hijo.
+     */
+    static solve_two_bone_ik(root_x: number, root_y: number, target_x: number, target_y: number, l1: number, l2: number, bend_positive: boolean, grandparent_world_angle: number, parent_rest_rotation: number, child_rest_rotation: number): TwoBoneIKResult;
+}
+
+/**
  * Motor en Rust + WASM para Esqueleto 2D (FK/IK), Pesos de Malla y Linear Blend Skinning (LBS)
  */
 export class BoneSkinCore {
@@ -271,12 +302,24 @@ export class StrokeStabilizerCore {
     constructor();
 }
 
+/**
+ * Resultado del cálculo analítico de IK para extremidades de 2 huesos
+ */
+export class TwoBoneIKResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    child_d_rotation: number;
+    parent_d_rotation: number;
+}
+
 export function init_engine_hooks(): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_boneikcore_free: (a: number, b: number) => void;
     readonly __wbg_boneskincore_free: (a: number, b: number) => void;
     readonly __wbg_brushdynamicsconfig_free: (a: number, b: number) => void;
     readonly __wbg_cliptilecore_free: (a: number, b: number) => void;
@@ -307,6 +350,8 @@ export interface InitOutput {
     readonly __wbg_get_brushdynamicsconfig_velocity_flow: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_velocity_min_ratio: (a: number) => number;
     readonly __wbg_get_brushdynamicsconfig_velocity_size_enabled: (a: number) => number;
+    readonly __wbg_get_twoboneikresult_child_d_rotation: (a: number) => number;
+    readonly __wbg_get_twoboneikresult_parent_d_rotation: (a: number) => number;
     readonly __wbg_gifencodercore_free: (a: number, b: number) => void;
     readonly __wbg_selectioncore_free: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_base_size: (a: number, b: number) => void;
@@ -335,9 +380,18 @@ export interface InitOutput {
     readonly __wbg_set_brushdynamicsconfig_velocity_flow: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_velocity_min_ratio: (a: number, b: number) => void;
     readonly __wbg_set_brushdynamicsconfig_velocity_size_enabled: (a: number, b: number) => void;
+    readonly __wbg_set_twoboneikresult_child_d_rotation: (a: number, b: number) => void;
+    readonly __wbg_set_twoboneikresult_parent_d_rotation: (a: number, b: number) => void;
     readonly __wbg_smartfillcore_free: (a: number, b: number) => void;
     readonly __wbg_strokeenginecore_free: (a: number, b: number) => void;
     readonly __wbg_strokestabilizercore_free: (a: number, b: number) => void;
+    readonly __wbg_twoboneikresult_free: (a: number, b: number) => void;
+    readonly boneikcore_compose_mat2d: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly boneikcore_distance_to_segment: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly boneikcore_invert_mat2d: (a: number, b: number) => [number, number];
+    readonly boneikcore_normalize_angle_deg: (a: number) => number;
+    readonly boneikcore_solve_one_bone_aim: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly boneikcore_solve_two_bone_ik: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly boneskincore_build_mesh_vertices: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
     readonly boneskincore_compute_skinned_triangles: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
     readonly boneskincore_get_triangles_len: (a: number) => number;

@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const __wbg_boneikcore_free: (a: number, b: number) => void;
 export const __wbg_boneskincore_free: (a: number, b: number) => void;
 export const __wbg_brushdynamicsconfig_free: (a: number, b: number) => void;
 export const __wbg_cliptilecore_free: (a: number, b: number) => void;
@@ -31,6 +32,8 @@ export const __wbg_get_brushdynamicsconfig_velocity_curve: (a: number) => number
 export const __wbg_get_brushdynamicsconfig_velocity_flow: (a: number) => number;
 export const __wbg_get_brushdynamicsconfig_velocity_min_ratio: (a: number) => number;
 export const __wbg_get_brushdynamicsconfig_velocity_size_enabled: (a: number) => number;
+export const __wbg_get_twoboneikresult_child_d_rotation: (a: number) => number;
+export const __wbg_get_twoboneikresult_parent_d_rotation: (a: number) => number;
 export const __wbg_gifencodercore_free: (a: number, b: number) => void;
 export const __wbg_selectioncore_free: (a: number, b: number) => void;
 export const __wbg_set_brushdynamicsconfig_base_size: (a: number, b: number) => void;
@@ -59,9 +62,18 @@ export const __wbg_set_brushdynamicsconfig_velocity_curve: (a: number, b: number
 export const __wbg_set_brushdynamicsconfig_velocity_flow: (a: number, b: number) => void;
 export const __wbg_set_brushdynamicsconfig_velocity_min_ratio: (a: number, b: number) => void;
 export const __wbg_set_brushdynamicsconfig_velocity_size_enabled: (a: number, b: number) => void;
+export const __wbg_set_twoboneikresult_child_d_rotation: (a: number, b: number) => void;
+export const __wbg_set_twoboneikresult_parent_d_rotation: (a: number, b: number) => void;
 export const __wbg_smartfillcore_free: (a: number, b: number) => void;
 export const __wbg_strokeenginecore_free: (a: number, b: number) => void;
 export const __wbg_strokestabilizercore_free: (a: number, b: number) => void;
+export const __wbg_twoboneikresult_free: (a: number, b: number) => void;
+export const boneikcore_compose_mat2d: (a: number, b: number, c: number, d: number) => [number, number];
+export const boneikcore_distance_to_segment: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const boneikcore_invert_mat2d: (a: number, b: number) => [number, number];
+export const boneikcore_normalize_angle_deg: (a: number) => number;
+export const boneikcore_solve_one_bone_aim: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+export const boneikcore_solve_two_bone_ik: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
 export const boneskincore_build_mesh_vertices: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => number;
 export const boneskincore_compute_skinned_triangles: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => number;
 export const boneskincore_get_triangles_len: (a: number) => number;

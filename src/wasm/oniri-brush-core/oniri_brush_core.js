@@ -1,6 +1,107 @@
 /* @ts-self-types="./oniri_brush_core.d.ts" */
 
 /**
+ * Motor nativo de Cinemática Directa (FK), Cinemática Inversa (IK) y matrices 2D de Armadura
+ */
+export class BoneIKCore {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        BoneIKCoreFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_boneikcore_free(ptr, 0);
+    }
+    /**
+     * Multiplicación de matrices afines 2D [a, b, c, d, tx, ty]
+     * @param {Float32Array} m1
+     * @param {Float32Array} m2
+     * @returns {Float32Array}
+     */
+    static compose_mat2d(m1, m2) {
+        const ptr0 = passArrayF32ToWasm0(m1, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF32ToWasm0(m2, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.boneikcore_compose_mat2d(ptr0, len0, ptr1, len1);
+        var v3 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v3;
+    }
+    /**
+     * Distancia mínima de un punto (px, py) al segmento (x1, y1)-(x2, y2)
+     * @param {number} px
+     * @param {number} py
+     * @param {number} x1
+     * @param {number} y1
+     * @param {number} x2
+     * @param {number} y2
+     * @returns {number}
+     */
+    static distance_to_segment(px, py, x1, y1, x2, y2) {
+        const ret = wasm.boneikcore_distance_to_segment(px, py, x1, y1, x2, y2);
+        return ret;
+    }
+    /**
+     * Inversión de matriz afín 2D
+     * @param {Float32Array} m
+     * @returns {Float32Array}
+     */
+    static invert_mat2d(m) {
+        const ptr0 = passArrayF32ToWasm0(m, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.boneikcore_invert_mat2d(ptr0, len0);
+        var v2 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v2;
+    }
+    /**
+     * @param {number} deg
+     * @returns {number}
+     */
+    static normalize_angle_deg(deg) {
+        const ret = wasm.boneikcore_normalize_angle_deg(deg);
+        return ret;
+    }
+    /**
+     * Resuelve IK de 1 hueso (Look-At / Aim)
+     * @param {number} head_x
+     * @param {number} head_y
+     * @param {number} target_x
+     * @param {number} target_y
+     * @param {number} parent_world_angle
+     * @param {number} rest_rotation
+     * @returns {number}
+     */
+    static solve_one_bone_aim(head_x, head_y, target_x, target_y, parent_world_angle, rest_rotation) {
+        const ret = wasm.boneikcore_solve_one_bone_aim(head_x, head_y, target_x, target_y, parent_world_angle, rest_rotation);
+        return ret;
+    }
+    /**
+     * Resuelve la cinemática inversa analítica de 2 huesos (Law of Cosines)
+     * Retorna `TwoBoneIKResult` con las rotaciones delta para el padre y el hijo.
+     * @param {number} root_x
+     * @param {number} root_y
+     * @param {number} target_x
+     * @param {number} target_y
+     * @param {number} l1
+     * @param {number} l2
+     * @param {boolean} bend_positive
+     * @param {number} grandparent_world_angle
+     * @param {number} parent_rest_rotation
+     * @param {number} child_rest_rotation
+     * @returns {TwoBoneIKResult}
+     */
+    static solve_two_bone_ik(root_x, root_y, target_x, target_y, l1, l2, bend_positive, grandparent_world_angle, parent_rest_rotation, child_rest_rotation) {
+        const ret = wasm.boneikcore_solve_two_bone_ik(root_x, root_y, target_x, target_y, l1, l2, bend_positive, grandparent_world_angle, parent_rest_rotation, child_rest_rotation);
+        return TwoBoneIKResult.__wrap(ret);
+    }
+}
+if (Symbol.dispose) BoneIKCore.prototype[Symbol.dispose] = BoneIKCore.prototype.free;
+
+/**
  * Motor en Rust + WASM para Esqueleto 2D (FK/IK), Pesos de Malla y Linear Blend Skinning (LBS)
  */
 export class BoneSkinCore {
@@ -1174,6 +1275,55 @@ export class StrokeStabilizerCore {
 }
 if (Symbol.dispose) StrokeStabilizerCore.prototype[Symbol.dispose] = StrokeStabilizerCore.prototype.free;
 
+/**
+ * Resultado del cálculo analítico de IK para extremidades de 2 huesos
+ */
+export class TwoBoneIKResult {
+    static __wrap(ptr) {
+        const obj = Object.create(TwoBoneIKResult.prototype);
+        obj.__wbg_ptr = ptr;
+        TwoBoneIKResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        TwoBoneIKResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_twoboneikresult_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get child_d_rotation() {
+        const ret = wasm.__wbg_get_twoboneikresult_child_d_rotation(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get parent_d_rotation() {
+        const ret = wasm.__wbg_get_twoboneikresult_parent_d_rotation(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @param {number} arg0
+     */
+    set child_d_rotation(arg0) {
+        wasm.__wbg_set_twoboneikresult_child_d_rotation(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set parent_d_rotation(arg0) {
+        wasm.__wbg_set_twoboneikresult_parent_d_rotation(this.__wbg_ptr, arg0);
+    }
+}
+if (Symbol.dispose) TwoBoneIKResult.prototype[Symbol.dispose] = TwoBoneIKResult.prototype.free;
+
 export function init_engine_hooks() {
     wasm.init_engine_hooks();
 }
@@ -1224,6 +1374,9 @@ function __wbg_get_imports() {
     };
 }
 
+const BoneIKCoreFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_boneikcore_free(ptr, 1));
 const BoneSkinCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_boneskincore_free(ptr, 1));
@@ -1251,6 +1404,9 @@ const StrokeEngineCoreFinalization = (typeof FinalizationRegistry === 'undefined
 const StrokeStabilizerCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_strokestabilizercore_free(ptr, 1));
+const TwoBoneIKResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_twoboneikresult_free(ptr, 1));
 
 function _assertClass(instance, klass) {
     if (!(instance instanceof klass)) {
