@@ -6,6 +6,7 @@ import type { SkeletonKeyframe } from '../animation/boneModel';
 import type { AnimationScene } from '../animation/timelineModel';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { rustStrokeEngine } from '../brush/rustStrokeEngine';
+import { sanitizeAdjustment } from '../brush/adjustments';
 
 export interface OniriManifest {
   format: 'oniri';
@@ -24,7 +25,7 @@ export interface OniriProjectConfig {
 
 export interface SerializedLayerNode {
   id: string;
-  type: 'raster' | 'folder';
+  type: 'raster' | 'folder' | 'adjustment';
   name: string;
   visible: boolean;
   opacity: number;
@@ -39,6 +40,7 @@ export interface SerializedLayerNode {
   isReference?: boolean;
   boundBoneId?: string | null;
   meshSkinningEnabled?: boolean;
+  adjustment?: unknown;
 }
 
 export interface SerializedTrack {
@@ -180,6 +182,7 @@ export async function exportOniriPackage(
     isReference: l.isReference,
     boundBoneId: l.boundBoneId,
     meshSkinningEnabled: l.meshSkinningEnabled,
+    adjustment: l.adjustment,
   }));
 
   const serializedTracks: SerializedTrack[] = timeline.tracks.map((t) => ({
@@ -254,11 +257,15 @@ export async function exportOniriPackage(
   };
 
   const celsFolder: Record<string, Uint8Array> = {};
-  for (const layer of engine.layerManager.layers) {
-    if (layer.canvas) {
-      const pngU8 = await canvasToPngU8(layer.canvas);
-      celsFolder[`${layer.id}.png`] = pngU8;
-    }
+  const rasterLayers = engine.layerManager.layers.filter((l) => l.canvas);
+  const encodedEntries = await Promise.all(
+    rasterLayers.map(async (layer) => {
+      const pngU8 = await canvasToPngU8(layer.canvas!);
+      return { id: `${layer.id}.png`, data: pngU8 };
+    })
+  );
+  for (const entry of encodedEntries) {
+    celsFolder[entry.id] = entry.data;
   }
   zippable.cels = celsFolder;
 
@@ -297,6 +304,8 @@ export async function importOniriPackage(
   const rawLayers: SerializedLayerNode[] = JSON.parse(strFromU8(hierarchyBytes));
 
   const restoredLayers: LayerNode[] = [];
+  const celPromises: Promise<void>[] = [];
+
   for (const raw of rawLayers) {
     let canvas: HTMLCanvasElement | undefined = undefined;
     let context: CanvasRenderingContext2D | undefined = undefined;
@@ -310,7 +319,7 @@ export async function importOniriPackage(
       const celPath = `cels/${raw.id}.png`;
       const celBytes = unzipped[celPath];
       if (celBytes && celBytes.length > 0) {
-        await drawPngU8ToCanvas(celBytes, canvas);
+        celPromises.push(drawPngU8ToCanvas(celBytes, canvas));
       } else if (raw.isPaper) {
         context.fillStyle = '#ffffff';
         context.fillRect(0, 0, DOC_W, DOC_H);
@@ -336,8 +345,13 @@ export async function importOniriPackage(
       isReference: raw.isReference ?? false,
       boundBoneId: raw.boundBoneId ?? null,
       meshSkinningEnabled: raw.meshSkinningEnabled ?? false,
+      adjustment: raw.type === 'adjustment' ? sanitizeAdjustment(raw.adjustment) ?? undefined : undefined,
     };
     restoredLayers.push(node);
+  }
+
+  if (celPromises.length > 0) {
+    await Promise.all(celPromises);
   }
 
   engine.layerManager.loadLayers(restoredLayers);
@@ -394,6 +408,7 @@ export async function importOniriPackage(
       })),
       bones: sc.bones || [],
       boneKeyframes: new Map<number, SkeletonKeyframe>(sc.boneKeyframes || []),
+      audioTracks: [],
     }));
 
     timeline.loadTimelineState({

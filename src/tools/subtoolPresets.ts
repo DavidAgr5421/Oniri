@@ -1380,6 +1380,15 @@ export const SUBTOOLS: SubTool[] = [
     description: 'Selecciona haciendo clic punto por punto. Doble clic para cerrar.',
     settings: {},
   },
+  {
+    id: 'select-wand',
+    name: 'Varita Mágica (Color)',
+    tool: 'select',
+    description: 'Selecciona áreas continuas o globales del mismo color con tolerancia ajustable.',
+    settings: {
+      tolerance: 20,
+    },
+  },
 ];
 
 export const DEFAULT_SUBTOOL_GROUPS: Record<string, string> = {
@@ -1432,6 +1441,7 @@ export const DEFAULT_SUBTOOL_GROUPS: Record<string, string> = {
   'select-rect': 'Selección',
   'select-ellipse': 'Selección',
   'select-poly': 'Selección',
+  'select-wand': 'Selección',
 
   // Eraser
   'hard-eraser': 'Borrador',

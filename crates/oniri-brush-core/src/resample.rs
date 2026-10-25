@@ -130,6 +130,119 @@ impl TransformResampleCore {
 
         vec![a, b, c, d, tx, ty]
     }
+
+    /// Deformación por Malla (Mesh Warp / Rejilla de deformación):
+    /// Remuestrea la imagen `src_rgba` deformándola según una malla de control `grid_cols × grid_rows`.
+    /// `grid_points` contiene `(grid_cols + 1) * (grid_rows + 1) * 2` floats [x0, y0, x1, y1, ...]
+    pub fn mesh_warp_resample(
+        src_rgba: &[u8],
+        src_w: usize,
+        src_h: usize,
+        dst_w: usize,
+        dst_h: usize,
+        grid_cols: usize,
+        grid_rows: usize,
+        grid_points: &[f32],
+        mode: ResampleMode,
+    ) -> Vec<u8> {
+        let total_dst = dst_w * dst_h;
+        let expected_verts = (grid_cols + 1) * (grid_rows + 1) * 2;
+        if total_dst == 0
+            || src_w == 0
+            || src_h == 0
+            || grid_cols == 0
+            || grid_rows == 0
+            || grid_points.len() < expected_verts
+            || src_rgba.len() != src_w * src_h * 4
+        {
+            return Vec::new();
+        }
+
+        let mut dst = vec![0u8; total_dst * 4];
+        let stride_v = grid_cols + 1;
+
+        #[inline(always)]
+        fn render_triangle(
+            src: &[u8],
+            src_w: usize,
+            src_h: usize,
+            dst: &mut [u8],
+            dst_w: usize,
+            dst_h: usize,
+            p1: (f32, f32),
+            p2: (f32, f32),
+            p3: (f32, f32),
+            uv1: (f32, f32),
+            uv2: (f32, f32),
+            uv3: (f32, f32),
+            mode: ResampleMode,
+        ) {
+            let denom = (p2.1 - p3.1) * (p1.0 - p3.0) + (p3.0 - p2.0) * (p1.1 - p3.1);
+            if denom.abs() < 1e-6 {
+                return;
+            }
+            let inv_denom = 1.0 / denom;
+
+            let min_x = (p1.0.min(p2.0).min(p3.0).floor() as isize).max(0).min(dst_w as isize - 1) as usize;
+            let max_x = (p1.0.max(p2.0).max(p3.0).ceil() as isize).max(0).min(dst_w as isize - 1) as usize;
+            let min_y = (p1.1.min(p2.1).min(p3.1).floor() as isize).max(0).min(dst_h as isize - 1) as usize;
+            let max_y = (p1.1.max(p2.1).max(p3.1).ceil() as isize).max(0).min(dst_h as isize - 1) as usize;
+
+            for y in min_y..=max_y {
+                let y_f = y as f32 + 0.5;
+                let row_offset = y * dst_w;
+
+                for x in min_x..=max_x {
+                    let x_f = x as f32 + 0.5;
+
+                    let w1 = ((p2.1 - p3.1) * (x_f - p3.0) + (p3.0 - p2.0) * (y_f - p3.1)) * inv_denom;
+                    let w2 = ((p3.1 - p1.1) * (x_f - p3.0) + (p1.0 - p3.0) * (y_f - p3.1)) * inv_denom;
+                    let w3 = 1.0 - w1 - w2;
+
+                    if w1 >= -1e-3 && w2 >= -1e-3 && w3 >= -1e-3 {
+                        let sx = w1 * uv1.0 + w2 * uv2.0 + w3 * uv3.0;
+                        let sy = w1 * uv1.1 + w2 * uv2.1 + w3 * uv3.1;
+
+                        let color = sample_pixel(src, src_w, src_h, sx, sy, mode);
+                        let out_idx = (row_offset + x) * 4;
+                        if color[3] > 0 {
+                            dst[out_idx..out_idx + 4].copy_from_slice(&color);
+                        }
+                    }
+                }
+            }
+        }
+
+        for r in 0..grid_rows {
+            let v0 = (r as f32 / grid_rows as f32) * src_h as f32;
+            let v1 = ((r + 1) as f32 / grid_rows as f32) * src_h as f32;
+
+            for c in 0..grid_cols {
+                let u0 = (c as f32 / grid_cols as f32) * src_w as f32;
+                let u1 = ((c + 1) as f32 / grid_cols as f32) * src_w as f32;
+
+                let idx00 = (r * stride_v + c) * 2;
+                let idx10 = (r * stride_v + c + 1) * 2;
+                let idx01 = ((r + 1) * stride_v + c) * 2;
+                let idx11 = ((r + 1) * stride_v + c + 1) * 2;
+
+                let p00 = (grid_points[idx00], grid_points[idx00 + 1]);
+                let p10 = (grid_points[idx10], grid_points[idx10 + 1]);
+                let p01 = (grid_points[idx01], grid_points[idx01 + 1]);
+                let p11 = (grid_points[idx11], grid_points[idx11 + 1]);
+
+                let uv00 = (u0, v0);
+                let uv10 = (u1, v0);
+                let uv01 = (u0, v1);
+                let uv11 = (u1, v1);
+
+                render_triangle(src_rgba, src_w, src_h, &mut dst, dst_w, dst_h, p00, p10, p01, uv00, uv10, uv01, mode);
+                render_triangle(src_rgba, src_w, src_h, &mut dst, dst_w, dst_h, p10, p11, p01, uv10, uv11, uv01, mode);
+            }
+        }
+
+        dst
+    }
 }
 
 #[inline]

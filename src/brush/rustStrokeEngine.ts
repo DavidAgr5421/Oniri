@@ -50,6 +50,27 @@ export interface RustFillMaskResult {
 
 const EMPTY_MAT = new Uint8Array(0);
 
+export const BLEND_MODE_MAP: Record<string, number> = {
+  'source-over': 0,
+  'multiply': 1,
+  'screen': 2,
+  'overlay': 3,
+  'darken': 4,
+  'lighten': 5,
+  'color-dodge': 6,
+  'color-burn': 7,
+  'hard-light': 8,
+  'soft-light': 9,
+  'difference': 10,
+  'exclusion': 11,
+  'lighter': 12,
+  'linear-dodge': 12,
+  'linear-burn': 13,
+  'vivid-light': 14,
+  'pin-light': 15,
+  'hard-mix': 16,
+};
+
 function getTipsList(s: BrushSettings): TipTextureId[] {
   const mode = s.tipCycleMode ?? 'random';
   if (mode === 'single') {
@@ -359,6 +380,30 @@ class RustStrokeEngineWrapper {
     return this.readFillMaskResult(rw * rh, count);
   }
 
+  dilateBinaryMask(src: Uint8Array, w: number, h: number, radius: number): Uint8Array | null {
+    if (!this.available || !this.fillCore) return null;
+    const fillAny = this.fillCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof fillAny.dilate_binary_mask !== 'function') return null;
+    try {
+      const res = fillAny.dilate_binary_mask(src, w, h, Math.round(radius)) as Uint8Array | null;
+      return res && res.length === w * h ? (res instanceof Uint8Array ? res : new Uint8Array(res)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  erodeBinaryMask(src: Uint8Array, w: number, h: number, radius: number): Uint8Array | null {
+    if (!this.available || !this.fillCore) return null;
+    const fillAny = this.fillCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof fillAny.erode_binary_mask !== 'function') return null;
+    try {
+      const res = fillAny.erode_binary_mask(src, w, h, Math.round(radius)) as Uint8Array | null;
+      return res && res.length === w * h ? (res instanceof Uint8Array ? res : new Uint8Array(res)) : null;
+    } catch {
+      return null;
+    }
+  }
+
   scanLayerBounds(
     rgba: Uint8ClampedArray,
     w: number,
@@ -506,6 +551,71 @@ class RustStrokeEngineWrapper {
     }
   }
 
+  magicWandSelection(
+    rgba: Uint8Array,
+    width: number,
+    height: number,
+    seedX: number,
+    seedY: number,
+    tolerance: number,
+    contiguous = true,
+    antialias = true,
+  ): Uint8Array | null {
+    if (!this.available) return null;
+    const selAny = SelectionCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof selAny.magic_wand_selection !== 'function') return null;
+    try {
+      const res = selAny.magic_wand_selection(
+        rgba,
+        width,
+        height,
+        seedX,
+        seedY,
+        tolerance,
+        contiguous,
+        antialias,
+      ) as Uint8Array | null;
+      return res && res.length === width * height * 4 ? (res instanceof Uint8Array ? res : new Uint8Array(res)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  featherSelection(
+    maskRgba: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+  ): Uint8Array | null {
+    if (!this.available) return null;
+    const selAny = SelectionCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof selAny.feather_selection !== 'function') return null;
+    try {
+      const res = selAny.feather_selection(maskRgba, width, height, radius) as Uint8Array | null;
+      return res && res.length === width * height * 4 ? (res instanceof Uint8Array ? res : new Uint8Array(res)) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  borderSelection(
+    maskRgba: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+    position: number, // 0 = inside, 1 = center, 2 = outside
+  ): Uint8Array | null {
+    if (!this.available) return null;
+    const selAny = SelectionCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof selAny.border_selection !== 'function') return null;
+    try {
+      const res = selAny.border_selection(maskRgba, width, height, radius, position) as Uint8Array | null;
+      return res && res.length === width * height * 4 ? (res instanceof Uint8Array ? res : new Uint8Array(res)) : null;
+    } catch {
+      return null;
+    }
+  }
+
   extractBoundaryMask(
     srcBuffer: Uint8Array,
     width: number,
@@ -517,6 +627,30 @@ class RustStrokeEngineWrapper {
       return SelectionCore.extract_boundary_mask(srcBuffer, width, height, isRgba);
     } catch (e) {
       console.warn('WASM SelectionCore.extract_boundary_mask fallback:', e);
+      return null;
+    }
+  }
+
+  extractBoundarySegments(
+    srcBuffer: Uint8Array,
+    width: number,
+    height: number,
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    isRgba = true,
+  ): Float32Array | null {
+    if (!this.available) return null;
+    try {
+      const fn = (SelectionCore as any).extract_boundary_segments;
+      if (typeof fn === 'function') {
+        const res = fn(srcBuffer, width, height, minX, minY, maxX, maxY, isRgba);
+        return new Float32Array(res);
+      }
+      return null;
+    } catch (e) {
+      console.warn('WASM SelectionCore.extract_boundary_segments fallback:', e);
       return null;
     }
   }
@@ -626,6 +760,32 @@ class RustStrokeEngineWrapper {
       return true;
     } catch (e) {
       console.warn('WASM ColorBlendCore.apply_tint_in_place fallback:', e);
+      return false;
+    }
+  }
+
+  mergeLayers(
+    dstRgba: Uint8ClampedArray,
+    srcRgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    blendMode: string,
+    opacity = 1.0,
+    lockAlpha = false,
+    clipMask?: Uint8ClampedArray,
+  ): boolean {
+    if (!this.available) return false;
+    const blendAny = ColorBlendCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof blendAny.merge_layers_simd !== 'function') return false;
+    const modeCode = BLEND_MODE_MAP[blendMode.toLowerCase()] ?? 0;
+    try {
+      const dst = new Uint8Array(dstRgba.buffer, dstRgba.byteOffset, dstRgba.byteLength);
+      const src = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const clip = clipMask
+        ? new Uint8Array(clipMask.buffer, clipMask.byteOffset, clipMask.byteLength)
+        : EMPTY_MAT;
+      return !!blendAny.merge_layers_simd(dst, src, width, height, modeCode, opacity, lockAlpha, clip);
+    } catch {
       return false;
     }
   }
@@ -836,6 +996,63 @@ class RustStrokeEngineWrapper {
     }
   }
 
+  generateScreentone(
+    rgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    frequencyLpi = 60,
+    angleDeg = 45,
+    dotShape = 0,
+  ): boolean {
+    if (!this.available) return false;
+    const filterAny = FilterCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof filterAny.generate_screentone !== 'function') return false;
+    try {
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      filterAny.generate_screentone(u8, width, height, frequencyLpi, angleDeg, dotShape);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  extractLineartTransparent(
+    rgba: Uint8ClampedArray,
+    darkness = 1.0,
+    threshold = 240,
+  ): boolean {
+    if (!this.available) return false;
+    const filterAny = FilterCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof filterAny.extract_lineart_transparent !== 'function') return false;
+    try {
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      filterAny.extract_lineart_transparent(u8, darkness, threshold);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  unsharpMask(
+    rgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    radius = 2.0,
+    amount = 1.5,
+    threshold = 2,
+  ): boolean {
+    if (!this.available) return false;
+    const filterAny = FilterCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof filterAny.unsharp_mask !== 'function') return false;
+    try {
+      const u8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      filterAny.unsharp_mask(u8, width, height, radius, amount, threshold);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   floodFillScanline(
     rgba: Uint8ClampedArray,
     width: number,
@@ -935,6 +1152,48 @@ class RustStrokeEngineWrapper {
       return new Uint8ClampedArray(res.buffer, res.byteOffset, res.byteLength);
     } catch (e) {
       console.warn('WASM TransformResampleCore.resample_affine fallback:', e);
+      return null;
+    }
+  }
+
+  meshWarpResample(
+    srcRgba: Uint8ClampedArray,
+    srcW: number,
+    srcH: number,
+    dstW: number,
+    dstH: number,
+    gridCols: number,
+    gridRows: number,
+    gridPoints: Float32Array,
+    mode: 'nearest' | 'bilinear' | 'bicubic' | 'lanczos' = 'bicubic',
+  ): Uint8ClampedArray | null {
+    if (!this.available) return null;
+    const resAny = TransformResampleCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof resAny.mesh_warp_resample !== 'function') return null;
+    try {
+      const u8Src = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const resMode =
+        mode === 'nearest'
+          ? ResampleMode.Nearest
+          : mode === 'bilinear'
+            ? ResampleMode.Bilinear
+            : mode === 'lanczos'
+              ? ResampleMode.Lanczos
+              : ResampleMode.Bicubic;
+      const res = resAny.mesh_warp_resample(
+        u8Src,
+        srcW,
+        srcH,
+        dstW,
+        dstH,
+        gridCols,
+        gridRows,
+        gridPoints,
+        resMode,
+      ) as Uint8Array | null;
+      if (!res || res.length === 0) return null;
+      return new Uint8ClampedArray(res.buffer, res.byteOffset, res.byteLength);
+    } catch {
       return null;
     }
   }

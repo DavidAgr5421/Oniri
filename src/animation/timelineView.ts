@@ -3,8 +3,9 @@ import type { BrushEngine } from '../brush/brushEngine';
 import { isTransformModalLocked } from '../selection/transformModal';
 import './timeline.css';
 import type { TimelineManager } from './timelineManager';
-import type { AnimationTrack, InterpolationType, TimeDisplayFormat } from './timelineModel';
+import type { AnimationTrack, AudioClip, InterpolationType, TimeDisplayFormat } from './timelineModel';
 import { openExportAnimationModal } from './exportAnimation';
+import { timelineAudioManager } from './audioManager';
 
 let cellWidth = 24;
 const MIN_CELL_WIDTH = 10;
@@ -341,6 +342,23 @@ export function mountTimelineView(
     render();
   });
   actionsGroup.appendChild(addTrackBtn);
+
+  // Add Audio Track
+  const addAudioTrackBtn = document.createElement('button');
+  addAudioTrackBtn.className = 'timeline-btn icon-only';
+  addAudioTrackBtn.title = 'Nueva Pista de Audio (Sincronización sonora y Lip-Sync)';
+  addAudioTrackBtn.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2">
+      <path d="M9 18V5l12-2v13"/>
+      <circle cx="6" cy="18" r="3"/>
+      <circle cx="18" cy="16" r="3"/>
+    </svg>
+  `;
+  addAudioTrackBtn.addEventListener('click', () => {
+    timeline.addAudioTrack();
+    render();
+  });
+  actionsGroup.appendChild(addAudioTrackBtn);
 
   // Add Cel
   const addCelBtn = document.createElement('button');
@@ -815,6 +833,103 @@ export function mountTimelineView(
       trackHeadersList.appendChild(item);
     }
 
+    // Audio Track Headers
+    for (const audioTrack of timeline.audioTracks) {
+      const aItem = document.createElement('div');
+      aItem.className = 'timeline-track-header-item audio-track-header';
+
+      const aIcon = document.createElement('span');
+      aIcon.style.marginRight = '4px';
+      aIcon.style.fontSize = '12px';
+      aIcon.textContent = '🎵';
+      aItem.appendChild(aIcon);
+
+      const aName = document.createElement('span');
+      aName.className = 'timeline-track-name';
+      aName.textContent = audioTrack.name;
+      aName.title = 'Doble clic para renombrar pista de audio';
+      aName.addEventListener('dblclick', (ev) => {
+        ev.stopPropagation();
+        const newName = prompt('Nombre de la pista de audio:', audioTrack.name);
+        if (newName && newName.trim()) {
+          timeline.renameAudioTrack(audioTrack.id, newName.trim());
+          render();
+        }
+      });
+      aItem.appendChild(aName);
+
+      // Mute toggle button
+      const muteBtn = document.createElement('button');
+      muteBtn.className = `timeline-audio-mute-btn ${audioTrack.muted ? 'muted' : ''}`;
+      muteBtn.title = audioTrack.muted ? 'Desmutear audio' : 'Silenciar pista (Mute)';
+      muteBtn.innerHTML = audioTrack.muted ? '🔇' : '🔊';
+      muteBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        timeline.toggleAudioTrackMute(audioTrack.id);
+        render();
+      });
+      aItem.appendChild(muteBtn);
+
+      // Load audio button
+      const loadAudioBtn = document.createElement('button');
+      loadAudioBtn.className = 'timeline-audio-load-btn';
+      loadAudioBtn.title = 'Cargar archivo de audio (.mp3, .wav, .ogg, .aac, .m4a)';
+      loadAudioBtn.innerHTML = `+ Audio`;
+
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'audio/*';
+      fileInput.style.display = 'none';
+      fileInput.addEventListener('change', async (ev) => {
+        const file = (ev.target as HTMLInputElement).files?.[0];
+        if (!file) return;
+        try {
+          const { audioBuffer, peaks, durationFrames } = await timelineAudioManager.decodeAudio(
+            file,
+            timeline.settings.fps
+          );
+          const clip: AudioClip = {
+            id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: file.name.replace(/\.[^/.]+$/, ''),
+            startFrame: timeline.settings.currentFrame,
+            durationFrames,
+            offsetSeconds: 0,
+            volume: 1.0,
+            audioBuffer,
+            peaks,
+            audioBlob: file,
+          };
+          timeline.addAudioClip(audioTrack.id, clip);
+          render();
+        } catch (err: any) {
+          console.error('Error al decodificar audio:', err);
+          alert('No se pudo decodificar el archivo de audio seleccionado.');
+        }
+      });
+      loadAudioBtn.appendChild(fileInput);
+      loadAudioBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        fileInput.click();
+      });
+      aItem.appendChild(loadAudioBtn);
+
+      // Delete audio track button
+      const delBtn = document.createElement('button');
+      delBtn.className = 'timeline-audio-delete-btn';
+      delBtn.title = 'Eliminar pista de audio';
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (confirm(`¿Eliminar pista de audio "${audioTrack.name}"?`)) {
+          timeline.removeAudioTrack(audioTrack.id);
+          render();
+        }
+      });
+      aItem.appendChild(delBtn);
+
+      trackHeadersList.appendChild(aItem);
+    }
+
     // Render Right Content (Ruler + Track Rows + End-of-Timeline Drag Handle + Playhead)
     gridContent.innerHTML = '';
     const minF = getMinFrame();
@@ -1175,6 +1290,90 @@ export function mountTimelineView(
       gridContent.appendChild(rowWrapper);
     }
 
+    // 3b. Audio Track Rows in Grid
+    for (const audioTrack of timeline.audioTracks) {
+      const aRow = document.createElement('div');
+      aRow.className = 'timeline-audio-row';
+      aRow.style.width = `${totalW}px`;
+
+      // Background frame cells
+      for (let f = minF; f <= totalFrames; f++) {
+        const cell = document.createElement('div');
+        cell.className = 'timeline-frame-cell';
+        if (f === 0) cell.classList.add('frame-zero-cell');
+        else if (f < 0) cell.classList.add('negative-frame-cell');
+        cell.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          timeline.goToFrame(f);
+        });
+        aRow.appendChild(cell);
+      }
+
+      // Render Audio Clips with Waveforms
+      for (const clip of audioTrack.clips) {
+        const clipStart = clip.startFrame;
+        const clipEnd = clip.startFrame + clip.durationFrames - 1;
+        const clipWidthPx = clip.durationFrames * cellWidth;
+
+        const clipEl = document.createElement('div');
+        clipEl.className = 'timeline-audio-clip';
+        clipEl.style.left = `${frameToX(clipStart)}px`;
+        clipEl.style.width = `${clipWidthPx}px`;
+        clipEl.title = `🎵 ${clip.name} (F${clipStart}..F${clipEnd}) - Arrastra para mover o recorta los bordes. Clic derecho para opciones.`;
+
+        // Waveform canvas
+        const wfCanvas = document.createElement('canvas');
+        wfCanvas.className = 'timeline-audio-waveform-canvas';
+        clipEl.appendChild(wfCanvas);
+        requestAnimationFrame(() => {
+          timelineAudioManager.renderWaveform(wfCanvas, clip, clipWidthPx, 34);
+        });
+
+        // Label
+        const label = document.createElement('span');
+        label.className = 'timeline-audio-label';
+        label.textContent = `🎵 ${clip.name}`;
+        clipEl.appendChild(label);
+
+        // Left trim grip
+        const leftGrip = document.createElement('div');
+        leftGrip.className = 'timeline-audio-grip left';
+        leftGrip.title = 'Arrastrar para recortar inicio';
+        attachAudioClipTrimDrag(leftGrip, audioTrack.id, clip, 'left');
+        clipEl.appendChild(leftGrip);
+
+        // Right trim grip
+        const rightGrip = document.createElement('div');
+        rightGrip.className = 'timeline-audio-grip right';
+        rightGrip.title = 'Arrastrar para recortar duración';
+        attachAudioClipTrimDrag(rightGrip, audioTrack.id, clip, 'right');
+        clipEl.appendChild(rightGrip);
+
+        // Clip body drag & drop
+        attachAudioClipBodyDrag(clipEl, audioTrack.id, clip);
+
+        // Context menu for clip (delete / volume)
+        clipEl.addEventListener('contextmenu', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const action = prompt(
+            `Opciones para "${clip.name}":\n1. Escribe "borrar" para eliminar\n2. Ingresa volumen 0..100% (actual: ${Math.round(clip.volume * 100)}%):`
+          );
+          if (action === 'borrar') {
+            timeline.removeAudioClip(audioTrack.id, clip.id);
+            render();
+          } else if (action && !isNaN(Number(action))) {
+            clip.volume = Math.max(0, Math.min(2, Number(action) / 100));
+            render();
+          }
+        });
+
+        aRow.appendChild(clipEl);
+      }
+
+      gridContent.appendChild(aRow);
+    }
+
     // 4. Playhead
     const playhead = document.createElement('div');
     playhead.className = 'timeline-playhead';
@@ -1207,6 +1406,85 @@ export function mountTimelineView(
         handle.classList.remove('dragging');
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // --- Helper: Drag Entire Audio Clip Along Timeline ---
+  function attachAudioClipBodyDrag(
+    clipEl: HTMLElement,
+    trackId: string,
+    clip: AudioClip
+  ): void {
+    clipEl.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0 || (e.target as HTMLElement).classList.contains('timeline-audio-grip')) return;
+      e.stopPropagation();
+      e.preventDefault();
+
+      clipEl.classList.add('dragging');
+      const startMouseX = e.clientX;
+      const initialStartFrame = clip.startFrame;
+
+      const onMove = (moveEv: MouseEvent) => {
+        const deltaPx = moveEv.clientX - startMouseX;
+        const deltaFrames = Math.round(deltaPx / cellWidth);
+        const newStart = initialStartFrame + deltaFrames;
+        clipEl.style.left = `${frameToX(newStart)}px`;
+      };
+
+      const onUp = (upEv: MouseEvent) => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        clipEl.classList.remove('dragging');
+        const deltaPx = upEv.clientX - startMouseX;
+        const deltaFrames = Math.round(deltaPx / cellWidth);
+        if (deltaFrames !== 0) {
+          timeline.moveAudioClip(trackId, clip.id, initialStartFrame + deltaFrames);
+          render();
+        }
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // --- Helper: Trim Audio Clip In-Point or Duration ---
+  function attachAudioClipTrimDrag(
+    grip: HTMLElement,
+    trackId: string,
+    clip: AudioClip,
+    edge: 'left' | 'right'
+  ): void {
+    grip.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+
+      const origStart = clip.startFrame;
+      const origDur = clip.durationFrames;
+      const origEnd = origStart + origDur - 1;
+
+      const onMove = (moveEv: MouseEvent) => {
+        const f = clientXToFrame(moveEv.clientX, true);
+        if (edge === 'left') {
+          const clampedStart = Math.min(f, origEnd);
+          const newDur = origEnd - clampedStart + 1;
+          timeline.trimAudioClip(trackId, clip.id, clampedStart, newDur);
+        } else {
+          const clampedEnd = Math.max(f, origStart);
+          const newDur = clampedEnd - origStart + 1;
+          timeline.trimAudioClip(trackId, clip.id, origStart, newDur);
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        render();
       };
 
       window.addEventListener('mousemove', onMove);

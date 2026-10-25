@@ -1,4 +1,13 @@
-export type LayerType = 'raster' | 'folder';
+import { rustStrokeEngine } from './rustStrokeEngine';
+import {
+  ADJUSTMENT_LABELS,
+  cloneAdjustment,
+  createDefaultAdjustment,
+  type AdjustmentKind,
+  type AdjustmentParams,
+} from './adjustments';
+
+export type LayerType = 'raster' | 'folder' | 'adjustment';
 
 export interface LayerNode {
   id: string;
@@ -21,6 +30,7 @@ export interface LayerNode {
   layerColor?: string; // Hex color (default '#00a0e9')
   boundBoneId?: string | null; // Rigid cutout binding to a Bone2D
   meshSkinningEnabled?: boolean; // Automatic multi-bone LBS mesh deformation
+  adjustment?: AdjustmentParams; // Non-destructive adjustment (only when type === 'adjustment')
   offsetX?: number; // Layer position offset X relative to canvas (allows moving & unclipped pixels)
   offsetY?: number; // Layer position offset Y relative to canvas (allows moving & unclipped pixels)
 }
@@ -31,6 +41,8 @@ export interface LayerManager {
   createLayer(name?: string, parentId?: string | null, isPaper?: boolean, fillColor?: string): LayerNode;
   createFolder(name?: string, parentId?: string | null, isAnimationFolder?: boolean): LayerNode;
   createAnimationFolder(name?: string): LayerNode;
+  createAdjustmentLayer(kind: AdjustmentKind, name?: string): LayerNode;
+  setAdjustment(id: string, params: AdjustmentParams): void;
   duplicateLayer(id?: string): LayerNode | null;
   mergeLayerBelow(id?: string): boolean;
   clearLayer(id?: string): boolean;
@@ -237,6 +249,39 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     createAnimationFolder(name) {
       return manager.createFolder(name, null, true);
     },
+    createAdjustmentLayer(kind, name) {
+      counter++;
+      let targetParent: string | null = null;
+      const active = layers.find((l) => l.id === activeId);
+      if (active?.type === 'folder') targetParent = active.id;
+      else if (active?.parentId) targetParent = active.parentId;
+
+      const node: LayerNode = {
+        id: `adjust-${Date.now()}-${counter}`,
+        type: 'adjustment',
+        name: name || ADJUSTMENT_LABELS[kind],
+        visible: true,
+        opacity: 1,
+        blendMode: 'source-over',
+        parentId: targetParent,
+        collapsed: false,
+        clipped: false,
+        locked: false,
+        adjustment: createDefaultAdjustment(kind),
+      };
+      const activeIdx = layers.findIndex((l) => l.id === activeId);
+      if (activeIdx !== -1) layers.splice(activeIdx + 1, 0, node);
+      else layers.push(node);
+      activeId = node.id;
+      notify();
+      return node;
+    },
+    setAdjustment(id, params) {
+      const node = layers.find((l) => l.id === id);
+      if (!node || node.type !== 'adjustment') return;
+      node.adjustment = params;
+      notify();
+    },
     duplicateLayer(id) {
       const targetId = id || activeId;
       const target = layers.find((l) => l.id === targetId);
@@ -277,6 +322,24 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
         activeId = newLayer.id;
         notify();
         return newLayer;
+      } else if (target.type === 'adjustment') {
+        const copy: LayerNode = {
+          id: `adjust-${Date.now()}-${counter}`,
+          type: 'adjustment',
+          name: `${target.name} (copia)`,
+          visible: target.visible,
+          opacity: target.opacity,
+          blendMode: target.blendMode,
+          parentId: target.parentId,
+          collapsed: false,
+          clipped: target.clipped,
+          locked: false,
+          adjustment: target.adjustment ? cloneAdjustment(target.adjustment) : undefined,
+        };
+        layers.splice(targetIdx + 1, 0, copy);
+        activeId = copy.id;
+        notify();
+        return copy;
       } else {
         const newFolder: LayerNode = {
           id: `folder-${Date.now()}-${counter}`,
@@ -316,12 +379,32 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       const lower = layers[lowerIdx];
       if (lower.isPaper || !lower.context || lower.locked) return false;
 
-      // Draw upper onto lower with upper's opacity and blendMode
-      lower.context.save();
-      lower.context.globalAlpha = upper.opacity;
-      lower.context.globalCompositeOperation = upper.blendMode;
-      lower.context.drawImage(upper.canvas, 0, 0);
-      lower.context.restore();
+      // Blend upper onto lower with Rust SIMD / Canvas2D fallback
+      let rustMerged = false;
+      if (rustStrokeEngine.available && upper.context && lower.context) {
+        const dstImg = lower.context.getImageData(0, 0, currentDocW, currentDocH);
+        const srcImg = upper.context.getImageData(0, 0, currentDocW, currentDocH);
+        rustMerged = rustStrokeEngine.mergeLayers(
+          dstImg.data,
+          srcImg.data,
+          currentDocW,
+          currentDocH,
+          upper.blendMode,
+          upper.opacity,
+          !!lower.lockAlpha,
+        );
+        if (rustMerged) {
+          lower.context.putImageData(dstImg, 0, 0);
+        }
+      }
+
+      if (!rustMerged) {
+        lower.context.save();
+        lower.context.globalAlpha = upper.opacity;
+        lower.context.globalCompositeOperation = upper.blendMode;
+        lower.context.drawImage(upper.canvas, 0, 0);
+        lower.context.restore();
+      }
 
       // Remove upper layer
       layers.splice(targetIdx, 1);

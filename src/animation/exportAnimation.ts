@@ -1,11 +1,11 @@
-import { zipSync } from 'fflate';
+import { zipSync, deflateSync } from 'fflate';
 import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from './timelineManager';
 import { encodeGif, quantizeRgba, type GifFrameInput, type IndexedGifFrame } from './gifEncoder';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
 
-export type ExportAnimationFormat = 'gif' | 'video' | 'png_sequence';
+export type ExportAnimationFormat = 'gif' | 'apng' | 'video' | 'png_sequence';
 
 export interface ExportAnimationConfig {
   format: ExportAnimationFormat;
@@ -115,21 +115,37 @@ export async function exportAnimationAsPngSequence(
   config: ExportAnimationConfig
 ): Promise<Uint8Array> {
   const zipFiles: Record<string, Uint8Array> = {};
+  const pngJobs: Promise<void>[] = [];
 
   await streamFrames(engine, timeline, config, async (canvas, idx, total) => {
-    config.onProgress?.(idx, total, `Codificando PNG fotograma ${idx} de ${total}...`);
+    config.onProgress?.(idx, total, `Capturando fotograma ${idx} de ${total}...`);
     const frameNum = config.startFrame + idx - 1;
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-    if (blob) {
-      const buf = await blob.arrayBuffer();
-      const filename = `frame_${String(frameNum).padStart(4, '0')}.png`;
-      zipFiles[filename] = new Uint8Array(buf);
-    }
+    const filename = `frame_${String(frameNum).padStart(4, '0')}.png`;
+
+    // Clona el canvas para que la compresión PNG se ejecute en paralelo sin bloquear el avance
+    const clone = document.createElement('canvas');
+    clone.width = canvas.width;
+    clone.height = canvas.height;
+    clone.getContext('2d')!.drawImage(canvas, 0, 0);
+
+    const job = new Promise<void>((resolve) => {
+      clone.toBlob(async (blob) => {
+        if (blob) {
+          const buf = await blob.arrayBuffer();
+          zipFiles[filename] = new Uint8Array(buf);
+        }
+        resolve();
+      }, 'image/png');
+    });
+    pngJobs.push(job);
   });
 
   const totalFrames = config.endFrame - config.startFrame + 1;
-  config.onProgress?.(totalFrames, totalFrames, 'Empaquetando archivo ZIP de secuencia...');
-  return zipSync(zipFiles, { level: 4 });
+  config.onProgress?.(totalFrames, totalFrames, 'Finalizando codificación PNG concurrente...');
+  await Promise.all(pngJobs);
+
+  config.onProgress?.(totalFrames, totalFrames, 'Empaquetando archivo ZIP ultrarrápido...');
+  return zipSync(zipFiles, { level: 1 });
 }
 
 /**
@@ -200,6 +216,142 @@ export async function exportAnimationAsVideo(
   return recordingPromise;
 }
 
+const CRC_TABLE = new Uint32Array(256);
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) {
+    c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  }
+  CRC_TABLE[n] = c;
+}
+
+function crc32(buf: Uint8Array): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function makePngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typeBytes = new TextEncoder().encode(type);
+  const len = data.length;
+  const chunk = new Uint8Array(4 + 4 + len + 4);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, len);
+  chunk.set(typeBytes, 4);
+  chunk.set(data, 8);
+  const crcData = chunk.subarray(4, 8 + len);
+  view.setUint32(8 + len, crc32(crcData));
+  return chunk;
+}
+
+function compressRawFrame(rgba: Uint8ClampedArray, width: number, height: number): Uint8Array {
+  const lineSize = 1 + width * 4;
+  const rawData = new Uint8Array(height * lineSize);
+  for (let y = 0; y < height; y++) {
+    const rawOffset = y * lineSize;
+    rawData[rawOffset] = 0; // Filter None
+    const srcOffset = y * width * 4;
+    rawData.set(rgba.subarray(srcOffset, srcOffset + width * 4), rawOffset + 1);
+  }
+  return deflateSync(rawData, { level: 4 });
+}
+
+export function encodeApng(
+  frames: Uint8ClampedArray[],
+  width: number,
+  height: number,
+  fps: number,
+  loopCount: number,
+): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  const signature = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  // IHDR chunk (13 bytes)
+  const ihdr = new Uint8Array(13);
+  const ihdrView = new DataView(ihdr.buffer);
+  ihdrView.setUint32(0, width);
+  ihdrView.setUint32(4, height);
+  ihdr[8] = 8; // 8-bit depth
+  ihdr[9] = 6; // RGBA color type
+  ihdr[10] = 0; // deflate
+  ihdr[11] = 0; // standard filter
+  ihdr[12] = 0; // no interlace
+  chunks.push(makePngChunk('IHDR', ihdr));
+
+  // acTL chunk (8 bytes)
+  const actl = new Uint8Array(8);
+  const actlView = new DataView(actl.buffer);
+  actlView.setUint32(0, frames.length);
+  actlView.setUint32(4, loopCount); // 0 = infinite
+  chunks.push(makePngChunk('acTL', actl));
+
+  let seqNum = 0;
+
+  for (let f = 0; f < frames.length; f++) {
+    // fcTL chunk (26 bytes)
+    const fctl = new Uint8Array(26);
+    const fctlView = new DataView(fctl.buffer);
+    fctlView.setUint32(0, seqNum++);
+    fctlView.setUint32(4, width);
+    fctlView.setUint32(8, height);
+    fctlView.setUint32(12, 0); // x offset
+    fctlView.setUint32(16, 0); // y offset
+    fctlView.setUint16(20, 1); // delay numerator
+    fctlView.setUint16(22, Math.max(1, fps)); // delay denominator
+    fctl[24] = 1; // dispose_op: background clear
+    fctl[25] = 0; // blend_op: source
+    chunks.push(makePngChunk('fcTL', fctl));
+
+    const compressed = compressRawFrame(frames[f], width, height);
+
+    if (f === 0) {
+      chunks.push(makePngChunk('IDAT', compressed));
+    } else {
+      const fdatData = new Uint8Array(4 + compressed.length);
+      const fdatView = new DataView(fdatData.buffer);
+      fdatView.setUint32(0, seqNum++);
+      fdatData.set(compressed, 4);
+      chunks.push(makePngChunk('fdAT', fdatData));
+    }
+  }
+
+  chunks.push(makePngChunk('IEND', new Uint8Array(0)));
+
+  let totalLen = signature.length;
+  for (const c of chunks) totalLen += c.length;
+
+  const result = new Uint8Array(totalLen);
+  result.set(signature, 0);
+  let offset = signature.length;
+  for (const c of chunks) {
+    result.set(c, offset);
+    offset += c.length;
+  }
+
+  return result;
+}
+
+export async function exportAnimationAsApng(
+  engine: BrushEngine,
+  timeline: TimelineManager,
+  config: ExportAnimationConfig,
+): Promise<Uint8Array> {
+  const { width, height, fps, loopCount } = config;
+  const totalFrames = config.endFrame - config.startFrame + 1;
+  const rawFrames: Uint8ClampedArray[] = [];
+
+  await streamFrames(engine, timeline, config, (canvas, idx, total) => {
+    config.onProgress?.(idx, total, `Renderizando fotograma APNG ${idx} de ${total}...`);
+    const imgData = canvas.getContext('2d')!.getImageData(0, 0, width, height);
+    rawFrames.push(imgData.data);
+  });
+
+  config.onProgress?.(totalFrames, totalFrames, 'Codificando flujo APNG de 32 bits...');
+  return encodeApng(rawFrames, width, height, fps, loopCount);
+}
+
 /**
  * Downloads a binary blob to the user's filesystem.
  */
@@ -247,10 +399,11 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
           <label style="display: block; font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 700; margin-bottom: 6px;">
             Formato de Exportación
           </label>
-          <div class="csp-seg-group" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;">
-            <button class="csp-seg-btn active" data-format="gif">🎞️ GIF Animado</button>
-            <button class="csp-seg-btn" data-format="video">🎬 Película (Video)</button>
-            <button class="csp-seg-btn" data-format="png_sequence">📁 Secuencia PNG</button>
+          <div class="csp-seg-group" style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px;">
+            <button class="csp-seg-btn active" data-format="gif">🎞️ GIF</button>
+            <button class="csp-seg-btn" data-format="apng">✨ APNG 32b</button>
+            <button class="csp-seg-btn" data-format="video">🎬 Video</button>
+            <button class="csp-seg-btn" data-format="png_sequence">📁 Secuencia</button>
           </div>
         </div>
 
@@ -356,7 +509,7 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
       formatBtns.forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       selectedFormat = btn.dataset.format as ExportAnimationFormat;
-      gifOptsBox.style.display = selectedFormat === 'gif' ? 'flex' : 'none';
+      gifOptsBox.style.display = (selectedFormat === 'gif' || selectedFormat === 'apng') ? 'flex' : 'none';
     });
   });
 
@@ -428,6 +581,10 @@ export function openExportAnimationModal(engine: BrushEngine, timeline: Timeline
         const gifBytes = await exportAnimationAsGif(engine, timeline, config);
         const blob = new Blob([gifBytes as any], { type: 'image/gif' });
         downloadBlob(blob, `animacion_${width}x${height}.gif`);
+      } else if (selectedFormat === 'apng') {
+        const apngBytes = await exportAnimationAsApng(engine, timeline, config);
+        const blob = new Blob([apngBytes as any], { type: 'image/png' });
+        downloadBlob(blob, `animacion_${width}x${height}.png`);
       } else if (selectedFormat === 'video') {
         const videoBlob = await exportAnimationAsVideo(engine, timeline, config);
         const isMp4 = videoBlob.type.includes('mp4');

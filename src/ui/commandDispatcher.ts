@@ -4,7 +4,7 @@ import { ensureClipboardHelper, schedulePasteFallback } from '../storage/clipboa
 export interface CommandItem {
   id: string;
   label: string;
-  category: 'file' | 'edit' | 'animation' | 'layer' | 'select' | 'view' | 'filter' | 'window' | 'help';
+  category: 'file' | 'edit' | 'animation' | 'layer' | 'select' | 'view' | 'filter' | 'window' | 'help' | 'ruler';
   shortcut?: string;
   aliases?: string[];
   icon?: string;

@@ -1,5 +1,8 @@
 import type { LayerNode } from '../brush/layers';
 import type { Bone2D, SkeletonKeyframe } from './boneModel';
+import type { AudioClip, AudioTrack } from './audioModel';
+
+export type { AudioClip, AudioTrack };
 
 export type InterpolationType = 'hold' | 'linear' | 'smooth';
 
@@ -58,6 +61,7 @@ export interface AnimationScene {
   tracks: AnimationTrack[];
   bones: Bone2D[];
   boneKeyframes: Map<number, SkeletonKeyframe>;
+  audioTracks: AudioTrack[];
 }
 
 export interface OnionSkinTransform {

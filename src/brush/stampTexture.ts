@@ -9,6 +9,8 @@ const PADDING = 2;
 
 subscribeTextureAssets(() => {
   cache.clear();
+  lastMicroKey = '';
+  lastMicroStamp = null;
 });
 
 // Anti-aliasing transition width in pixels.
@@ -36,6 +38,8 @@ export interface StampTextureOptions {
 }
 
 const cache = new Map<string, HTMLCanvasElement>();
+let lastMicroKey = '';
+let lastMicroStamp: HTMLCanvasElement | null = null;
 
 function parseHexColor(hex: string): [number, number, number] {
   const value = hex.startsWith('#') ? hex.slice(1) : hex;
@@ -154,9 +158,51 @@ function buildStamp(
     }
   }
 
-  let i = 0;
+  const u32 = new Uint32Array(image.data.buffer);
+  const color32 = (cr) | (cg << 8) | (cb << 16);
+  const invBand = band > 0.0001 ? 1.0 / band : 0;
+  const halfBand = band * 0.5;
+
+  // Ultra-fast path for pure circular brushes without custom material texture (the vast majority of brushes)
+  if (!isBox && !isCalligraphic && !matData && scaleY >= 0.999) {
+    const rInner = Math.max(0, r - halfBand);
+    const rOuter = r + halfBand;
+    const rInner2 = rInner * rInner;
+    const rOuter2 = rOuter * rOuter;
+
+    let pIdx = 0;
+    for (let y = 0; y < size; y++) {
+      const rawUy = y + 0.5 - half;
+      const uy2 = rawUy * rawUy;
+      for (let x = 0; x < size; x++) {
+        const rawUx = x + 0.5 - half;
+        const d2 = rawUx * rawUx + uy2;
+        if (d2 >= rOuter2) {
+          u32[pIdx++] = 0;
+          continue;
+        }
+        if (d2 <= rInner2) {
+          u32[pIdx++] = color32 | 0xff000000;
+          continue;
+        }
+        const sd = Math.sqrt(d2) - r;
+        let a = binary ? (sd < 0 ? 1 : 0) : (halfBand - sd) * invBand;
+        if (a < 0) a = 0;
+        else if (a > 1) a = 1;
+        if (threshold) a = a >= 0.45 ? 1 : 0;
+        u32[pIdx++] = color32 | (Math.round(a * 255) << 24);
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvas;
+  }
+
+  let pIdx = 0;
   for (let y = 0; y < size; y++) {
     const rawUy = y + 0.5 - half;
+    const uyScaled = rawUy / scaleY;
+    const uyScaled2 = uyScaled * uyScaled;
+
     for (let x = 0; x < size; x++) {
       const rawUx = x + 0.5 - half;
       let sd: number;
@@ -169,7 +215,7 @@ function buildStamp(
         const dy = Math.abs(rawUy) - halfH;
         const ox = dx > 0 ? dx : 0;
         const oy = dy > 0 ? dy : 0;
-        sd = Math.hypot(ox, oy) + Math.min(Math.max(dx, dy), 0);
+        sd = Math.sqrt(ox * ox + oy * oy) + Math.min(Math.max(dx, dy), 0);
       } else if (isCalligraphic) {
         // True 45-degree calligraphy wedge chisel ribbon
         const rotX = (rawUx + rawUy) * Math.SQRT1_2;
@@ -180,11 +226,10 @@ function buildStamp(
         const dy = Math.abs(rotY) - halfH;
         const ox = dx > 0 ? dx : 0;
         const oy = dy > 0 ? dy : 0;
-        sd = Math.hypot(ox, oy) + Math.min(Math.max(dx, dy), 0);
+        sd = Math.sqrt(ox * ox + oy * oy) + Math.min(Math.max(dx, dy), 0);
       } else {
-        // Round / Elliptic tip
-        const uy = rawUy / scaleY;
-        sd = Math.hypot(rawUx, uy) - r;
+        // Elliptic tip
+        sd = Math.sqrt(rawUx * rawUx + uyScaled2) - r;
       }
 
       let matFactor = 1.0;
@@ -199,7 +244,8 @@ function buildStamp(
         if (isGasa) {
           // Rough nib (gasagasa): organic rough nib edge perturbation + porous core
           const angleIdx = Math.floor(((Math.atan2(localY, localX) + Math.PI) / (Math.PI * 2)) * matH) % matH;
-          const radIdx = Math.min(matW - 1, Math.floor(Math.min(1, Math.hypot(localX / halfW, localY / halfH)) * matW));
+          const radNorm = Math.sqrt((localX / halfW) * (localX / halfW) + (localY / halfH) * (localY / halfH));
+          const radIdx = Math.min(matW - 1, Math.floor(Math.min(1, radNorm) * matW));
           const polarAlpha = matData[(angleIdx * matW + radIdx) * 4 + 3] / 255;
           const edgeJitter = (polarAlpha - 0.48) * Math.min(3.2, Math.max(0.8, r * 0.34));
           sd -= edgeJitter;
@@ -224,18 +270,14 @@ function buildStamp(
       if (binary) {
         a = sd < 0 ? 1 : 0;
       } else {
-        a = (band * 0.5 - sd) / band;
+        a = (halfBand - sd) * invBand;
         if (a < 0) a = 0;
         else if (a > 1) a = 1;
       }
       a *= matFactor;
       if (threshold) a = a >= 0.45 ? 1 : 0;
 
-      data[i] = cr;
-      data[i + 1] = cg;
-      data[i + 2] = cb;
-      data[i + 3] = Math.round(a * 255);
-      i += 4;
+      u32[pIdx++] = color32 | (Math.round(a * 255) << 24);
     }
   }
 
@@ -337,10 +379,21 @@ export function getStampTexture(options: StampTextureOptions): HTMLCanvasElement
     diameter > 14 ? 0.5 :
     0.25;
   const quantized = Math.max(0.4, Math.round(diameter / step) * step);
-  const key = `${quantized.toFixed(2)}:${hardness.toFixed(3)}:${color}:${antiAliasing}:${tipShape}:${tipRoundness.toFixed(2)}:${thicknessDirection}:${tipTexture}${dualKey}`;
+  const qDiam = Math.round(quantized * 100);
+  const qHard = Math.round(hardness * 1000);
+  const qRound = Math.round(tipRoundness * 100);
+  const key = `${qDiam}_${qHard}_${color}_${antiAliasing}_${tipShape}_${qRound}_${thicknessDirection}_${tipTexture}${dualKey}`;
+
+  // Instant zero-cost hit for consecutive dabs with identical settings/diameter
+  if (key === lastMicroKey && lastMicroStamp !== null) {
+    brushDiagnostics.recordStamp(true);
+    return lastMicroStamp;
+  }
 
   let stamp = cache.get(key);
   if (stamp) {
+    lastMicroKey = key;
+    lastMicroStamp = stamp;
     // Map iteration order is the eviction order, so touching the entry keeps
     // the stamps of the stroke being drawn away from the eviction limit.
     cache.delete(key);
@@ -416,10 +469,14 @@ export function getStampTexture(options: StampTextureOptions): HTMLCanvasElement
   }
   const buildDuration = performance.now() - t0;
   brushDiagnostics.recordStamp(false, buildDuration);
+  lastMicroKey = key;
+  lastMicroStamp = stamp;
   cache.set(key, stamp);
   return stamp;
 }
 
 export function clearStampCache(): void {
   cache.clear();
+  lastMicroKey = '';
+  lastMicroStamp = null;
 }

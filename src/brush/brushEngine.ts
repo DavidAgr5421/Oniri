@@ -11,6 +11,7 @@ import { floodFill } from './floodFill';
 import { executeSmartFill, executeEncloseAndFill, executePaintUnfilledArea } from './smartFill';
 import { createHistoryManager, HistoryManager, type Rect } from './history';
 import { createLayerManager, getRenderOrder, LayerManager, LayerNode } from './layers';
+import { applyAdjustmentToContext } from './adjustments';
 import { drawShape } from './shapeDrawer';
 import { getStampTexture } from './stampTexture';
 import type { TiltFootprint } from './pressureResponse';
@@ -358,6 +359,7 @@ export function createBrushEngine(): BrushEngine {
   let topLayersDirty = false;
   let liveStrokeOpacity = 1.0;
   let liveStrokeBounds: { x: number; y: number; w: number; h: number } | null = null;
+  let prevLiveStrokeBounds: { x: number; y: number; w: number; h: number } | null = null;
   let hasPredictions = false;
   let strokeBoundsMinX = 0;
   let strokeBoundsMinY = 0;
@@ -418,6 +420,7 @@ export function createBrushEngine(): BrushEngine {
     pressure: number,
     angleRad: number,
     tipTextureOverride?: TipTextureId,
+    skipBounds = false,
   ): void {
     const s = strokeSettings;
     const effectiveTip = tipTextureOverride !== undefined ? tipTextureOverride : s.tipTexture;
@@ -575,28 +578,32 @@ export function createBrushEngine(): BrushEngine {
       roundness >= 0.999 &&
       (!effectiveTip || effectiveTip === 'default');
 
-    const padB = Math.ceil(Math.max(w, h) * 0.6) + 4;
-    if (x - padB < strokeBoundsMinX) strokeBoundsMinX = Math.max(0, Math.floor(x - padB));
-    if (y - padB < strokeBoundsMinY) strokeBoundsMinY = Math.max(0, Math.floor(y - padB));
-    if (x + padB > strokeBoundsMaxX) strokeBoundsMaxX = Math.min(curDocW, Math.ceil(x + padB));
-    if (y + padB > strokeBoundsMaxY) strokeBoundsMaxY = Math.min(curDocH, Math.ceil(y + padB));
+    if (!skipBounds) {
+      const padB = Math.ceil(Math.max(w, h) * 0.6) + 4;
+      if (x - padB < strokeBoundsMinX) strokeBoundsMinX = Math.max(0, Math.floor(x - padB));
+      if (y - padB < strokeBoundsMinY) strokeBoundsMinY = Math.max(0, Math.floor(y - padB));
+      if (x + padB > strokeBoundsMaxX) strokeBoundsMaxX = Math.min(curDocW, Math.ceil(x + padB));
+      if (y + padB > strokeBoundsMaxY) strokeBoundsMaxY = Math.min(curDocH, Math.ceil(y + padB));
+    }
 
-    ctx.save();
-    if (erase) {
-      ctx.globalCompositeOperation = 'destination-out';
-    } else if (s.compositeMode === 'lighter') {
-      ctx.globalCompositeOperation = 'lighter';
+    const targetComp = erase
+      ? 'destination-out'
+      : (s.compositeMode === 'lighter' ? 'lighter' : 'source-over');
+    if (ctx.globalCompositeOperation !== targetComp) {
+      ctx.globalCompositeOperation = targetComp;
     }
     ctx.globalAlpha = Math.min(1, Math.max(0, alpha));
+
     if (!symmetric && stampAngle !== 0) {
-      ctx.translate(x, y);
-      ctx.rotate(stampAngle);
-      ctx.drawImage(stampCanvas, -w / 2, -h / 2);
+      const cos = Math.cos(stampAngle);
+      const sin = Math.sin(stampAngle);
+      ctx.setTransform(cos, sin, -sin, cos, x, y);
+      ctx.drawImage(stampCanvas, -w * 0.5, -h * 0.5);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     } else {
-      // Padded texture drawn from its center: true sub-pixel positioning.
-      ctx.drawImage(stampCanvas, x - w / 2, y - h / 2);
+      // Padded texture drawn from its center: true sub-pixel positioning without transform matrix push
+      ctx.drawImage(stampCanvas, x - w * 0.5, y - h * 0.5);
     }
-    ctx.restore();
   }
 
   function stampAlong(
@@ -610,10 +617,30 @@ export function createBrushEngine(): BrushEngine {
     p1: number,
   ): void {
     const s = strokeSettings;
+    const targetComp = erase
+      ? 'destination-out'
+      : (s.compositeMode === 'lighter' ? 'lighter' : 'source-over');
+    if (ctx.globalCompositeOperation !== targetComp) {
+      ctx.globalCompositeOperation = targetComp;
+    }
 
     if (rustStrokeEngine.available) {
       const batch = rustStrokeEngine.addPoint(x1, y1, p1);
       if (!batch || batch.count === 0) return;
+
+      // Ultra-fast batch-level dirty rect update calculated natively by Rust
+      if (batch.dirtyRect[0] <= batch.dirtyRect[2]) {
+        const pad = Math.ceil(s.size * 0.6) + 8;
+        const bMinX = Math.max(0, Math.floor(batch.dirtyRect[0] - pad));
+        const bMinY = Math.max(0, Math.floor(batch.dirtyRect[1] - pad));
+        const bMaxX = Math.min(curDocW, Math.ceil(batch.dirtyRect[2] + pad));
+        const bMaxY = Math.min(curDocH, Math.ceil(batch.dirtyRect[3] + pad));
+        if (bMinX < strokeBoundsMinX) strokeBoundsMinX = bMinX;
+        if (bMinY < strokeBoundsMinY) strokeBoundsMinY = bMinY;
+        if (bMaxX > strokeBoundsMaxX) strokeBoundsMaxX = bMaxX;
+        if (bMaxY > strokeBoundsMaxY) strokeBoundsMaxY = bMaxY;
+      }
+
       const dabs = batch.dabs;
       for (let i = 0; i < batch.count; i++) {
         const base = i * DAB_STRIDE;
@@ -625,7 +652,7 @@ export function createBrushEngine(): BrushEngine {
         const tipIdx = dabs[base + 6];
         lastAngleRad = angle;
         const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, s.tipTexture);
-        stampAt(ctx, erase, dx, dy, diam, press, angle, activeTip);
+        stampAt(ctx, erase, dx, dy, diam, press, angle, activeTip, true);
       }
       return;
     }
@@ -730,7 +757,21 @@ export function createBrushEngine(): BrushEngine {
       lmH = Math.min(curDocH, maxBY + pad) - lmY;
     }
 
-    liveStrokeContext.clearRect(lmX, lmY, lmW, lmH);
+    // Clear the union of current bounds and previous bounds so retreating bounds (e.g. prediction) never leave ghost artifacts
+    let clrX = lmX;
+    let clrY = lmY;
+    let clrW = lmW;
+    let clrH = lmH;
+    if (prevLiveStrokeBounds) {
+      clrX = Math.min(lmX, prevLiveStrokeBounds.x);
+      clrY = Math.min(lmY, prevLiveStrokeBounds.y);
+      const maxCX = Math.max(lmX + lmW, prevLiveStrokeBounds.x + prevLiveStrokeBounds.w);
+      const maxCY = Math.max(lmY + lmH, prevLiveStrokeBounds.y + prevLiveStrokeBounds.h);
+      clrW = Math.min(curDocW, maxCX) - clrX;
+      clrH = Math.min(curDocH, maxCY) - clrY;
+    }
+
+    liveStrokeContext.clearRect(clrX, clrY, clrW, clrH);
     liveStrokeContext.drawImage(strokeCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
     if (hasPredictions) {
       liveStrokeContext.drawImage(predictedCanvas, lmX, lmY, lmW, lmH, lmX, lmY, lmW, lmH);
@@ -756,7 +797,8 @@ export function createBrushEngine(): BrushEngine {
         liveStrokeContext.restore();
       }
     }
-    liveStrokeBounds = { x: lmX, y: lmY, w: lmW, h: lmH };
+    liveStrokeBounds = { x: clrX, y: clrY, w: clrW, h: clrH };
+    prevLiveStrokeBounds = { x: lmX, y: lmY, w: lmW, h: lmH };
     liveStrokeDirty = true;
   }
 
@@ -984,8 +1026,10 @@ export function createBrushEngine(): BrushEngine {
     isLivePainting = false;
     useOverlayPlanes = false;
     hasTopLayers = false;
+    prevLiveStrokeBounds = null;
     liveStrokeBounds = null;
     liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
+    liveStrokeDirty = true;
     engine.compositeDirty = true;
     updateComposite();
     mode = null;
@@ -1098,7 +1142,8 @@ export function createBrushEngine(): BrushEngine {
         mode !== 'paint' ||
         activeDrawable.lockAlpha ||
         activeDrawable.useLayerColor ||
-        selectionModel.hasSelection()
+        selectionModel.hasSelection() ||
+        layerManager.layers.some((l) => l.type === 'adjustment' && l.visible && !!l.adjustment)
       ) {
         useOverlayPlanes = false;
         isLivePainting = false;
@@ -1442,6 +1487,9 @@ export function createBrushEngine(): BrushEngine {
     // 3. Filter visible non-paper raster layers (respecting animation timeline active cels & folder hierarchy)
     const renderOrdered = getRenderOrder(layerManager.layers);
     const visibleLayers = renderOrdered.filter((l) => {
+      if (l.type === 'adjustment') {
+        return !!l.adjustment && isEffectivelyVisible(l, layerMap);
+      }
       if (l.type !== 'raster' || !l.canvas || l.isPaper) return false;
       if (!isEffectivelyVisible(l, layerMap)) return false;
       if (timelineManager && l.parentId) {
@@ -1459,6 +1507,14 @@ export function createBrushEngine(): BrushEngine {
         const baseLayer = list[i];
         const baseOpacity = getEffectiveOpacity(baseLayer, layerMap);
 
+        if (baseLayer.type === 'adjustment') {
+          if (baseLayer.adjustment) {
+            applyAdjustmentToContext(targetCtx, baseLayer.adjustment, baseOpacity, curDocW, curDocH);
+          }
+          i++;
+          continue;
+        }
+
         const clippedGroup: LayerNode[] = [];
         let j = i + 1;
         while (j < list.length && list[j].clipped) {
@@ -1475,6 +1531,14 @@ export function createBrushEngine(): BrushEngine {
 
           for (const clipped of clippedGroup) {
             const clippedOpacity = getEffectiveOpacity(clipped, layerMap);
+
+            if (clipped.type === 'adjustment') {
+              // El ajuste preserva alfa: aplicarlo al grupo lo recorta naturalmente a la capa base.
+              if (clipped.adjustment) {
+                applyAdjustmentToContext(groupContext, clipped.adjustment, clippedOpacity, curDocW, curDocH);
+              }
+              continue;
+            }
 
             clipContext.clearRect(0, 0, curDocW, curDocH);
             renderLayerTo(clipContext, clipped, clippedOpacity);
@@ -1565,6 +1629,7 @@ export function createBrushEngine(): BrushEngine {
     strokeBoundsMinY = curDocH;
     strokeBoundsMaxX = 0;
     strokeBoundsMaxY = 0;
+    prevLiveStrokeBounds = null;
     liveStrokeBounds = null;
 
     strokePickedColor = null;
@@ -1580,6 +1645,17 @@ export function createBrushEngine(): BrushEngine {
     if (rustStrokeEngine.available) {
       const batch = rustStrokeEngine.startStroke(x, y, pressure, strokeSettings, isCurrentStrokeMouse);
       if (batch && batch.count > 0) {
+        if (batch.dirtyRect[0] <= batch.dirtyRect[2]) {
+          const pad = Math.ceil(strokeSettings.size * 0.6) + 8;
+          const bMinX = Math.max(0, Math.floor(batch.dirtyRect[0] - pad));
+          const bMinY = Math.max(0, Math.floor(batch.dirtyRect[1] - pad));
+          const bMaxX = Math.min(curDocW, Math.ceil(batch.dirtyRect[2] + pad));
+          const bMaxY = Math.min(curDocH, Math.ceil(batch.dirtyRect[3] + pad));
+          if (bMinX < strokeBoundsMinX) strokeBoundsMinX = bMinX;
+          if (bMinY < strokeBoundsMinY) strokeBoundsMinY = bMinY;
+          if (bMaxX > strokeBoundsMaxX) strokeBoundsMaxX = bMaxX;
+          if (bMaxY > strokeBoundsMaxY) strokeBoundsMaxY = bMaxY;
+        }
         const dabs = batch.dabs;
         for (let i = 0; i < batch.count; i++) {
           const base = i * DAB_STRIDE;
@@ -1591,7 +1667,7 @@ export function createBrushEngine(): BrushEngine {
           const tipIdx = dabs[base + 6];
           lastAngleRad = angle;
           const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, strokeSettings.tipTexture);
-          stampAt(targetCtx, isEraseOp, dx, dy, diam, press, angle, activeTip);
+          stampAt(targetCtx, isEraseOp, dx, dy, diam, press, angle, activeTip, true);
         }
       }
     } else if (strokeSettings.spray) {
@@ -1802,8 +1878,10 @@ export function createBrushEngine(): BrushEngine {
       isLivePainting = false;
       useOverlayPlanes = false;
       hasTopLayers = false;
+      prevLiveStrokeBounds = null;
       liveStrokeBounds = null;
       liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
+      liveStrokeDirty = true;
       engine.compositeDirty = true;
       updateComposite();
     },

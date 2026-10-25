@@ -14,6 +14,8 @@ import type {
   AnimationClip,
   AnimationScene,
   AnimationTrack,
+  AudioClip,
+  AudioTrack,
   EvaluatedTransform,
   InterpolationType,
   LightTableRegistration,
@@ -28,6 +30,8 @@ import type {
   TransformKeyframe,
 } from './timelineModel';
 import { transformManager } from '../selection/transformGizmo';
+import { timelineAudioManager } from './audioManager';
+import { timelineCoreEngine } from './rustTimelineCore';
 
 export interface TimelineManager {
   readonly settings: TimelineSettings;
@@ -40,6 +44,19 @@ export interface TimelineManager {
   readonly bones: Bone2D[];
   readonly boneKeyframes: Map<number, SkeletonKeyframe>;
   readonly selectedBoneId: string | null;
+  readonly audioTracks: AudioTrack[];
+
+  // Audio Tracks (Sync & Lip-Sync)
+  addAudioTrack(name?: string): AudioTrack;
+  removeAudioTrack(trackId: string): boolean;
+  renameAudioTrack(trackId: string, name: string): void;
+  setAudioTrackVolume(trackId: string, volume: number): void;
+  toggleAudioTrackMute(trackId: string): void;
+  toggleAudioTrackSolo(trackId: string): void;
+  addAudioClip(trackId: string, clip: AudioClip): boolean;
+  removeAudioClip(trackId: string, clipId: string): boolean;
+  moveAudioClip(trackId: string, clipId: string, newStartFrame: number): boolean;
+  trimAudioClip(trackId: string, clipId: string, newStartFrame: number, newDurationFrames: number): boolean;
 
   // Light Table (Mesa de Luz de Animación)
   toggleLightTable(force?: boolean): void;
@@ -277,6 +294,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     tracks: [],
     bones: [],
     boneKeyframes: new Map(),
+    audioTracks: [],
   };
 
   const scenes: AnimationScene[] = [initialScene];
@@ -346,6 +364,10 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         if (settings.loop) {
           const span = Math.max(1, settings.endFrame - settings.startFrame + 1);
           next = settings.startFrame + ((next - settings.startFrame) % span);
+          const sc = getActiveScene();
+          if (sc.audioTracks && sc.audioTracks.length > 0) {
+            timelineAudioManager.startPlayback(sc.audioTracks, next, settings.fps);
+          }
         } else {
           next = settings.endFrame;
           manager.pause();
@@ -482,6 +504,163 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     get selectedBoneId() {
       return selectedBoneId;
     },
+    get audioTracks() {
+      const sc = getActiveScene();
+      if (!sc.audioTracks) sc.audioTracks = [];
+      return sc.audioTracks;
+    },
+
+    // --- Audio Tracks (Lip-Sync & Sound Sync) ---
+    addAudioTrack(name?: string): AudioTrack {
+      const sc = getActiveScene();
+      if (!sc.audioTracks) sc.audioTracks = [];
+      const num = sc.audioTracks.length + 1;
+      const newTrack: AudioTrack = {
+        id: `audio-track-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: name?.trim() || `Audio ${num}`,
+        volume: 1.0,
+        muted: false,
+        solo: false,
+        clips: [],
+      };
+      sc.audioTracks.push(newTrack);
+      notify();
+      return newTrack;
+    },
+
+    removeAudioTrack(trackId: string): boolean {
+      const sc = getActiveScene();
+      if (!sc.audioTracks) return false;
+      const idx = sc.audioTracks.findIndex((t) => t.id === trackId);
+      if (idx === -1) return false;
+      sc.audioTracks.splice(idx, 1);
+      if (sc.settings.isPlaying) {
+        timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+      }
+      notify();
+      return true;
+    },
+
+    renameAudioTrack(trackId: string, name: string): void {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (tr && name.trim()) {
+        tr.name = name.trim();
+        notify();
+      }
+    },
+
+    setAudioTrackVolume(trackId: string, volume: number): void {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (tr) {
+        tr.volume = Math.max(0, Math.min(1, volume));
+        if (sc.settings.isPlaying) {
+          timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+        }
+        notify();
+      }
+    },
+
+    toggleAudioTrackMute(trackId: string): void {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (tr) {
+        tr.muted = !tr.muted;
+        if (sc.settings.isPlaying) {
+          timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+        }
+        notify();
+      }
+    },
+
+    toggleAudioTrackSolo(trackId: string): void {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (tr) {
+        tr.solo = !tr.solo;
+        if (sc.settings.isPlaying) {
+          timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+        }
+        notify();
+      }
+    },
+
+    addAudioClip(trackId: string, clip: AudioClip): boolean {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (!tr) return false;
+      tr.clips.push(clip);
+      const clipEnd = clip.startFrame + clip.durationFrames - 1;
+      if (clipEnd > sc.settings.totalFrames) {
+        manager.setTotalFrames(clipEnd, true);
+      }
+      if (clip.startFrame < (sc.settings.minFrame ?? 0)) {
+        sc.settings.minFrame = clip.startFrame;
+      }
+      if (sc.settings.isPlaying) {
+        timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+      }
+      notify();
+      return true;
+    },
+
+    removeAudioClip(trackId: string, clipId: string): boolean {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (!tr) return false;
+      const idx = tr.clips.findIndex((c) => c.id === clipId);
+      if (idx === -1) return false;
+      tr.clips.splice(idx, 1);
+      if (sc.settings.isPlaying) {
+        timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+      }
+      notify();
+      return true;
+    },
+
+    moveAudioClip(trackId: string, clipId: string, newStartFrame: number): boolean {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (!tr) return false;
+      const clip = tr.clips.find((c) => c.id === clipId);
+      if (!clip) return false;
+      clip.startFrame = Math.round(newStartFrame);
+      if (clip.startFrame < (sc.settings.minFrame ?? 0)) {
+        sc.settings.minFrame = clip.startFrame;
+      }
+      const clipEnd = clip.startFrame + clip.durationFrames - 1;
+      if (clipEnd > sc.settings.totalFrames) {
+        manager.setTotalFrames(clipEnd, true);
+      }
+      if (sc.settings.isPlaying) {
+        timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+      }
+      notify();
+      return true;
+    },
+
+    trimAudioClip(trackId: string, clipId: string, newStartFrame: number, newDurationFrames: number): boolean {
+      const sc = getActiveScene();
+      const tr = sc.audioTracks?.find((t) => t.id === trackId);
+      if (!tr) return false;
+      const clip = tr.clips.find((c) => c.id === clipId);
+      if (!clip) return false;
+      clip.startFrame = Math.round(newStartFrame);
+      clip.durationFrames = Math.max(1, Math.round(newDurationFrames));
+      if (clip.startFrame < (sc.settings.minFrame ?? 0)) {
+        sc.settings.minFrame = clip.startFrame;
+      }
+      const clipEnd = clip.startFrame + clip.durationFrames - 1;
+      if (clipEnd > sc.settings.totalFrames) {
+        manager.setTotalFrames(clipEnd, true);
+      }
+      if (sc.settings.isPlaying) {
+        timelineAudioManager.startPlayback(sc.audioTracks, sc.settings.currentFrame, sc.settings.fps);
+      }
+      notify();
+      return true;
+    },
 
     // --- Scenes (Multi-Animation System) ---
     createScene(name?: string, duplicateCurrent = false): AnimationScene {
@@ -569,6 +748,13 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         }
       }
 
+      const clonedAudioTracks: AudioTrack[] = duplicateCurrent
+        ? current.audioTracks.map((at) => ({
+            ...at,
+            clips: at.clips.map((c) => ({ ...c })),
+          }))
+        : [];
+
       const newScene: AnimationScene = {
         id: `scene-${Date.now()}-${sceneCounter}`,
         name: name?.trim() || `Escena ${sceneCounter}`,
@@ -576,6 +762,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         tracks: newTracks,
         bones: clonedBones,
         boneKeyframes: clonedBoneKfs,
+        audioTracks: clonedAudioTracks,
       };
 
       scenes.push(newScene);
@@ -626,11 +813,15 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (transformManager.isTransforming()) {
         transformManager.commitTransform();
       }
-      const settings = getActiveScene().settings;
+      const sc = getActiveScene();
+      const settings = sc.settings;
       if (settings.isPlaying) return;
       settings.isPlaying = true;
       lastTime = 0;
       accumulatedTime = 0;
+      if (sc.audioTracks && sc.audioTracks.length > 0) {
+        timelineAudioManager.startPlayback(sc.audioTracks, settings.currentFrame, settings.fps);
+      }
       animFrameId = requestAnimationFrame(playbackLoop);
       notify();
     },
@@ -639,6 +830,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const settings = getActiveScene().settings;
       if (!settings.isPlaying) return;
       settings.isPlaying = false;
+      timelineAudioManager.stopPlayback();
       if (animFrameId !== null) {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
@@ -775,6 +967,14 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const clamped = Math.max(minF, Math.min(settings.totalFrames, Math.round(frame)));
       if (settings.currentFrame === clamped) return;
       settings.currentFrame = clamped;
+      const sc = getActiveScene();
+      if (sc.audioTracks && sc.audioTracks.length > 0) {
+        if (settings.isPlaying) {
+          timelineAudioManager.startPlayback(sc.audioTracks, clamped, settings.fps);
+        } else {
+          timelineAudioManager.scrubFrame(sc.audioTracks, clamped, settings.fps);
+        }
+      }
       syncActiveCelWithFrame();
       notify();
     },
@@ -1319,64 +1519,7 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (!track || !track.keyframesEnabled || track.keyframes.size === 0) {
         return { ...DEFAULT_TRANSFORM };
       }
-
-      const sorted = Array.from(track.keyframes.values()).sort((a, b) => a.frame - b.frame);
-      if (frame <= sorted[0].frame) {
-        const k = sorted[0];
-        return {
-          x: k.x,
-          y: k.y,
-          scaleX: k.scaleX,
-          scaleY: k.scaleY,
-          rotation: k.rotation,
-          opacity: k.opacity,
-        };
-      }
-      if (frame >= sorted[sorted.length - 1].frame) {
-        const k = sorted[sorted.length - 1];
-        return {
-          x: k.x,
-          y: k.y,
-          scaleX: k.scaleX,
-          scaleY: k.scaleY,
-          rotation: k.rotation,
-          opacity: k.opacity,
-        };
-      }
-
-      // Find surrounding keyframes k0 <= frame < k1
-      let k0 = sorted[0];
-      let k1 = sorted[1];
-      for (let i = 0; i < sorted.length - 1; i++) {
-        if (frame >= sorted[i].frame && frame <= sorted[i + 1].frame) {
-          k0 = sorted[i];
-          k1 = sorted[i + 1];
-          break;
-        }
-      }
-
-      if (k0.interpolation === 'hold' || k0.frame === k1.frame) {
-        return {
-          x: k0.x,
-          y: k0.y,
-          scaleX: k0.scaleX,
-          scaleY: k0.scaleY,
-          rotation: k0.rotation,
-          opacity: k0.opacity,
-        };
-      }
-
-      const rawT = (frame - k0.frame) / (k1.frame - k0.frame);
-      const t = k0.interpolation === 'smooth' ? rawT * rawT * (3 - 2 * rawT) : rawT;
-
-      return {
-        x: k0.x + (k1.x - k0.x) * t,
-        y: k0.y + (k1.y - k0.y) * t,
-        scaleX: k0.scaleX + (k1.scaleX - k0.scaleX) * t,
-        scaleY: k0.scaleY + (k1.scaleY - k0.scaleY) * t,
-        rotation: k0.rotation + (k1.rotation - k0.rotation) * t,
-        opacity: k0.opacity + (k1.opacity - k0.opacity) * t,
-      };
+      return timelineCoreEngine.evaluateTrackTransform(track, frame).transform;
     },
 
     // --- 2D Bone / Skeleton System (Rigging, FK, IK, and Bone Keyframes) ---
@@ -1923,88 +2066,37 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const { tracks } = getActiveScene();
       const track = tracks.find((t) => t.id === trackId || t.folderId === trackId);
       if (!track) return undefined;
-
-      // Check clip bounds first (Clip duration cuts off visibility outside clip)
-      const clip = track.clips.find((c) => frame >= c.startFrame && frame <= c.endFrame);
-      if (!clip) return undefined;
-
-      let activeCelId: string | undefined;
-      let maxFrame = -Infinity;
-
-      for (const [expFrame, celId] of clip.exposures.entries()) {
-        if (expFrame <= frame && expFrame > maxFrame) {
-          maxFrame = expFrame;
-          activeCelId = celId;
-        }
-      }
-
-      if (!activeCelId) return undefined;
-      return layerManager.layers.find((l) => l.id === activeCelId);
+      const celId = timelineCoreEngine.getActiveCelId(track, frame);
+      if (!celId) return undefined;
+      return layerManager.layers.find((l) => l.id === celId);
     },
 
     getOnionSkinCels(trackId: string, currentFrame: number): OnionSkinCelInfo[] {
       if (!onionSkin.enabled) return [];
-      const { tracks, settings } = getActiveScene();
-      const track = tracks.find((t) => t.id === trackId);
+      const scene = getActiveScene();
+      const track = scene.tracks.find((t) => t.id === trackId);
       if (!track || !track.visible) return [];
 
       const currentCel = manager.getActiveCelForFrame(trackId, currentFrame);
       const currentCelId = currentCel ? currentCel.id : null;
 
+      const evaluated = timelineCoreEngine.evaluateOnionSkin(scene, currentFrame, onionSkin);
       const results: OnionSkinCelInfo[] = [];
 
-      // Look back for preceding cels
-      let foundPrev = 0;
-      const seenPrevIds = new Set<string>();
-      if (currentCelId) seenPrevIds.add(currentCelId);
+      for (const item of evaluated) {
+        if (item.trackId !== trackId) continue;
+        const cel = layerManager.layers.find((l) => l.id === item.celId);
+        if (!cel) continue;
 
-      for (let f = currentFrame - 1; f >= 1; f--) {
-        if (foundPrev >= onionSkin.prevFrames) break;
-        const cel = manager.getActiveCelForFrame(trackId, f);
-        if (cel && !seenPrevIds.has(cel.id)) {
-          seenPrevIds.add(cel.id);
-          foundPrev++;
-          const opacity = Math.max(
-            0.05,
-            onionSkin.startOpacity - (foundPrev - 1) * onionSkin.stepOpacity
-          );
-          results.push({
-            layer: cel,
-            isPrev: true,
-            distance: foundPrev,
-            opacity,
-            tintColor: onionSkin.prevColor,
-            transform: manager.getInterpolatedTransform(trackId, f),
-            onionTransform: manager.getOnionSkinTransform(cel.id),
-          });
-        }
-      }
-
-      // Look ahead for succeeding cels
-      let foundNext = 0;
-      const seenNextIds = new Set<string>();
-      if (currentCelId) seenNextIds.add(currentCelId);
-
-      for (let f = currentFrame + 1; f <= settings.totalFrames; f++) {
-        if (foundNext >= onionSkin.nextFrames) break;
-        const cel = manager.getActiveCelForFrame(trackId, f);
-        if (cel && !seenNextIds.has(cel.id)) {
-          seenNextIds.add(cel.id);
-          foundNext++;
-          const opacity = Math.max(
-            0.05,
-            onionSkin.startOpacity - (foundNext - 1) * onionSkin.stepOpacity
-          );
-          results.push({
-            layer: cel,
-            isPrev: false,
-            distance: foundNext,
-            opacity,
-            tintColor: onionSkin.nextColor,
-            transform: manager.getInterpolatedTransform(trackId, f),
-            onionTransform: manager.getOnionSkinTransform(cel.id),
-          });
-        }
+        results.push({
+          layer: cel,
+          isPrev: item.isPrev,
+          distance: item.distance,
+          opacity: item.opacity,
+          tintColor: item.isPrev ? onionSkin.prevColor : onionSkin.nextColor,
+          transform: item.transform,
+          onionTransform: manager.getOnionSkinTransform(cel.id),
+        });
       }
 
       // Append any custom pinned reference cels
@@ -2163,9 +2255,13 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (state.scenes && state.scenes.length > 0) {
         scenes.length = 0;
         scenes.push(...state.scenes);
+        for (const s of scenes) {
+          if (!s.audioTracks) s.audioTracks = [];
+        }
         activeSceneId = state.activeSceneId || scenes[0].id;
       }
       const scene = getActiveScene();
+      if (!scene.audioTracks) scene.audioTracks = [];
       if (state.settings) {
         Object.assign(scene.settings, state.settings);
       }

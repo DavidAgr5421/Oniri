@@ -12,6 +12,8 @@ import { openPressureCalibrationModal } from '../tools/pressureCalibrationModal'
 import { openExportAnimationModal } from '../animation/exportAnimation';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { saveOniriToFile } from '../storage/oniriPackage';
+import { ADJUSTMENT_LABELS, type AdjustmentKind } from '../brush/adjustments';
+import { openAdjustmentEditor } from '../layers/adjustmentPanel';
 import { getActiveProjectName } from '../storage/fileMenu';
 import {
   createNewFromClipboard,
@@ -23,6 +25,7 @@ import {
 import { commandDispatcher } from './commandDispatcher';
 import type { TopMenuCategory } from './topMenuBar';
 import { rustStrokeEngine } from '../brush/rustStrokeEngine';
+import { rulerManager } from '../canvas/rulerManager';
 
 export interface MenuDependencies {
   engine: BrushEngine;
@@ -200,6 +203,23 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     },
   });
   commandDispatcher.register({
+    id: 'edit.transformMesh',
+    label: 'Deformación de malla (Mesh Warp)...',
+    category: 'edit',
+    shortcut: 'Ctrl+Shift+T',
+    execute: () => {
+      if (transformManager.isTransforming()) {
+        if (transformManager.getMode() === 'mesh') {
+          transformManager.commitTransform();
+        } else {
+          transformManager.setMode('mesh');
+        }
+      } else {
+        transformManager.startMeshTransform(engine);
+      }
+    },
+  });
+  commandDispatcher.register({
     id: 'edit.flipH',
     label: 'Voltear capa horizontalmente',
     category: 'edit',
@@ -319,6 +339,36 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     label: 'Nueva carpeta',
     category: 'layer',
     execute: () => { lm.createFolder(); },
+  });
+  const ADJUSTMENT_KINDS: AdjustmentKind[] = [
+    'brightness-contrast',
+    'levels',
+    'curves',
+    'hsl',
+    'color-balance',
+    'gradient-map',
+    'invert',
+  ];
+  for (const kind of ADJUSTMENT_KINDS) {
+    commandDispatcher.register({
+      id: `layer.newAdjustment.${kind}`,
+      label: `Nueva capa de ajuste: ${ADJUSTMENT_LABELS[kind]}`,
+      category: 'layer',
+      execute: () => {
+        const node = lm.createAdjustmentLayer(kind);
+        if (kind !== 'invert') openAdjustmentEditor(lm, node.id);
+      },
+    });
+  }
+  commandDispatcher.register({
+    id: 'layer.editAdjustment',
+    label: 'Editar capa de ajuste...',
+    category: 'layer',
+    isEnabled: () => lm.getActiveLayer()?.type === 'adjustment',
+    execute: () => {
+      const active = lm.getActiveLayer();
+      if (active?.type === 'adjustment') openAdjustmentEditor(lm, active.id);
+    },
   });
   commandDispatcher.register({
     id: 'layer.duplicate',
@@ -630,6 +680,137 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     },
   });
 
+  commandDispatcher.register({
+    id: 'filter.screentone',
+    label: 'Trama Manga (Screentone)',
+    category: 'filter',
+    execute: () => {
+      const l = lm.getActiveDrawableLayer();
+      if (!l || !l.canvas || !l.context) return;
+      const w = l.canvas.width;
+      const h = l.canvas.height;
+      const prev = l.context.getImageData(0, 0, w, h);
+      engine.pushUndoRecord(l.id, { x: 0, y: 0, w, h }, prev);
+      const ok = rustStrokeEngine.generateScreentone(prev.data, w, h, 60, 45, 0);
+      if (ok) {
+        l.context.putImageData(prev, 0, 0);
+        engine.compositeDirty = true;
+        engine.updateComposite();
+      }
+    },
+  });
+
+  commandDispatcher.register({
+    id: 'filter.extractLineart',
+    label: 'Extraer Lineart (Papel blanco a transparente)',
+    category: 'filter',
+    execute: () => {
+      const l = lm.getActiveDrawableLayer();
+      if (!l || !l.canvas || !l.context) return;
+      const w = l.canvas.width;
+      const h = l.canvas.height;
+      const prev = l.context.getImageData(0, 0, w, h);
+      engine.pushUndoRecord(l.id, { x: 0, y: 0, w, h }, prev);
+      const ok = rustStrokeEngine.extractLineartTransparent(prev.data, 1.2, 235);
+      if (ok) {
+        l.context.putImageData(prev, 0, 0);
+        engine.compositeDirty = true;
+        engine.updateComposite();
+      }
+    },
+  });
+
+  commandDispatcher.register({
+    id: 'filter.unsharpMask',
+    label: 'Máscara de Enfoque (Nitidez)',
+    category: 'filter',
+    execute: () => {
+      const l = lm.getActiveDrawableLayer();
+      if (!l || !l.canvas || !l.context) return;
+      const w = l.canvas.width;
+      const h = l.canvas.height;
+      const prev = l.context.getImageData(0, 0, w, h);
+      engine.pushUndoRecord(l.id, { x: 0, y: 0, w, h }, prev);
+      const ok = rustStrokeEngine.unsharpMask(prev.data, w, h, 2.0, 1.5, 2);
+      if (ok) {
+        l.context.putImageData(prev, 0, 0);
+        engine.compositeDirty = true;
+        engine.updateComposite();
+      }
+    },
+  });
+
+  // 7b. Reglas y Perspectiva Manga (Ruler)
+  commandDispatcher.register({
+    id: 'ruler.toggleSnap',
+    label: 'Ajustar a regla (Magnetismo Snap)',
+    category: 'ruler',
+    shortcut: 'Ctrl+1',
+    isChecked: () => rulerManager.getState().snapEnabled,
+    execute: () => { rulerManager.toggleSnap(); },
+  });
+  commandDispatcher.register({
+    id: 'ruler.none',
+    label: 'Ocultar / Desactivar regla',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'none',
+    execute: () => rulerManager.setRulerType('none'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.symmetry',
+    label: '🪞 Regla de Simetría (Espejo / Radial)',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'symmetry',
+    execute: () => rulerManager.setRulerType('symmetry'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.persp1',
+    label: '📐 Perspectiva: 1 Punto de Fuga',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'perspective1',
+    execute: () => rulerManager.setRulerType('perspective1'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.persp2',
+    label: '📐 Perspectiva: 2 Puntos de Fuga (Manga Arquitectura)',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'perspective2',
+    execute: () => rulerManager.setRulerType('perspective2'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.persp3',
+    label: '📐 Perspectiva: 3 Puntos de Fuga (Picado / Contrapicado)',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'perspective3',
+    execute: () => rulerManager.setRulerType('perspective3'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.radial',
+    label: '💥 Líneas de Acción Radiales (Speedlines)',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'radial',
+    execute: () => rulerManager.setRulerType('radial'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.parallel',
+    label: '⚡ Líneas de Acción Paralelas (Velocidad)',
+    category: 'ruler',
+    isChecked: () => rulerManager.getState().type === 'parallel',
+    execute: () => rulerManager.setRulerType('parallel'),
+  });
+  commandDispatcher.register({
+    id: 'ruler.symmetryAxes',
+    label: 'Configurar número de ejes de simetría...',
+    category: 'ruler',
+    execute: () => {
+      const currentAxes = rulerManager.getState().symmetry.axes;
+      const val = prompt('Número de ejes de simetría (2, 3, 4, 6, 8, 12, 16):', String(currentAxes));
+      if (val && !isNaN(Number(val))) {
+        rulerManager.updateSymmetry({ axes: Math.max(2, Math.min(16, Number(val))) });
+      }
+    },
+  });
+
   // 8. Ventana (Window)
   commandDispatcher.register({
     id: 'window.navigator',
@@ -711,6 +892,7 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
         { id: 'edit.fill', label: 'Rellenar con color', shortcut: 'Shift+Delete' },
         { divider: true },
         { id: 'edit.transform', label: 'Escalar / Rotar (Transformación)', shortcut: 'Ctrl+T' },
+        { id: 'edit.transformMesh', label: 'Deformación de malla (Mesh Warp)...', shortcut: 'Ctrl+Shift+T' },
         { divider: true },
         { id: 'edit.flipH', label: 'Voltear capa horizontalmente' },
         { id: 'edit.flipV', label: 'Voltear capa verticalmente' },
@@ -737,6 +919,14 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
       entries: [
         { id: 'layer.new', label: 'Nueva capa rasterizada', shortcut: 'Ctrl+Shift+N' },
         { id: 'layer.newFolder', label: 'Nueva carpeta' },
+        {
+          label: 'Nueva capa de ajuste',
+          submenu: ADJUSTMENT_KINDS.map((k) => ({
+            id: `layer.newAdjustment.${k}`,
+            label: ADJUSTMENT_LABELS[k],
+          })),
+        },
+        { id: 'layer.editAdjustment', label: 'Editar capa de ajuste...' },
         { divider: true },
         { id: 'layer.duplicate', label: 'Duplicar capa', shortcut: 'Ctrl+J' },
         { id: 'layer.delete', label: 'Eliminar capa' },
@@ -787,10 +977,70 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
       ],
     },
     {
+      id: 'ruler',
+      title: 'Regla',
+      entries: [
+        {
+          id: 'ruler.toggleSnap',
+          label: 'Ajustar a regla (Magnetismo Snap)',
+          shortcut: 'Ctrl+1',
+          checked: () => rulerManager.getState().snapEnabled,
+        },
+        { divider: true },
+        {
+          id: 'ruler.none',
+          label: 'Ocultar / Desactivar regla',
+          checked: () => rulerManager.getState().type === 'none',
+        },
+        {
+          id: 'ruler.symmetry',
+          label: '🪞 Regla de Simetría (Espejo / Radial)',
+          checked: () => rulerManager.getState().type === 'symmetry',
+        },
+        {
+          id: 'ruler.persp1',
+          label: '📐 Perspectiva: 1 Punto de Fuga',
+          checked: () => rulerManager.getState().type === 'perspective1',
+        },
+        {
+          id: 'ruler.persp2',
+          label: '📐 Perspectiva: 2 Puntos de Fuga (Manga Arquitectura)',
+          checked: () => rulerManager.getState().type === 'perspective2',
+        },
+        {
+          id: 'ruler.persp3',
+          label: '📐 Perspectiva: 3 Puntos de Fuga (Picado / Contrapicado)',
+          checked: () => rulerManager.getState().type === 'perspective3',
+        },
+        { divider: true },
+        {
+          id: 'ruler.radial',
+          label: '💥 Líneas de Acción Radiales (Speedlines)',
+          checked: () => rulerManager.getState().type === 'radial',
+        },
+        {
+          id: 'ruler.parallel',
+          label: '⚡ Líneas de Acción Paralelas (Velocidad)',
+          checked: () => rulerManager.getState().type === 'parallel',
+        },
+        { divider: true },
+        {
+          id: 'ruler.symmetryAxes',
+          label: 'Configurar número de ejes de simetría...',
+        },
+      ],
+    },
+    {
       id: 'filter',
       title: 'Filtro',
       entries: [
         { id: 'filter.invert', label: 'Invertir color de capa', shortcut: 'Ctrl+I' },
+        { id: 'filter.binarize', label: 'Binarización / Umbral (Tinta)' },
+        { id: 'filter.gaussianBlur', label: 'Desenfoque Gaussiano (Suave)' },
+        { id: 'filter.unsharpMask', label: 'Máscara de Enfoque (Nitidez)' },
+        { divider: true },
+        { id: 'filter.screentone', label: 'Trama Manga (Screentone)' },
+        { id: 'filter.extractLineart', label: 'Extraer Lineart (Papel blanco a transparente)' },
       ],
     },
     {

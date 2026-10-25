@@ -13,13 +13,109 @@ export interface TransformState {
   scaleY: number;
 }
 
-type HandleKind = 'nw' | 'ne' | 'se' | 'sw' | 'n' | 'e' | 's' | 'w' | 'rotate' | 'move';
+export type TransformMode = 'affine' | 'mesh';
+
+type HandleKind = 'nw' | 'ne' | 'se' | 'sw' | 'n' | 'e' | 's' | 'w' | 'rotate' | 'move' | string;
+
+function drawWarpedTriangle(
+  ctx: CanvasRenderingContext2D,
+  img: CanvasImageSource,
+  u0: number, v0: number,
+  u1: number, v1: number,
+  u2: number, v2: number,
+  x0: number, y0: number,
+  x1: number, y1: number,
+  x2: number, y2: number,
+): void {
+  const du1 = u1 - u0;
+  const dv1 = v1 - v0;
+  const du2 = u2 - u0;
+  const dv2 = v2 - v0;
+  const denom = du1 * dv2 - du2 * dv1;
+  if (Math.abs(denom) < 1e-6) return;
+
+  const invDenom = 1 / denom;
+  const dx1 = x1 - x0;
+  const dy1 = y1 - y0;
+  const dx2 = x2 - x0;
+  const dy2 = y2 - y0;
+
+  const a = (dx1 * dv2 - dx2 * dv1) * invDenom;
+  const b = (dy1 * dv2 - dy2 * dv1) * invDenom;
+  const c = (dx2 * du1 - dx1 * du2) * invDenom;
+  const d = (dy2 * du1 - dy1 * du2) * invDenom;
+  const e = x0 - a * u0 - c * v0;
+  const f = y0 - b * u0 - d * v0;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(a, b, c, d, e, f);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
+export function renderMeshWarpTriangles(
+  ctx: CanvasRenderingContext2D,
+  srcCanvas: CanvasImageSource,
+  srcW: number,
+  srcH: number,
+  gridCols: number,
+  gridRows: number,
+  gridPoints: Float32Array,
+): void {
+  const stride = gridCols + 1;
+
+  for (let r = 0; r < gridRows; r++) {
+    const v0 = (r / gridRows) * srcH;
+    const v1 = ((r + 1) / gridRows) * srcH;
+
+    for (let c = 0; c < gridCols; c++) {
+      const u0 = (c / gridCols) * srcW;
+      const u1 = ((c + 1) / gridCols) * srcW;
+
+      const idx00 = (r * stride + c) * 2;
+      const idx10 = (r * stride + c + 1) * 2;
+      const idx01 = ((r + 1) * stride + c) * 2;
+      const idx11 = ((r + 1) * stride + c + 1) * 2;
+
+      const x00 = gridPoints[idx00];
+      const y00 = gridPoints[idx00 + 1];
+      const x10 = gridPoints[idx10];
+      const y10 = gridPoints[idx10 + 1];
+      const x01 = gridPoints[idx01];
+      const y01 = gridPoints[idx01 + 1];
+      const x11 = gridPoints[idx11];
+      const y11 = gridPoints[idx11 + 1];
+
+      // Upper triangle
+      drawWarpedTriangle(ctx, srcCanvas, u0, v0, u1, v0, u0, v1, x00, y00, x10, y10, x01, y01);
+      // Lower triangle
+      drawWarpedTriangle(ctx, srcCanvas, u1, v0, u1, v1, u0, v1, x10, y10, x11, y11, x01, y01);
+    }
+  }
+}
 
 export class TransformManager {
   private active = false;
   private engine: BrushEngine | null = null;
   private snapshotBeforeTransform: ImageData | null = null;
   private targetLayerId = '';
+  private transformMode: TransformMode = 'affine';
+
+  // Mesh deformation (Lattice / Mesh Warp) state
+  private meshCols = 4;
+  private meshRows = 4;
+  private meshPoints: Float32Array = new Float32Array(0);
+  private dragStartMeshPoints: Float32Array = new Float32Array(0);
+  private activeMeshNodeIndex = -1;
+  private meshPreviewCanvas: HTMLCanvasElement;
+  private meshPreviewCtx: CanvasRenderingContext2D;
+  private meshPreviewOffset = { x: 0, y: 0 };
 
   // Floating buffer holding the pixels being transformed
   private transformCanvas: HTMLCanvasElement;
@@ -63,10 +159,162 @@ export class TransformManager {
 
     this.transformMaskCanvas = document.createElement('canvas');
     this.transformMaskCtx = this.transformMaskCanvas.getContext('2d')!;
+
+    this.meshPreviewCanvas = document.createElement('canvas');
+    this.meshPreviewCtx = this.meshPreviewCanvas.getContext('2d', { willReadFrequently: true })!;
   }
 
   public isTransforming(): boolean {
     return this.active;
+  }
+
+  public getMode(): TransformMode {
+    return this.transformMode;
+  }
+
+  public setMode(mode: TransformMode): void {
+    if (this.transformMode === mode) return;
+    this.transformMode = mode;
+    if (mode === 'mesh') {
+      this.initMeshPoints();
+    }
+    if (this.engine) this.engine.compositeDirty = true;
+    this.notify();
+  }
+
+  public getMeshCols(): number {
+    return this.meshCols;
+  }
+
+  public getMeshRows(): number {
+    return this.meshRows;
+  }
+
+  public setMeshGrid(cols: number, rows: number): void {
+    this.meshCols = Math.max(2, Math.min(16, Math.round(cols)));
+    this.meshRows = Math.max(2, Math.min(16, Math.round(rows)));
+    if (this.transformMode === 'mesh') {
+      this.initMeshPoints();
+    }
+    this.notify();
+  }
+
+  public resetMesh(): void {
+    if (this.transformMode !== 'mesh') return;
+    this.initMeshPoints();
+    if (this.engine) this.engine.compositeDirty = true;
+    this.notify();
+  }
+
+  public initMeshPoints(): void {
+    const cols = this.meshCols;
+    const rows = this.meshRows;
+    const count = (cols + 1) * (rows + 1);
+    this.meshPoints = new Float32Array(count * 2);
+
+    const cx = this.currentX + this.currentWidth / 2;
+    const cy = this.currentY + this.currentHeight / 2;
+    const cos = Math.cos(this.rotation);
+    const sin = Math.sin(this.rotation);
+    const hw = this.currentWidth / 2;
+    const hh = this.currentHeight / 2;
+
+    let idx = 0;
+    for (let r = 0; r <= rows; r++) {
+      const v = r / rows;
+      const localY = -hh + v * this.currentHeight;
+      for (let c = 0; c <= cols; c++) {
+        const u = c / cols;
+        const localX = -hw + u * this.currentWidth;
+
+        const rx = localX * cos - localY * sin;
+        const ry = localX * sin + localY * cos;
+
+        this.meshPoints[idx++] = cx + rx;
+        this.meshPoints[idx++] = cy + ry;
+      }
+    }
+    this.activeMeshNodeIndex = -1;
+    this.updateMeshPreview();
+  }
+
+  public updateMeshPreview(): void {
+    if (this.transformMode !== 'mesh' || this.meshPoints.length === 0) return;
+    const totalPts = (this.meshCols + 1) * (this.meshRows + 1);
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    for (let i = 0; i < totalPts; i++) {
+      const px = this.meshPoints[i * 2];
+      const py = this.meshPoints[i * 2 + 1];
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+
+    const pad = 4;
+    const bbMinX = Math.floor(minX) - pad;
+    const bbMinY = Math.floor(minY) - pad;
+    const bbMaxX = Math.ceil(maxX) + pad;
+    const bbMaxY = Math.ceil(maxY) + pad;
+    const dstW = Math.max(4, bbMaxX - bbMinX);
+    const dstH = Math.max(4, bbMaxY - bbMinY);
+
+    this.meshPreviewOffset.x = bbMinX;
+    this.meshPreviewOffset.y = bbMinY;
+
+    this.meshPreviewCanvas.width = dstW;
+    this.meshPreviewCanvas.height = dstH;
+    this.meshPreviewCtx.clearRect(0, 0, dstW, dstH);
+
+    const localPoints = new Float32Array(totalPts * 2);
+    for (let i = 0; i < totalPts; i++) {
+      localPoints[i * 2] = this.meshPoints[i * 2] - bbMinX;
+      localPoints[i * 2 + 1] = this.meshPoints[i * 2 + 1] - bbMinY;
+    }
+
+    let usedWasm = false;
+    if (rustStrokeEngine.available && this.origWidth > 0 && this.origHeight > 0) {
+      const srcImg = this.transformCtx.getImageData(0, 0, this.origWidth, this.origHeight);
+      const resampled = rustStrokeEngine.meshWarpResample(
+        srcImg.data,
+        this.origWidth,
+        this.origHeight,
+        dstW,
+        dstH,
+        this.meshCols,
+        this.meshRows,
+        localPoints,
+        'bicubic',
+      );
+      if (resampled) {
+        const clamped = new Uint8ClampedArray(
+          resampled.buffer as ArrayBuffer,
+          resampled.byteOffset,
+          resampled.byteLength,
+        );
+        this.meshPreviewCtx.putImageData(new ImageData(clamped, dstW, dstH), 0, 0);
+        usedWasm = true;
+      }
+    }
+
+    if (!usedWasm) {
+      renderMeshWarpTriangles(
+        this.meshPreviewCtx,
+        this.transformCanvas,
+        this.origWidth,
+        this.origHeight,
+        this.meshCols,
+        this.meshRows,
+        localPoints,
+      );
+    }
+
+    if (this.engine) this.engine.compositeDirty = true;
   }
 
   public subscribe(fn: () => void): () => void {
@@ -81,7 +329,7 @@ export class TransformManager {
   /**
    * Activates Free Transform on active layer / selection (Ctrl+T)
    */
-  public startTransform(engine: BrushEngine): boolean {
+  public startTransform(engine: BrushEngine, mode: TransformMode = 'affine'): boolean {
     if (this.active) return false;
     const activeLayer = engine.layerManager.getActiveDrawableLayer();
     if (!activeLayer || !activeLayer.context || activeLayer.locked || activeLayer.isPaper) {
@@ -206,11 +454,21 @@ export class TransformManager {
       activeLayer.context.clearRect(bx, by, bw, bh);
     }
 
+    this.transformMode = mode;
+    this.activeMeshNodeIndex = -1;
+    if (mode === 'mesh') {
+      this.initMeshPoints();
+    }
+
     this.active = true;
     setTransformModalLocked(true);
     engine.compositeDirty = true;
     this.notify();
     return true;
+  }
+
+  public startMeshTransform(engine: BrushEngine): boolean {
+    return this.startTransform(engine, 'mesh');
   }
 
   /**
@@ -287,6 +545,109 @@ export class TransformManager {
   public commitTransform(): void {
     if (!this.active || !this.engine) return;
     const activeLayer = this.engine.layerManager.layers.find((l) => l.id === this.targetLayerId);
+
+    if (this.transformMode === 'mesh' && activeLayer && activeLayer.context && this.snapshotBeforeTransform) {
+      const docW = this.engine.docW;
+      const docH = this.engine.docH;
+      this.engine.pushUndoRecord(this.targetLayerId, { x: 0, y: 0, w: docW, h: docH }, this.snapshotBeforeTransform);
+
+      const minX = this.meshPreviewOffset.x;
+      const minY = this.meshPreviewOffset.y;
+      const maxX = minX + this.meshPreviewCanvas.width;
+      const maxY = minY + this.meshPreviewCanvas.height;
+
+      if (minX < 0 || minY < 0 || maxX > docW || maxY > docH) {
+        const newW = maxX - minX;
+        const newH = maxY - minY;
+        const newCanvas = document.createElement('canvas');
+        newCanvas.width = newW;
+        newCanvas.height = newH;
+        const newCtx = newCanvas.getContext('2d', { willReadFrequently: true })!;
+
+        const oldOx = activeLayer.offsetX ?? 0;
+        const oldOy = activeLayer.offsetY ?? 0;
+        if (activeLayer.canvas) {
+          newCtx.drawImage(activeLayer.canvas, oldOx - minX, oldOy - minY);
+        }
+        newCtx.drawImage(this.meshPreviewCanvas, 0, 0);
+
+        activeLayer.canvas = newCanvas;
+        activeLayer.context = newCtx;
+        activeLayer.offsetX = minX;
+        activeLayer.offsetY = minY;
+      } else {
+        const ox = activeLayer.offsetX ?? 0;
+        const oy = activeLayer.offsetY ?? 0;
+        activeLayer.context.drawImage(this.meshPreviewCanvas, minX - ox, minY - oy);
+      }
+
+      if (this.hadSelection) {
+        const dstW = this.meshPreviewCanvas.width;
+        const dstH = this.meshPreviewCanvas.height;
+        const totalPts = (this.meshCols + 1) * (this.meshRows + 1);
+        const localPoints = new Float32Array(totalPts * 2);
+        for (let i = 0; i < totalPts; i++) {
+          localPoints[i * 2] = this.meshPoints[i * 2] - minX;
+          localPoints[i * 2 + 1] = this.meshPoints[i * 2 + 1] - minY;
+        }
+
+        selectionModel.maskCtx.clearRect(0, 0, docW, docH);
+        const tempMaskCanvas = document.createElement('canvas');
+        tempMaskCanvas.width = dstW;
+        tempMaskCanvas.height = dstH;
+        const tCtx = tempMaskCanvas.getContext('2d')!;
+
+        let resMask: Uint8ClampedArray | null = null;
+        if (rustStrokeEngine.available && this.origWidth > 0 && this.origHeight > 0) {
+          const maskImg = this.transformMaskCtx.getImageData(0, 0, this.origWidth, this.origHeight);
+          resMask = rustStrokeEngine.meshWarpResample(
+            maskImg.data,
+            this.origWidth,
+            this.origHeight,
+            dstW,
+            dstH,
+            this.meshCols,
+            this.meshRows,
+            localPoints,
+            'bilinear',
+          );
+        }
+
+        if (resMask) {
+          const clamped = new Uint8ClampedArray(
+            resMask.buffer as ArrayBuffer,
+            resMask.byteOffset,
+            resMask.byteLength,
+          );
+          tCtx.putImageData(new ImageData(clamped, dstW, dstH), 0, 0);
+        } else {
+          renderMeshWarpTriangles(
+            tCtx,
+            this.transformMaskCanvas,
+            this.origWidth,
+            this.origHeight,
+            this.meshCols,
+            this.meshRows,
+            localPoints,
+          );
+        }
+
+        selectionModel.maskCtx.drawImage(tempMaskCanvas, minX, minY);
+        selectionModel.updateBounds();
+      }
+
+      this.active = false;
+      this.hadSelection = false;
+      this.snapshotBeforeTransform = null;
+      this.dragHandle = null;
+      this.activeMeshNodeIndex = -1;
+      this.meshPoints = new Float32Array(0);
+      if (this.engine) this.engine.compositeDirty = true;
+      setTransformModalLocked(false);
+      this.notify();
+      return;
+    }
+
     if (activeLayer && activeLayer.context && this.snapshotBeforeTransform) {
       // Register the pre-transform pixels in the undo history before rasterizing
       const docW = this.engine.docW;
@@ -417,6 +778,49 @@ export class TransformManager {
       }
     }
 
+    // High quality bicubic affine resampling via WASM when rotated
+    if (rotationRad !== 0 && rustStrokeEngine.available && srcW > 0 && srcH > 0) {
+      const srcImg = this.transformCtx.getImageData(0, 0, srcW, srcH);
+      const cos = Math.cos(rotationRad);
+      const sin = Math.sin(rotationRad);
+      const hw = (srcW * Math.abs(scaleX)) / 2;
+      const hh = (srcH * Math.abs(scaleY)) / 2;
+      const x1 = -hw * cos - -hh * sin;
+      const y1 = -hw * sin + -hh * cos;
+      const x2 = hw * cos - -hh * sin;
+      const y2 = hw * sin + -hh * cos;
+      const spanX = Math.max(Math.abs(x1), Math.abs(x2)) * 2;
+      const spanY = Math.max(Math.abs(y1), Math.abs(y2)) * 2;
+      const dstW = Math.max(2, Math.ceil(spanX));
+      const dstH = Math.max(2, Math.ceil(spanY));
+
+      const invMat = rustStrokeEngine.computeInverseTransformMatrix(
+        srcW / 2,
+        srcH / 2,
+        dstW / 2,
+        dstH / 2,
+        scaleX,
+        scaleY,
+        rotationRad,
+      );
+      if (invMat) {
+        const affResampled = rustStrokeEngine.resampleAffine(srcImg.data, srcW, srcH, dstW, dstH, invMat, 'bicubic');
+        if (affResampled) {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = dstW;
+          tempCanvas.height = dstH;
+          const clamped = new Uint8ClampedArray(
+            affResampled.buffer as ArrayBuffer,
+            affResampled.byteOffset,
+            affResampled.byteLength,
+          );
+          tempCanvas.getContext('2d')!.putImageData(new ImageData(clamped, dstW, dstH), 0, 0);
+          targetCtx.drawImage(tempCanvas, destCenterX - dstW / 2, destCenterY - dstH / 2);
+          return;
+        }
+      }
+    }
+
     // Default Canvas2D affine draw
     targetCtx.save();
     targetCtx.translate(destCenterX, destCenterY);
@@ -439,6 +843,8 @@ export class TransformManager {
     this.active = false;
     this.snapshotBeforeTransform = null;
     this.dragHandle = null;
+    this.activeMeshNodeIndex = -1;
+    this.meshPoints = new Float32Array(0);
     if (this.engine) this.engine.compositeDirty = true;
     setTransformModalLocked(false);
     this.notify();
@@ -454,6 +860,15 @@ export class TransformManager {
     maxX: number;
     maxY: number;
   } {
+    if (this.transformMode === 'mesh' && this.meshPoints.length > 0) {
+      return {
+        minX: this.meshPreviewOffset.x,
+        minY: this.meshPreviewOffset.y,
+        maxX: this.meshPreviewOffset.x + this.meshPreviewCanvas.width,
+        maxY: this.meshPreviewOffset.y + this.meshPreviewCanvas.height,
+      };
+    }
+
     const cx = this.currentX + this.currentWidth / 2;
     const cy = this.currentY + this.currentHeight / 2;
     const hw = this.currentWidth / 2;
@@ -483,21 +898,64 @@ export class TransformManager {
 
   public flipHorizontal(): void {
     if (!this.active) return;
-    this.flipH = !this.flipH;
+    if (this.transformMode === 'mesh' && this.meshPoints.length > 0) {
+      const stride = this.meshCols + 1;
+      const bb = this.getGizmoBoundsDoc();
+      const cx = (bb.minX + bb.maxX) / 2;
+      for (let r = 0; r <= this.meshRows; r++) {
+        for (let c = 0; c <= this.meshCols; c++) {
+          const idx = (r * stride + c) * 2;
+          this.meshPoints[idx] = cx - (this.meshPoints[idx] - cx);
+        }
+      }
+      this.updateMeshPreview();
+    } else {
+      this.flipH = !this.flipH;
+    }
     if (this.engine) this.engine.compositeDirty = true;
     this.notify();
   }
 
   public flipVertical(): void {
     if (!this.active) return;
-    this.flipV = !this.flipV;
+    if (this.transformMode === 'mesh' && this.meshPoints.length > 0) {
+      const stride = this.meshCols + 1;
+      const bb = this.getGizmoBoundsDoc();
+      const cy = (bb.minY + bb.maxY) / 2;
+      for (let r = 0; r <= this.meshRows; r++) {
+        for (let c = 0; c <= this.meshCols; c++) {
+          const idx = (r * stride + c) * 2 + 1;
+          this.meshPoints[idx] = cy - (this.meshPoints[idx] - cy);
+        }
+      }
+      this.updateMeshPreview();
+    } else {
+      this.flipV = !this.flipV;
+    }
     if (this.engine) this.engine.compositeDirty = true;
     this.notify();
   }
 
   public rotate90(clockwise = true): void {
     if (!this.active) return;
-    this.rotation += clockwise ? Math.PI / 2 : -Math.PI / 2;
+    if (this.transformMode === 'mesh' && this.meshPoints.length > 0) {
+      const bb = this.getGizmoBoundsDoc();
+      const cx = (bb.minX + bb.maxX) / 2;
+      const cy = (bb.minY + bb.maxY) / 2;
+      const angle = clockwise ? Math.PI / 2 : -Math.PI / 2;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const total = (this.meshCols + 1) * (this.meshRows + 1);
+      for (let i = 0; i < total; i++) {
+        const px = this.meshPoints[i * 2] - cx;
+        const py = this.meshPoints[i * 2 + 1] - cy;
+        this.meshPoints[i * 2] = cx + (px * cos - py * sin);
+        this.meshPoints[i * 2 + 1] = cy + (px * sin + py * cos);
+      }
+      this.updateMeshPreview();
+    } else {
+      this.rotation += clockwise ? Math.PI / 2 : -Math.PI / 2;
+    }
     if (this.engine) this.engine.compositeDirty = true;
     this.notify();
   }
@@ -507,6 +965,74 @@ export class TransformManager {
    */
   public render(ctx: CanvasRenderingContext2D): void {
     if (!this.active) return;
+
+    if (this.transformMode === 'mesh') {
+      // 1. Draw warped preview canvas
+      ctx.drawImage(this.meshPreviewCanvas, this.meshPreviewOffset.x, this.meshPreviewOffset.y);
+
+      // 2. Draw mesh lattice lines
+      const stride = this.meshCols + 1;
+      ctx.save();
+      ctx.strokeStyle = '#00a8ff';
+      ctx.lineWidth = 1.2;
+
+      // Rows
+      for (let r = 0; r <= this.meshRows; r++) {
+        ctx.beginPath();
+        for (let c = 0; c <= this.meshCols; c++) {
+          const idx = (r * stride + c) * 2;
+          const px = this.meshPoints[idx];
+          const py = this.meshPoints[idx + 1];
+          if (c === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+
+      // Columns
+      for (let c = 0; c <= this.meshCols; c++) {
+        ctx.beginPath();
+        for (let r = 0; r <= this.meshRows; r++) {
+          const idx = (r * stride + c) * 2;
+          const px = this.meshPoints[idx];
+          const py = this.meshPoints[idx + 1];
+          if (r === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+
+      // 3. Draw nodes
+      for (let r = 0; r <= this.meshRows; r++) {
+        for (let c = 0; c <= this.meshCols; c++) {
+          const i = r * stride + c;
+          const px = this.meshPoints[i * 2];
+          const py = this.meshPoints[i * 2 + 1];
+          const isSelected = this.activeMeshNodeIndex === i;
+          const isCorner = (r === 0 || r === this.meshRows) && (c === 0 || c === this.meshCols);
+
+          ctx.beginPath();
+          ctx.arc(px, py, isSelected ? 6.5 : isCorner ? 5 : 4, 0, Math.PI * 2);
+
+          if (isSelected) {
+            ctx.fillStyle = '#ffaa00';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#000000';
+            ctx.stroke();
+          } else {
+            ctx.fillStyle = isCorner ? '#ffffff' : '#e0f2fe';
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#0284c7';
+            ctx.stroke();
+          }
+        }
+      }
+
+      ctx.restore();
+      return;
+    }
 
     ctx.save();
 
@@ -594,6 +1120,24 @@ export class TransformManager {
   public hitTest(docX: number, docY: number): HandleKind | null {
     if (!this.active) return null;
 
+    if (this.transformMode === 'mesh' && this.meshPoints.length > 0) {
+      const totalPts = (this.meshCols + 1) * (this.meshRows + 1);
+      const hitRadius = 12;
+      for (let i = 0; i < totalPts; i++) {
+        const px = this.meshPoints[i * 2];
+        const py = this.meshPoints[i * 2 + 1];
+        if (Math.hypot(docX - px, docY - py) <= hitRadius) {
+          return `mesh_node_${i}`;
+        }
+      }
+
+      const bb = this.getGizmoBoundsDoc();
+      if (docX >= bb.minX && docX <= bb.maxX && docY >= bb.minY && docY <= bb.maxY) {
+        return 'move';
+      }
+      return null;
+    }
+
     const cx = this.currentX + this.currentWidth / 2;
     const cy = this.currentY + this.currentHeight / 2;
 
@@ -644,6 +1188,26 @@ export class TransformManager {
     const handle = this.hitTest(docX, docY);
     if (!handle) return false;
 
+    if (this.transformMode === 'mesh') {
+      if (handle.startsWith('mesh_node_')) {
+        this.activeMeshNodeIndex = parseInt(handle.slice(10), 10);
+        this.dragHandle = handle;
+        this.dragStartDocX = docX;
+        this.dragStartDocY = docY;
+        this.dragStartMeshPoints = new Float32Array(this.meshPoints);
+        return true;
+      }
+      if (handle === 'move') {
+        this.activeMeshNodeIndex = -1;
+        this.dragHandle = 'move';
+        this.dragStartDocX = docX;
+        this.dragStartDocY = docY;
+        this.dragStartMeshPoints = new Float32Array(this.meshPoints);
+        return true;
+      }
+      return false;
+    }
+
     this.dragHandle = handle;
     this.dragStartDocX = docX;
     this.dragStartDocY = docY;
@@ -659,6 +1223,35 @@ export class TransformManager {
 
   public handlePointerMove(docX: number, docY: number, event: PointerEvent): boolean {
     if (!this.active || !this.dragHandle) return false;
+
+    if (this.transformMode === 'mesh') {
+      if (this.dragHandle === 'move') {
+        const dx = docX - this.dragStartDocX;
+        const dy = docY - this.dragStartDocY;
+        const total = (this.meshCols + 1) * (this.meshRows + 1);
+        for (let i = 0; i < total; i++) {
+          this.meshPoints[i * 2] = this.dragStartMeshPoints[i * 2] + dx;
+          this.meshPoints[i * 2 + 1] = this.dragStartMeshPoints[i * 2 + 1] + dy;
+        }
+        this.updateMeshPreview();
+        this.notify();
+        return true;
+      }
+
+      if (this.dragHandle.startsWith('mesh_node_')) {
+        const idx = this.activeMeshNodeIndex;
+        if (idx >= 0 && idx < (this.meshCols + 1) * (this.meshRows + 1)) {
+          const dx = docX - this.dragStartDocX;
+          const dy = docY - this.dragStartDocY;
+          this.meshPoints[idx * 2] = this.dragStartMeshPoints[idx * 2] + dx;
+          this.meshPoints[idx * 2 + 1] = this.dragStartMeshPoints[idx * 2 + 1] + dy;
+          this.updateMeshPreview();
+          this.notify();
+          return true;
+        }
+      }
+      return false;
+    }
 
     const cx = this.dragStartParams.x + this.dragStartParams.w / 2;
     const cy = this.dragStartParams.y + this.dragStartParams.h / 2;
@@ -743,6 +1336,7 @@ export class TransformManager {
     if (this.dragHandle) {
       this.dragHandle = null;
     }
+    this.activeMeshNodeIndex = -1;
   }
 }
 

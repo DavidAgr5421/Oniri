@@ -151,6 +151,149 @@ impl FilterCore {
 
         dst
     }
+
+    /// Generador de tramas manga (Halftone / Screentones) a partir de capas de sombreado
+    /// - `frequency_lpi`: líneas/puntos por pulgada (e.g. 30 a 85 LPI típico en manga)
+    /// - `angle_deg`: ángulo de inclinación de la trama (e.g. 45° estándar)
+    /// - `dot_shape`: 0 = punto circular, 1 = línea, 2 = diamante
+    pub fn generate_screentone(
+        rgba: &mut [u8],
+        width: u32,
+        height: u32,
+        frequency_lpi: f32,
+        angle_deg: f32,
+        dot_shape: u8,
+    ) {
+        let w = width as usize;
+        let h = height as usize;
+        let total = w * h;
+        if total == 0 || rgba.len() < total * 4 {
+            return;
+        }
+
+        let lpi = frequency_lpi.clamp(10.0, 150.0);
+        let cell_size = (300.0 / lpi).max(3.0); // Asumiendo resolución típica de 300 DPI
+        let rad = angle_deg.to_radians();
+        let cos_a = rad.cos();
+        let sin_a = rad.sin();
+        let inv_cell = 1.0 / cell_size;
+
+        for y in 0..h {
+            let row = y * w;
+            let y_f = y as f32;
+            for x in 0..w {
+                let p = (row + x) * 4;
+                let a = rgba[p + 3];
+                if a == 0 {
+                    continue;
+                }
+
+                let lum = (0.299 * (rgba[p] as f32) + 0.587 * (rgba[p + 1] as f32) + 0.114 * (rgba[p + 2] as f32)) / 255.0;
+                let density = (1.0 - lum) * (a as f32 / 255.0);
+                if density <= 0.02 {
+                    rgba[p] = 255;
+                    rgba[p + 1] = 255;
+                    rgba[p + 2] = 255;
+                    rgba[p + 3] = 0;
+                    continue;
+                }
+
+                let x_f = x as f32;
+                let rot_x = (x_f * cos_a - y_f * sin_a) * inv_cell;
+                let rot_y = (x_f * sin_a + y_f * cos_a) * inv_cell;
+
+                let u = rot_x.fract().abs() - 0.5;
+                let v = rot_y.fract().abs() - 0.5;
+
+                let is_dot = match dot_shape {
+                    1 => {
+                        // Línea / Trama de líneas
+                        v.abs() < density * 0.5
+                    }
+                    2 => {
+                        // Diamante
+                        (u.abs() + v.abs()) < (density * core::f32::consts::SQRT_2 * 0.5)
+                    }
+                    _ => {
+                        // Punto circular
+                        (u * u + v * v) < (density * 0.25)
+                    }
+                };
+
+                if is_dot {
+                    rgba[p] = 0;
+                    rgba[p + 1] = 0;
+                    rgba[p + 2] = 0;
+                    rgba[p + 3] = 255;
+                } else {
+                    rgba[p] = 255;
+                    rgba[p + 1] = 255;
+                    rgba[p + 2] = 255;
+                    rgba[p + 3] = 0;
+                }
+            }
+        }
+    }
+
+    /// Extracción de lineart a transparencia (Clean paper scan to transparent ink)
+    /// Convierte el fondo de papel blanco en transparencia pura manteniendo los trazos
+    pub fn extract_lineart_transparent(
+        rgba: &mut [u8],
+        darkness: f32,
+        threshold: u8,
+    ) {
+        let th = threshold.max(20) as f32;
+        let dark_mult = darkness.clamp(0.5, 3.0);
+
+        for chunk in rgba.chunks_exact_mut(4) {
+            let a = chunk[3] as f32 / 255.0;
+            if a <= 0.01 {
+                continue;
+            }
+
+            let lum = 0.299 * (chunk[0] as f32) + 0.587 * (chunk[1] as f32) + 0.114 * (chunk[2] as f32);
+            if lum >= th {
+                chunk[3] = 0;
+            } else {
+                let ink_alpha = ((1.0 - lum / th) * dark_mult).clamp(0.0, 1.0) * a;
+                chunk[0] = 0;
+                chunk[1] = 0;
+                chunk[2] = 0;
+                chunk[3] = (ink_alpha * 255.0).round() as u8;
+            }
+        }
+    }
+
+    /// Enfoque de trazos (Unsharp Mask)
+    pub fn unsharp_mask(
+        rgba: &mut [u8],
+        width: usize,
+        height: usize,
+        radius: f32,
+        amount: f32,
+        threshold: u8,
+    ) {
+        let blurred = Self::gaussian_blur(rgba, width, height, radius);
+        let th = threshold as i32;
+        let amt = amount.clamp(0.1, 5.0);
+
+        for i in 0..(width * height) {
+            let p = i * 4;
+            if rgba[p + 3] == 0 {
+                continue;
+            }
+
+            for c in 0..3 {
+                let orig = rgba[p + c] as i32;
+                let blur = blurred[p + c] as i32;
+                let diff = orig - blur;
+                if diff.abs() >= th {
+                    let sharpened = orig as f32 + (diff as f32) * amt;
+                    rgba[p + c] = sharpened.clamp(0.0, 255.0).round() as u8;
+                }
+            }
+        }
+    }
 }
 
 fn make_gaussian_kernel(sigma: f32, k_size: usize) -> Vec<f32> {

@@ -1,6 +1,7 @@
 import type { TimelineManager } from '../animation/timelineManager';
 import type { BrushEngine } from '../brush/brushEngine';
 import type { LayerManager, LayerNode } from '../brush/layers';
+import { openAdjustmentEditor } from './adjustmentPanel';
 import './layers.css';
 
 const BLEND_MODES: { id: GlobalCompositeOperation; label: string }[] = [
@@ -581,6 +582,7 @@ export function mountLayersView(
       item.dataset.layerId = node.id;
       item.classList.toggle('active', node.id === layerManager.activeLayerId);
       item.classList.toggle('is-folder', node.type === 'folder');
+      item.classList.toggle('is-adjustment', node.type === 'adjustment');
       item.classList.toggle('is-clipped', !!node.clipped);
       if (depth > 0) {
         item.style.paddingLeft = `${8 + depth * 14}px`;
@@ -650,6 +652,23 @@ export function mountLayersView(
           `;
         }
         item.appendChild(folderIcon);
+      } else if (node.type === 'adjustment') {
+        const adjIcon = document.createElement('button');
+        adjIcon.className = 'layer-adjust-icon';
+        adjIcon.title = 'Capa de ajuste — clic para editar';
+        adjIcon.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M12 3v18" />
+            <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/>
+          </svg>
+        `;
+        adjIcon.addEventListener('click', (e) => {
+          e.stopPropagation();
+          layerManager.setActiveLayer(node.id);
+          openAdjustmentEditor(layerManager, node.id);
+        });
+        item.appendChild(adjIcon);
       } else {
         const thumbCanvas = document.createElement('canvas');
         thumbCanvas.className = 'layer-thumb';

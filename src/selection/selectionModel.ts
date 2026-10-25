@@ -365,6 +365,265 @@ export class SelectionModel {
   }
 
   /**
+   * Feather Selection: Soft Gaussian blur on selection boundary accelerated by Rust.
+   */
+  public featherSelection(radiusPx: number): void {
+    if (!this._hasSelection || radiusPx <= 0) return;
+    this.endMoveMask();
+    const r = Math.min(64, Math.max(0.5, radiusPx));
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    const imgData = this.maskCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+
+    const rustFeathered = rustStrokeEngine.featherSelection(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+      r,
+    );
+
+    if (rustFeathered) {
+      const clamped = new Uint8ClampedArray(rustFeathered.buffer as ArrayBuffer, rustFeathered.byteOffset, rustFeathered.byteLength);
+      const outImg = new ImageData(clamped, w, h);
+      this.maskCtx.putImageData(outImg, 0, 0);
+    } else {
+      const tmp = document.createElement('canvas');
+      tmp.width = w;
+      tmp.height = h;
+      const tctx = tmp.getContext('2d')!;
+      tctx.filter = `blur(${r}px)`;
+      tctx.drawImage(this.maskCanvas, 0, 0);
+      this.maskCtx.clearRect(0, 0, w, h);
+      this.maskCtx.drawImage(tmp, 0, 0);
+    }
+    this.updateBounds();
+  }
+
+  /**
+   * Border Selection: Converts solid selection into a hollow contour accelerated by Rust.
+   */
+  public borderSelection(radiusPx: number, position: 'inside' | 'center' | 'outside' = 'center'): void {
+    if (!this._hasSelection || radiusPx <= 0) return;
+    this.endMoveMask();
+    const r = Math.min(48, Math.max(1, Math.round(radiusPx)));
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    const imgData = this.maskCtx.getImageData(0, 0, w, h);
+    const data = imgData.data;
+    const posCode = position === 'inside' ? 0 : position === 'outside' ? 2 : 1;
+
+    const rustBorder = rustStrokeEngine.borderSelection(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      w,
+      h,
+      r,
+      posCode,
+    );
+
+    if (rustBorder) {
+      const clamped = new Uint8ClampedArray(rustBorder.buffer as ArrayBuffer, rustBorder.byteOffset, rustBorder.byteLength);
+      const outImg = new ImageData(clamped, w, h);
+      this.maskCtx.putImageData(outImg, 0, 0);
+    } else {
+      if (posCode === 1) {
+        const rHalf = Math.max(1, Math.round(r / 2));
+        this.expandSelection(rHalf);
+        const tmp = document.createElement('canvas');
+        tmp.width = w;
+        tmp.height = h;
+        tmp.getContext('2d')!.drawImage(this.maskCanvas, 0, 0);
+        this.contractSelection(r);
+        this.maskCtx.save();
+        this.maskCtx.globalCompositeOperation = 'difference';
+        this.maskCtx.drawImage(tmp, 0, 0);
+        this.maskCtx.restore();
+      } else if (posCode === 2) {
+        const tmp = document.createElement('canvas');
+        tmp.width = w;
+        tmp.height = h;
+        tmp.getContext('2d')!.drawImage(this.maskCanvas, 0, 0);
+        this.expandSelection(r);
+        this.maskCtx.save();
+        this.maskCtx.globalCompositeOperation = 'destination-out';
+        this.maskCtx.drawImage(tmp, 0, 0);
+        this.maskCtx.restore();
+      } else {
+        const tmp = document.createElement('canvas');
+        tmp.width = w;
+        tmp.height = h;
+        tmp.getContext('2d')!.drawImage(this.maskCanvas, 0, 0);
+        this.contractSelection(r);
+        tmp.getContext('2d')!.globalCompositeOperation = 'destination-out';
+        tmp.getContext('2d')!.drawImage(this.maskCanvas, 0, 0);
+        this.maskCtx.clearRect(0, 0, w, h);
+        this.maskCtx.drawImage(tmp, 0, 0);
+      }
+    }
+    this.updateBounds();
+  }
+
+  /**
+   * Magic Wand: Continuous or global color tolerance selection accelerated by Rust.
+   */
+  public selectWand(
+    sourceRgba: Uint8ClampedArray,
+    seedX: number,
+    seedY: number,
+    tolerance = 20,
+    contiguous = true,
+    antialias = true,
+    mode: SelectionCombineMode = this._combineMode,
+  ): void {
+    const w = this.maskCanvas.width;
+    const h = this.maskCanvas.height;
+    if (seedX < 0 || seedX >= w || seedY < 0 || seedY >= h) return;
+
+    let wandBytes = rustStrokeEngine.magicWandSelection(
+      new Uint8Array(sourceRgba.buffer, sourceRgba.byteOffset, sourceRgba.byteLength),
+      w,
+      h,
+      seedX,
+      seedY,
+      tolerance,
+      contiguous,
+      antialias,
+    );
+
+    if (!wandBytes) {
+      wandBytes = this.computeJsWand(sourceRgba, w, h, seedX, seedY, tolerance, contiguous, antialias);
+    }
+
+    const temp = document.createElement('canvas');
+    temp.width = w;
+    temp.height = h;
+    const tctx = temp.getContext('2d')!;
+    const clamped = new Uint8ClampedArray(wandBytes.buffer as ArrayBuffer, wandBytes.byteOffset, wandBytes.byteLength);
+    tctx.putImageData(new ImageData(clamped, w, h), 0, 0);
+
+    this.applyShapeCanvas(temp, mode);
+  }
+
+  private computeJsWand(
+    rgba: Uint8ClampedArray,
+    w: number,
+    h: number,
+    seedX: number,
+    seedY: number,
+    tolerance: number,
+    contiguous: boolean,
+    antialias: boolean,
+  ): Uint8Array {
+    const total = w * h;
+    const out = new Uint8Array(total * 4);
+    const seedIdx = seedY * w + seedX;
+    const sp = seedIdx * 4;
+    const sr = rgba[sp];
+    const sg = rgba[sp + 1];
+    const sb = rgba[sp + 2];
+    const sa = rgba[sp + 3];
+
+    const tol = (Math.max(0, Math.min(100, tolerance)) / 100) * 255;
+    const tolSq = tol * tol * 3;
+    const innerTolSq = antialias ? tolSq * 0.70 : tolSq;
+
+    const distSq = (idx: number): number => {
+      const p = idx * 4;
+      const dr = rgba[p] - sr;
+      const dg = rgba[p + 1] - sg;
+      const db = rgba[p + 2] - sb;
+      const da = rgba[p + 3] - sa;
+      return dr * dr + dg * dg + db * db + da * da;
+    };
+
+    if (!contiguous) {
+      for (let i = 0; i < total; i++) {
+        const d2 = distSq(i);
+        if (d2 <= tolSq) {
+          const a = antialias && d2 > innerTolSq
+            ? Math.round((1 - (d2 - innerTolSq) / Math.max(1, tolSq - innerTolSq)) * 255)
+            : 255;
+          if (a > 0) {
+            const p = i * 4;
+            out[p] = 255;
+            out[p + 1] = 255;
+            out[p + 2] = 255;
+            out[p + 3] = a;
+          }
+        }
+      }
+      return out;
+    }
+
+    const visited = new Uint8Array(total);
+    const queue: number[] = [seedIdx];
+    visited[seedIdx] = 1;
+
+    while (queue.length > 0) {
+      const curr = queue.pop()!;
+      const cx = curr % w;
+      const cy = Math.floor(curr / w);
+      const lineY = cy * w;
+
+      let left = cx;
+      while (left > 0 && visited[lineY + left - 1] === 0 && distSq(lineY + left - 1) <= tolSq) {
+        left--;
+      }
+
+      let right = cx;
+      while (right + 1 < w && visited[lineY + right + 1] === 0 && distSq(lineY + right + 1) <= tolSq) {
+        right++;
+      }
+
+      for (let x = left; x <= right; x++) {
+        const idx = lineY + x;
+        visited[idx] = 1;
+        const d2 = distSq(idx);
+        const a = antialias && d2 > innerTolSq
+          ? Math.round((1 - (d2 - innerTolSq) / Math.max(1, tolSq - innerTolSq)) * 255)
+          : 255;
+        const p = idx * 4;
+        out[p] = 255;
+        out[p + 1] = 255;
+        out[p + 2] = 255;
+        out[p + 3] = a;
+      }
+
+      if (cy > 0) {
+        const nextLine = (cy - 1) * w;
+        let inSpan = false;
+        for (let x = left; x <= right; x++) {
+          const idx = nextLine + x;
+          const matches = visited[idx] === 0 && distSq(idx) <= tolSq;
+          if (!inSpan && matches) {
+            queue.push(idx);
+            inSpan = true;
+          } else if (inSpan && !matches) {
+            inSpan = false;
+          }
+        }
+      }
+
+      if (cy + 1 < h) {
+        const nextLine = (cy + 1) * w;
+        let inSpan = false;
+        for (let x = left; x <= right; x++) {
+          const idx = nextLine + x;
+          const matches = visited[idx] === 0 && distSq(idx) <= tolSq;
+          if (!inSpan && matches) {
+            queue.push(idx);
+            inSpan = true;
+          } else if (inSpan && !matches) {
+            inSpan = false;
+          }
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
    * Internal helper to apply a temporary shape canvas to the mask canvas using combineMode.
    */
   private applyShapeCanvas(tempCanvas: HTMLCanvasElement, mode: SelectionCombineMode): void {

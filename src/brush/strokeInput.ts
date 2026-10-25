@@ -20,6 +20,8 @@ import { brushSizeOverlay, eyedropperLoupeOverlay } from '../ui/canvasOverlays';
 import { createBrushCursorOverlay } from './brushCursorOverlay';
 import { brushDiagnostics } from './brushDiagnostics';
 import { rustStrokeEngine } from './rustStrokeEngine';
+import { rulerManager } from '../canvas/rulerManager';
+import { rulerOverlay, type RulerHandleKind } from '../canvas/rulerOverlay';
 
 export interface StrokeInputOptions {
   canvas: HTMLCanvasElement;
@@ -116,7 +118,11 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     | 'transform'
     | 'bucket-enclose'
     | 'bucket-unfilled'
+    | 'ruler-handle'
     | null = null;
+  let activeRulerHandle: RulerHandleKind = 'none';
+  let strokeStartDocX = 0;
+  let strokeStartDocY = 0;
   let activePointerId: number | null = null;
   let lastPointerType = 'mouse';
   let encloseLassoPoints: { x: number; y: number }[] = [];
@@ -248,6 +254,11 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   function updateCursor(): void {
+    if (transformManager.isTransforming()) {
+      canvas.style.cursor = 'default';
+      cursorOverlay.setVisible(false);
+      return;
+    }
     const tool = activeTool();
     const isBrushTool = (tool === 'pen' || tool === 'brush' || tool === 'eraser' || tool === 'effect') && !activePan && !activeRotate && !isSamplingEyedropper && !isSpacePressed;
     if (activePan) {
@@ -281,6 +292,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   }
 
   const unsubscribe = subscribeTools(() => updateCursor());
+  const unsubTrans = transformManager.subscribe(() => updateCursor());
   updateCursor();
 
   const pointerToDoc = (event: PointerLike): { x: number; y: number } | null => {
@@ -294,10 +306,22 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const emitTo = (x: number, y: number, pressure: number): void => {
-    if (activeStroke === 'eraser') {
-      engine.continueErase(x, y, pressure);
-    } else if (activeStroke === 'brush') {
-      engine.continueStroke(x, y, pressure);
+    const rState = rulerManager.getState();
+    if (rState.type === 'symmetry') {
+      const symPts = rulerManager.getSymmetricPoints(x, y);
+      for (const pt of symPts) {
+        if (activeStroke === 'eraser') {
+          engine.continueErase(pt.x, pt.y, pressure);
+        } else if (activeStroke === 'brush') {
+          engine.continueStroke(pt.x, pt.y, pressure);
+        }
+      }
+    } else {
+      if (activeStroke === 'eraser') {
+        engine.continueErase(x, y, pressure);
+      } else if (activeStroke === 'brush') {
+        engine.continueStroke(x, y, pressure);
+      }
     }
   };
 
@@ -363,31 +387,48 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const handleStrokePoint = (doc: { x: number; y: number }, pressure: number): void => {
+    const rState = rulerManager.getState();
+    if (rState.type !== 'none' && rState.type !== 'symmetry' && rState.snapEnabled) {
+      const snapped = rulerManager.snapPoint(strokeStartDocX, strokeStartDocY, doc.x, doc.y);
+      doc.x = snapped.x;
+      doc.y = snapped.y;
+    }
+
     const isPen = lastPointerType === 'pen';
     const stab = getToolState().brush.stabilization;
-    const rustRes = rustStrokeEngine.addStabilizerPoint(doc.x, doc.y, pressure, stab, isPen);
-
-    if (rustRes) {
-      engine.setStrokeSpeed(rustRes.speed);
-      lastSamplePressure = pressure;
-      if (pressure > peakStrokePressure) peakStrokePressure = pressure;
-      const pts = rustRes.points;
-      for (let i = 0; i < rustRes.count; i++) {
-        const off = i * 3;
-        enqueuePoint(pts[off], pts[off + 1], pts[off + 2]);
-      }
-      return;
-    }
+    lastSamplePressure = pressure;
+    if (pressure > peakStrokePressure) peakStrokePressure = pressure;
 
     const dxr = doc.x - rawLastX;
     const dyr = doc.y - rawLastY;
     const stepDist = Math.hypot(dxr, dyr);
-    lastSamplePressure = pressure;
-    if (pressure > peakStrokePressure) peakStrokePressure = pressure;
+    const minDist = isPen ? 0.08 : MIN_SAMPLE_DISTANCE;
 
-    // Ignore sub-pixel jitter: otherwise a resting mouse keeps stacking
-    // stamps in the same spot (the "repeated seal" artifact).
-    const minDist = lastPointerType === 'pen' ? 0.08 : MIN_SAMPLE_DISTANCE;
+    const rustRes = rustStrokeEngine.addStabilizerPoint(doc.x, doc.y, pressure, stab, isPen);
+
+    if (rustRes) {
+      engine.setStrokeSpeed(rustRes.speed);
+      if (stepDist >= minDist) {
+        totalStrokeDist += stepDist;
+        velX = velX * 0.55 + dxr * 0.45;
+        velY = velY * 0.55 + dyr * 0.45;
+        rawLastX = doc.x;
+        rawLastY = doc.y;
+      }
+      if (rustRes.count > 0) {
+        const pts = rustRes.points;
+        for (let i = 0; i < rustRes.count; i++) {
+          const off = i * 3;
+          enqueuePoint(pts[off], pts[off + 1], pts[off + 2]);
+        }
+        const lastIdx = (rustRes.count - 1) * 3;
+        smoothedX = pts[lastIdx];
+        smoothedY = pts[lastIdx + 1];
+        smoothHist = [{ x: smoothedX, y: smoothedY, p: pts[lastIdx + 2] }];
+      }
+      return;
+    }
+
     if (stepDist < minDist) return;
 
     totalStrokeDist += stepDist;
@@ -417,6 +458,20 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   };
 
   const finish = (pointerId?: number, endEvent?: PointerEvent): void => {
+    if (activeStroke === 'ruler-handle') {
+      activeStroke = null;
+      activeRulerHandle = 'none';
+      if (pointerId !== undefined && canvas.hasPointerCapture(pointerId)) {
+        try {
+          canvas.releasePointerCapture(pointerId);
+        } catch {
+          // ignore
+        }
+      }
+      activePointerId = null;
+      return;
+    }
+
     if (activeStroke === 'bucket-enclose') {
       activeStroke = null;
       marchingAnts.overlayCtx.clearRect(0, 0, docW, docH);
@@ -562,40 +617,54 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
         }
       }
 
-      const cp = isMouse ? 1.0 : lastSamplePressure;
-      const catchUpDist = Math.hypot(rawLastX - smoothedX, rawLastY - smoothedY);
-      const stab = getToolState().brush.stabilization;
-      if (stab > 0 && catchUpDist > 0.2) {
-        const steps = Math.max(3, Math.min(8, Math.ceil(catchUpDist / 2)));
-        const startX = smoothedX;
-        const startY = smoothedY;
-        for (let i = 1; i <= steps; i++) {
-          const t = i / steps;
-          const cx = startX + (rawLastX - startX) * t;
-          const cy = startY + (rawLastY - startY) * t;
-          pushSmoothed(cx, cy, cp);
+      if (rustStrokeEngine.available) {
+        const tail = rustStrokeEngine.flushStabilizerTail();
+        if (tail && tail.count > 0) {
+          const pts = tail.points;
+          for (let i = 0; i < tail.count; i++) {
+            const off = i * 3;
+            enqueuePoint(pts[off], pts[off + 1], pts[off + 2]);
+          }
+          const lastIdx = (tail.count - 1) * 3;
+          smoothedX = pts[lastIdx];
+          smoothedY = pts[lastIdx + 1];
         }
-        smoothedX = rawLastX;
-        smoothedY = rawLastY;
-      } else if (catchUpDist > 0.05) {
-        smoothedX = rawLastX;
-        smoothedY = rawLastY;
-        pushSmoothed(smoothedX, smoothedY, cp);
-      }
+      } else {
+        const cp = isMouse ? 1.0 : lastSamplePressure;
+        const catchUpDist = Math.hypot(rawLastX - smoothedX, rawLastY - smoothedY);
+        const stab = getToolState().brush.stabilization;
+        if (stab > 0 && catchUpDist > 0.2) {
+          const steps = Math.max(3, Math.min(8, Math.ceil(catchUpDist / 2)));
+          const startX = smoothedX;
+          const startY = smoothedY;
+          for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const cx = startX + (rawLastX - startX) * t;
+            const cy = startY + (rawLastY - startY) * t;
+            pushSmoothed(cx, cy, cp);
+          }
+          smoothedX = rawLastX;
+          smoothedY = rawLastY;
+        } else if (catchUpDist > 0.05) {
+          smoothedX = rawLastX;
+          smoothedY = rawLastY;
+          pushSmoothed(smoothedX, smoothedY, cp);
+        }
 
-      // Flush the final half-segment from the last midpoint in smoothHist to (rawLastX, rawLastY)
-      const lastEmitted = smoothHist[smoothHist.length - 1];
-      if (lastEmitted) {
-        const tailDist = Math.hypot(rawLastX - lastEmitted.x, rawLastY - lastEmitted.y);
-        if (tailDist > 0.1) {
-          const subSteps = Math.max(2, Math.min(6, Math.ceil(tailDist / 1.5)));
-          for (let i = 1; i <= subSteps; i++) {
-            const t = i / subSteps;
-            emitTo(
-              lastEmitted.x + (rawLastX - lastEmitted.x) * t,
-              lastEmitted.y + (rawLastY - lastEmitted.y) * t,
-              cp,
-            );
+        // Flush the final half-segment from the last midpoint in smoothHist to (rawLastX, rawLastY)
+        const lastEmitted = smoothHist[smoothHist.length - 1];
+        if (lastEmitted) {
+          const tailDist = Math.hypot(rawLastX - lastEmitted.x, rawLastY - lastEmitted.y);
+          if (tailDist > 0.1) {
+            const subSteps = Math.max(2, Math.min(6, Math.ceil(tailDist / 1.5)));
+            for (let i = 1; i <= subSteps; i++) {
+              const t = i / subSteps;
+              emitTo(
+                lastEmitted.x + (rawLastX - lastEmitted.x) * t,
+                lastEmitted.y + (rawLastY - lastEmitted.y) * t,
+                cp,
+              );
+            }
           }
         }
       }
@@ -614,6 +683,11 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     activePointerId = null;
     if (!wasBone) {
       engine.endStroke({ vx: velX, vy: velY, isMouse: lastPointerType !== 'pen' });
+      console.log(
+        `%c[Oniri Trazo Finalizado]%c recorrido=${Math.round(totalStrokeDist)}px pMax=${peakStrokePressure.toFixed(2)} ultPos=(${Math.round(rawLastX)}, ${Math.round(rawLastY)})`,
+        'background: #059669; color: #fff; padding: 1px 5px; border-radius: 3px; font-weight: bold;',
+        'color: inherit;'
+      );
     }
   };
 
@@ -710,6 +784,20 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const tool = activeTool();
     const doc = pointerToDoc(event);
     if (!doc) return;
+
+    // 0d. Check hit on Ruler Control Pins/Handles (if ruler is visible)
+    const rulerHandle = rulerOverlay.hitTest(doc.x, doc.y);
+    if (rulerHandle !== 'none') {
+      activeStroke = 'ruler-handle';
+      activeRulerHandle = rulerHandle;
+      activePointerId = event.pointerId;
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignored
+      }
+      return;
+    }
 
     if (transformManager.isTransforming()) {
       // Modal transform state: the gizmo owns the pointer. Drawing tools, fills and
@@ -825,14 +913,33 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
 
     if (tool === 'select') {
       const subId = getToolState().activeSubToolId;
-      let selType: 'rect' | 'ellipse' | 'lasso' | 'poly' = 'rect';
-      if (subId === 'select-ellipse') selType = 'ellipse';
-      else if (subId === 'select-lasso') selType = 'lasso';
-      else if (subId === 'select-poly') selType = 'poly';
 
       let combineMode = getToolState().selectionCombineMode;
       if (event.shiftKey) combineMode = 'add';
       else if (event.altKey) combineMode = 'subtract';
+
+      if (subId === 'select-wand') {
+        const active = engine.layerManager.getActiveDrawableLayer();
+        if (active && active.context) {
+          const imgData = active.context.getImageData(0, 0, engine.docW, engine.docH);
+          const tol = getToolState().brush.tolerance ?? 20;
+          selectionModel.selectWand(
+            imgData.data,
+            Math.floor(doc.x),
+            Math.floor(doc.y),
+            tol,
+            true,
+            true,
+            combineMode,
+          );
+        }
+        return;
+      }
+
+      let selType: 'rect' | 'ellipse' | 'lasso' | 'poly' = 'rect';
+      if (subId === 'select-ellipse') selType = 'ellipse';
+      else if (subId === 'select-lasso') selType = 'lasso';
+      else if (subId === 'select-poly') selType = 'poly';
 
       // Drag inside an existing selection moves only the selection mask.
       // Modifiers still create a new combined selection instead.
@@ -1064,11 +1171,33 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     const isErase = tool === 'eraser' || getToolState().isTransparentColor;
     activeStroke = isErase ? 'eraser' : 'brush';
     applyTiltFrom(event);
-    if (isErase) {
-      engine.beginErase(doc.x, doc.y, pressure, lastPointerType !== 'pen');
+
+    rulerManager.resetStrokeLock();
+    strokeStartDocX = doc.x;
+    strokeStartDocY = doc.y;
+
+    const rState = rulerManager.getState();
+    if (rState.type === 'symmetry') {
+      const symPoints = rulerManager.getSymmetricPoints(doc.x, doc.y);
+      for (const pt of symPoints) {
+        if (isErase) {
+          engine.beginErase(pt.x, pt.y, pressure, lastPointerType !== 'pen');
+        } else {
+          engine.beginStroke(pt.x, pt.y, pressure, lastPointerType !== 'pen');
+        }
+      }
     } else {
-      engine.beginStroke(doc.x, doc.y, pressure, lastPointerType !== 'pen');
+      if (isErase) {
+        engine.beginErase(doc.x, doc.y, pressure, lastPointerType !== 'pen');
+      } else {
+        engine.beginStroke(doc.x, doc.y, pressure, lastPointerType !== 'pen');
+      }
     }
+    console.log(
+      `%c[Oniri Trazo Iniciado]%c modo=${activeStroke} (${Math.round(doc.x)}, ${Math.round(doc.y)}) presión=${pressure.toFixed(2)} pointer=${lastPointerType} wasm=${rustStrokeEngine.available}`,
+      'background: #2563eb; color: #fff; padding: 1px 5px; border-radius: 3px; font-weight: bold;',
+      'color: inherit;'
+    );
   };
 
   const onPointerMove = (event: PointerEvent): void => {
@@ -1174,6 +1303,14 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     updateBrushCursor(event);
 
     if (!activeStroke) return;
+
+    if (activeStroke === 'ruler-handle') {
+      const doc = pointerToDoc(event);
+      if (doc) {
+        rulerOverlay.moveHandle(activeRulerHandle, doc.x, doc.y);
+      }
+      return;
+    }
 
     if (activeStroke === 'bone') {
       const tm = engine.getTimelineManager();
@@ -1346,7 +1483,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       const dy = targetY - startPredY;
       const dist = Math.hypot(dx, dy);
 
-      if (dist > 1.5) {
+      if (dist > 1.5 && dist < 120) {
         let tanX = velX;
         let tanY = velY;
         const tanLen = Math.hypot(tanX, tanY);
@@ -1445,6 +1582,14 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     }
 
     if (!activeStroke) return;
+
+    if (activeStroke === 'ruler-handle') {
+      const doc = pointerToDoc(event);
+      if (doc) {
+        rulerOverlay.moveHandle(activeRulerHandle, doc.x, doc.y);
+      }
+      return;
+    }
     finish(event.pointerId, event);
   };
 
@@ -1697,6 +1842,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     },
     dispose: () => {
       unsubscribe();
+      unsubTrans();
       cursorOverlay.destroy();
       if (activeStroke) finish(activePointerId ?? undefined);
       canvas.removeEventListener('contextmenu', onContextMenu);

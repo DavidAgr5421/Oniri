@@ -13,16 +13,95 @@ export interface SelectionDragPreview {
   combineMode: 'replace' | 'add' | 'subtract';
 }
 
+function extractSelectionSegments(
+  maskData: Uint8Array | Uint8ClampedArray,
+  width: number,
+  height: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number
+): Float32Array {
+  const segments: number[] = [];
+  const isSelected = (x: number, y: number): boolean => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return false;
+    return maskData[(y * width + x) * 4 + 3] > 128;
+  };
+
+  const x0 = Math.max(0, minX);
+  const y0 = Math.max(0, minY);
+  const x1 = Math.min(width - 1, maxX);
+  const y1 = Math.min(height - 1, maxY);
+
+  // 1. Bordes horizontales (Superior e Inferior) con fusión colineal
+  for (let y = y0; y <= y1; y++) {
+    let inTopEdge = false;
+    let segStartX = 0;
+    for (let x = x0; x <= x1 + 1; x++) {
+      const edge = x <= x1 && isSelected(x, y) && (y === 0 || !isSelected(x, y - 1));
+      if (edge && !inTopEdge) {
+        inTopEdge = true;
+        segStartX = x;
+      } else if (!edge && inTopEdge) {
+        inTopEdge = false;
+        segments.push(segStartX, y, x, y);
+      }
+    }
+
+    let inBottomEdge = false;
+    let bStartX = 0;
+    for (let x = x0; x <= x1 + 1; x++) {
+      const edge = x <= x1 && isSelected(x, y) && (y === height - 1 || !isSelected(x, y + 1));
+      if (edge && !inBottomEdge) {
+        inBottomEdge = true;
+        bStartX = x;
+      } else if (!edge && inBottomEdge) {
+        inBottomEdge = false;
+        segments.push(bStartX, y + 1, x, y + 1);
+      }
+    }
+  }
+
+  // 2. Bordes verticales (Izquierdo y Derecho) con fusión colineal
+  for (let x = x0; x <= x1; x++) {
+    let inLeftEdge = false;
+    let segStartY = 0;
+    for (let y = y0; y <= y1 + 1; y++) {
+      const edge = y <= y1 && isSelected(x, y) && (x === 0 || !isSelected(x - 1, y));
+      if (edge && !inLeftEdge) {
+        inLeftEdge = true;
+        segStartY = y;
+      } else if (!edge && inLeftEdge) {
+        inLeftEdge = false;
+        segments.push(x, segStartY, x, y);
+      }
+    }
+
+    let inRightEdge = false;
+    let rStartY = 0;
+    for (let y = y0; y <= y1 + 1; y++) {
+      const edge = y <= y1 && isSelected(x, y) && (x === width - 1 || !isSelected(x + 1, y));
+      if (edge && !inRightEdge) {
+        inRightEdge = true;
+        rStartY = y;
+      } else if (!edge && inRightEdge) {
+        inRightEdge = false;
+        segments.push(x + 1, rStartY, x + 1, y);
+      }
+    }
+  }
+
+  return new Float32Array(segments);
+}
+
 export class MarchingAntsRenderer {
   public readonly overlayCanvas: HTMLCanvasElement;
   public readonly overlayCtx: CanvasRenderingContext2D;
 
-  private boundaryCanvas: HTMLCanvasElement;
-  private boundaryCtx: CanvasRenderingContext2D;
-
   private dashOffset = 0;
   private lastTime = 0;
   private boundaryDirty = true;
+  private boundaryPath: Path2D | null = null;
   private activeDragPreview: SelectionDragPreview | null = null;
 
   constructor() {
@@ -33,13 +112,6 @@ export class MarchingAntsRenderer {
     if (!octx) throw new Error('Failed to get overlay 2d context');
     this.overlayCtx = octx;
 
-    this.boundaryCanvas = document.createElement('canvas');
-    this.boundaryCanvas.width = DOC_W;
-    this.boundaryCanvas.height = DOC_H;
-    const bctx = this.boundaryCanvas.getContext('2d');
-    if (!bctx) throw new Error('Failed to get boundary 2d context');
-    this.boundaryCtx = bctx;
-
     selectionModel.subscribe(() => {
       this.boundaryDirty = true;
     });
@@ -48,8 +120,6 @@ export class MarchingAntsRenderer {
   public resize(w: number, h: number): void {
     this.overlayCanvas.width = w;
     this.overlayCanvas.height = h;
-    this.boundaryCanvas.width = w;
-    this.boundaryCanvas.height = h;
     this.boundaryDirty = true;
   }
 
@@ -62,47 +132,53 @@ export class MarchingAntsRenderer {
   }
 
   /**
-   * Recalculates the 1-pixel boundary of the current selection mask.
-   * Uses Rust WASM for 1-pass zero-latency perimeter extraction, with 4-way dilation fallback.
+   * Recalcula los segmentos de contorno vectoriales de la selección actual.
+   * Utiliza Rust WASM o el algoritmo delimitado por caja para máxima velocidad.
    */
   private updateBoundary(): void {
     this.boundaryDirty = false;
-    const w = this.boundaryCanvas.width;
-    const h = this.boundaryCanvas.height;
-    this.boundaryCtx.clearRect(0, 0, w, h);
-
-    if (!selectionModel.hasSelection()) return;
-
-    const mask = selectionModel.maskCanvas;
-    const mctx = selectionModel.maskCtx;
-    const imgData = mctx.getImageData(0, 0, w, h);
-    const data = imgData.data;
-
-    const rustBoundary = rustStrokeEngine.extractBoundaryMask(
-      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
-      w,
-      h,
-      true,
-    );
-
-    if (rustBoundary) {
-      const clamped = new Uint8ClampedArray(rustBoundary.buffer as ArrayBuffer, rustBoundary.byteOffset, rustBoundary.byteLength);
-      const outImg = new ImageData(clamped, w, h);
-      this.boundaryCtx.putImageData(outImg, 0, 0);
+    const bounds = selectionModel.getBounds();
+    if (!selectionModel.hasSelection() || !bounds) {
+      this.boundaryPath = null;
       return;
     }
 
-    // 1. Dilate mask by 1 pixel in 4 cardinal directions
-    this.boundaryCtx.drawImage(mask, -1, 0);
-    this.boundaryCtx.drawImage(mask, 1, 0);
-    this.boundaryCtx.drawImage(mask, 0, -1);
-    this.boundaryCtx.drawImage(mask, 0, 1);
+    const w = this.overlayCanvas.width;
+    const h = this.overlayCanvas.height;
+    const mctx = selectionModel.maskCtx;
 
-    // 2. Subtract original mask leaving only the outer 1px perimeter edge
-    this.boundaryCtx.save();
-    this.boundaryCtx.globalCompositeOperation = 'destination-out';
-    this.boundaryCtx.drawImage(mask, 0, 0);
-    this.boundaryCtx.restore();
+    // Acotado exacto: lee únicamente el cuadro delimitador de la selección (+1px margen)
+    const bx0 = Math.max(0, bounds.minX - 1);
+    const by0 = Math.max(0, bounds.minY - 1);
+    const bx1 = Math.min(w - 1, bounds.maxX + 1);
+    const by1 = Math.min(h - 1, bounds.maxY + 1);
+    const bw = bx1 - bx0 + 1;
+    const bh = by1 - by0 + 1;
+
+    const imgData = mctx.getImageData(bx0, by0, bw, bh);
+    const data = imgData.data;
+
+    let segs = rustStrokeEngine.extractBoundarySegments(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      bw,
+      bh,
+      0,
+      0,
+      bw - 1,
+      bh - 1,
+      true,
+    );
+
+    if (!segs || segs.length === 0) {
+      segs = extractSelectionSegments(data, bw, bh, 0, 0, bw - 1, bh - 1);
+    }
+
+    const path = new Path2D();
+    for (let i = 0; i < segs.length; i += 4) {
+      path.moveTo(bx0 + segs[i], by0 + segs[i + 1]);
+      path.lineTo(bx0 + segs[i + 2], by0 + segs[i + 3]);
+    }
+    this.boundaryPath = path;
   }
 
   public isAnimating(): boolean {
@@ -110,8 +186,7 @@ export class MarchingAntsRenderer {
   }
 
   /**
-   * Advances the animation of the marching ants and repaints the overlay canvas.
-   * Returns true if the overlay canvas was updated and needs a texture sync.
+   * Renderiza las hormigas marchantes en vector puro y avanza el offset de animación.
    */
   public render(now = performance.now()): boolean {
     const hasSelection = selectionModel.hasSelection();
@@ -127,7 +202,7 @@ export class MarchingAntsRenderer {
       return false;
     }
 
-    // Advance dash offset roughly every ~40ms for classic smooth marching cadence
+    // Avanza el desplazamiento de las hormigas cada ~40ms para cadencia suave clásica
     if (this.lastTime === 0) this.lastTime = now;
     const elapsed = now - this.lastTime;
     let cadenceAdvanced = false;
@@ -137,7 +212,6 @@ export class MarchingAntsRenderer {
       cadenceAdvanced = true;
     }
 
-    // Skip redundant repaints and GPU uploads when nothing has changed between frames
     if (!cadenceAdvanced && !this.boundaryDirty && !hasPreview && !isTransforming) {
       return false;
     }
@@ -148,61 +222,36 @@ export class MarchingAntsRenderer {
 
     this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
 
-    // 1. Draw marching ants boundary if selection is active (hidden while transforming)
-    if (hasSelection && !isTransforming) {
+    // 1. Dibuja contorno vectorial nítido de hormigas marchantes en 2 pasadas (Negro + Guiones blancos)
+    if (hasSelection && !isTransforming && this.boundaryPath) {
       this.overlayCtx.save();
+      this.overlayCtx.lineWidth = 1;
 
-      // Mask with the 1px boundary
-      this.overlayCtx.drawImage(this.boundaryCanvas, 0, 0);
+      // Base negra continua
+      this.overlayCtx.strokeStyle = '#000000';
+      this.overlayCtx.setLineDash([]);
+      this.overlayCtx.stroke(this.boundaryPath);
 
-      // Clip drawing to boundary pixels using source-in
-      this.overlayCtx.globalCompositeOperation = 'source-in';
-
-      // Fill with animated alternating black & white stripes at 45 degrees
-      this.renderStripesPattern(this.overlayCtx, this.dashOffset);
+      // Guiones blancos alternados con offset dinámico (hormigas clásicas de CSP / Photoshop)
+      this.overlayCtx.strokeStyle = '#ffffff';
+      this.overlayCtx.setLineDash([4, 4]);
+      this.overlayCtx.lineDashOffset = -this.dashOffset;
+      this.overlayCtx.stroke(this.boundaryPath);
 
       this.overlayCtx.restore();
     }
 
-    // 2. Draw live drag preview if user is currently creating a selection
+    // 2. Previsualización de arrastre activo si el usuario está seleccionando
     if (hasPreview && this.activeDragPreview) {
       this.renderLiveDragPreview(this.activeDragPreview, this.dashOffset);
     }
 
-    // 3. Draw Free Transform Gizmo & transformed content
+    // 3. Gizmo de Transformación Libre
     if (isTransforming) {
       transformManager.render(this.overlayCtx);
     }
 
     return true;
-  }
-
-  /**
-   * Fills the canvas with 45-degree black-and-white marching diagonal stripes.
-   */
-  private renderStripesPattern(ctx: CanvasRenderingContext2D, offset: number): void {
-    const bounds = selectionModel.getBounds();
-    const minX = bounds ? Math.max(0, bounds.minX - 2) : 0;
-    const minY = bounds ? Math.max(0, bounds.minY - 2) : 0;
-    const maxX = bounds ? Math.min(this.overlayCanvas.width, bounds.maxX + 3) : this.overlayCanvas.width;
-    const maxY = bounds ? Math.min(this.overlayCanvas.height, bounds.maxY + 3) : this.overlayCanvas.height;
-
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
-
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 4;
-
-    const spacing = 8;
-    const startX = minX - (maxY - minY) - spacing;
-    const endX = maxX + spacing;
-
-    ctx.beginPath();
-    for (let x = startX + (offset % spacing); x < endX; x += spacing) {
-      ctx.moveTo(x, minY);
-      ctx.lineTo(x + (maxY - minY), maxY);
-    }
-    ctx.stroke();
   }
 
   /**

@@ -25,6 +25,7 @@ import { mountFileMenu } from './storage/fileMenu';
 import { viewportNav } from './canvas/viewportNavigation';
 import { mountNavigatorPalette } from './canvas/navigatorView';
 import { cameraFrameOverlay } from './canvas/cameraFrameOverlay';
+import { rulerOverlay } from './canvas/rulerOverlay';
 import { brushDiagnostics } from './brush/brushDiagnostics';
 import { rustStrokeEngine } from './brush/rustStrokeEngine';
 
@@ -150,6 +151,22 @@ const selectionMesh = new Mesh(canvasGeo, selectionMat);
 selectionMesh.position.set(0, 0, 0.006);
 scene.add(selectionMesh);
 
+// Ruler & Perspective Overlay Mesh
+let rulerTexture = new CanvasTexture(rulerOverlay.canvas);
+rulerTexture.minFilter = LinearFilter;
+rulerTexture.magFilter = LinearFilter;
+rulerTexture.generateMipmaps = false;
+
+const rulerMat = new MeshBasicMaterial({
+  map: rulerTexture,
+  transparent: true,
+  depthTest: false,
+  side: DoubleSide,
+});
+const rulerMesh = new Mesh(canvasGeo, rulerMat);
+rulerMesh.position.set(0, 0, 0.007);
+scene.add(rulerMesh);
+
 // Camera Frame & Overscan Mask Overlay
 let cameraFrameTexture = new CanvasTexture(cameraFrameOverlay.canvas);
 cameraFrameTexture.minFilter = LinearFilter;
@@ -170,7 +187,7 @@ scene.add(cameraFrameMesh);
 viewportNav.init({
   camera,
   canvas,
-  meshes: [canvasMesh, borderMesh, liveStrokeMesh, topLayersMesh, selectionMesh, cameraFrameMesh],
+  meshes: [canvasMesh, borderMesh, liveStrokeMesh, topLayersMesh, selectionMesh, rulerMesh, cameraFrameMesh],
   onUpdate: () => {
     requestRender();
   },
@@ -199,6 +216,7 @@ const strokeInputHandle = attachStrokeInput({
 engine.onDocumentResize = (w: number, h: number) => {
   strokeInputHandle.setDocDimensions(w, h);
   marchingAnts.resize(w, h);
+  rulerOverlay.resize(w, h);
   cameraFrameOverlay.resize(w, h);
 
   const aspect = w / h;
@@ -218,6 +236,7 @@ engine.onDocumentResize = (w: number, h: number) => {
   liveStrokeMesh.geometry = newCanvasGeo;
   topLayersMesh.geometry = newCanvasGeo;
   selectionMesh.geometry = newCanvasGeo;
+  rulerMesh.geometry = newCanvasGeo;
   cameraFrameMesh.geometry = newCanvasGeo;
 
   borderMesh.geometry.dispose();
@@ -241,6 +260,14 @@ engine.onDocumentResize = (w: number, h: number) => {
   selectionTexture.generateMipmaps = false;
   selectionMat.map = selectionTexture;
   selectionMat.needsUpdate = true;
+
+  rulerTexture.dispose();
+  rulerTexture = new CanvasTexture(rulerOverlay.canvas);
+  rulerTexture.minFilter = LinearFilter;
+  rulerTexture.magFilter = LinearFilter;
+  rulerTexture.generateMipmaps = false;
+  rulerMat.map = rulerTexture;
+  rulerMat.needsUpdate = true;
 
   cameraFrameTexture.dispose();
   cameraFrameTexture = new CanvasTexture(cameraFrameOverlay.canvas);
@@ -368,10 +395,16 @@ function syncLiveStrokeSubImage(
 }
 
 // Render Loop (Render-on-Demand + 2-Plane Inking Overlay)
+let wasLivePainting = false;
 function animate(): void {
   requestAnimationFrame(animate);
 
   if (engine.isLivePainting && engine.useOverlayPlanes) {
+    if (!wasLivePainting) {
+      wasLivePainting = true;
+      liveStrokeTexture.needsUpdate = true;
+      renderNeeded = true;
+    }
     if (engine.topLayersDirty) {
       topLayersTexture.needsUpdate = true;
       engine.topLayersDirty = false;
@@ -393,6 +426,11 @@ function animate(): void {
       renderNeeded = true;
     }
   } else {
+    if (wasLivePainting) {
+      wasLivePainting = false;
+      liveStrokeTexture.needsUpdate = true;
+      renderNeeded = true;
+    }
     liveStrokeMesh.visible = false;
     topLayersMesh.visible = false;
 
@@ -406,6 +444,12 @@ function animate(): void {
   const antsDirty = marchingAnts.render();
   if (antsDirty) {
     selectionTexture.needsUpdate = true;
+    renderNeeded = true;
+  }
+
+  const rulerDirty = rulerOverlay.render();
+  if (rulerDirty) {
+    rulerTexture.needsUpdate = true;
     renderNeeded = true;
   }
 

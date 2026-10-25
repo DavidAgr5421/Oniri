@@ -26,6 +26,8 @@ export const LAUNCHER_BUTTON_DEFS: LauncherButtonItem[] = [
   { id: 'sep-1', label: 'Separador 1', defaultVisible: true, isSeparator: true },
   { id: 'sel-expand', label: 'Expandir área seleccionada...', defaultVisible: true },
   { id: 'sel-contract', label: 'Reducir área seleccionada...', defaultVisible: true },
+  { id: 'sel-feather', label: 'Desvanecer bordes (Feather)...', defaultVisible: true },
+  { id: 'sel-border', label: 'Crear borde de selección...', defaultVisible: true },
   { id: 'sep-2', label: 'Separador 2', defaultVisible: true, isSeparator: true },
   { id: 'sel-clear', label: 'Borrar contenido de la selección', shortcut: 'Delete', defaultVisible: true },
   { id: 'sel-clear-outside', label: 'Borrar fuera de la selección', shortcut: 'Alt+Delete', defaultVisible: true },
@@ -180,6 +182,37 @@ export function mountSelectionLauncher(options: SelectionLauncherOptions): () =>
             e.stopPropagation();
             showRadiusPopover(btn, 'Reducir selección', (radius) => {
               selectionModel.contractSelection(radius);
+            });
+          });
+          break;
+
+        case 'sel-feather':
+          btn.innerHTML = `
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/>
+              <line x1="16" y1="8" x2="2" y2="22"/>
+              <line x1="17.5" y1="15" x2="9" y2="15"/>
+            </svg>
+          `;
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showRadiusPopover(btn, 'Desvanecer selección (Feather)', (radius) => {
+              selectionModel.featherSelection(radius);
+            });
+          });
+          break;
+
+        case 'sel-border':
+          btn.innerHTML = `
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <rect x="7" y="7" width="10" height="10" rx="1" stroke-dasharray="2 1"/>
+            </svg>
+          `;
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showRadiusPopover(btn, 'Grosor de borde de selección', (radius) => {
+              selectionModel.borderSelection(radius, 'center');
             });
           });
           break;

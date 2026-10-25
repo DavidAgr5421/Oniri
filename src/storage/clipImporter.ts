@@ -235,14 +235,12 @@ export function decodeCelToCanvas(
   const originX = desc.originX ?? 0;
   const originY = desc.originY ?? 0;
 
-  // Offscreen canvas at native document resolution
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = desc.docW;
-  tempCanvas.height = desc.docH;
-  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
-  if (!tempCtx) return false;
+  // Fast path: direct buffer creation on layer context, avoiding intermediate DOM canvases
+  const isDirect = layer.canvas.width === desc.docW && layer.canvas.height === desc.docH;
+  const ctx = layer.context || layer.canvas.getContext('2d', { willReadFrequently: true })!;
+  if (!ctx) return false;
 
-  const imgData = tempCtx.createImageData(desc.docW, desc.docH);
+  const imgData = ctx.createImageData(desc.docW, desc.docH);
   const rgba = imgData.data;
   let tilesDrawn = 0;
 
@@ -317,11 +315,18 @@ export function decodeCelToCanvas(
   }
 
   if (tilesDrawn > 0) {
-    tempCtx.putImageData(imgData, 0, 0);
-    const ctx = layer.context || layer.canvas.getContext('2d', { willReadFrequently: true })!;
     ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(tempCanvas, 0, 0, layer.canvas.width, layer.canvas.height);
+    if (isDirect) {
+      ctx.putImageData(imgData, 0, 0);
+    } else {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = desc.docW;
+      tempCanvas.height = desc.docH;
+      const tempCtx = tempCanvas.getContext('2d')!;
+      tempCtx.putImageData(imgData, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(tempCanvas, 0, 0, layer.canvas.width, layer.canvas.height);
+    }
   }
 
   (layer as any)._hasDecodedPixels = true;

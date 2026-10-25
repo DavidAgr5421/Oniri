@@ -48,28 +48,36 @@ pub fn dilate_binary_mask_into(
         }
     }
 
-    // Pasada vertical
-    for x in 0..w {
-        let mut count_in_window: i32 = 0;
-
-        let init_end = rad.min(hi - 1);
-        for y in 0..=init_end {
-            if temp[(y as usize) * w + x] == 1 {
-                count_in_window += 1;
+    // Pasada vertical (Row-major contigua, amigable con la caché L1 de la CPU)
+    let mut col_counts = vec![0i32; w];
+    let init_end = rad.min(hi - 1);
+    for y in 0..=init_end {
+        let row_offset = (y as usize) * w;
+        for x in 0..w {
+            if temp[row_offset + x] == 1 {
+                col_counts[x] += 1;
             }
         }
+    }
 
-        for y in 0..hi {
-            if count_in_window > 0 {
-                dst[(y as usize) * w + x] = 1;
+    for y in 0..hi {
+        let row_offset = (y as usize) * w;
+        let leaving_y = y - rad;
+        let entering_y = y + rad + 1;
+        let has_leaving = leaving_y >= 0 && leaving_y < hi;
+        let has_entering = entering_y >= 0 && entering_y < hi;
+        let row_leaving = if has_leaving { (leaving_y as usize) * w } else { 0 };
+        let row_entering = if has_entering { (entering_y as usize) * w } else { 0 };
+
+        for x in 0..w {
+            if col_counts[x] > 0 {
+                dst[row_offset + x] = 1;
             }
-            let leaving_y = y - rad;
-            let entering_y = y + rad + 1;
-            if leaving_y >= 0 && leaving_y < hi && temp[(leaving_y as usize) * w + x] == 1 {
-                count_in_window -= 1;
+            if has_leaving && temp[row_leaving + x] == 1 {
+                col_counts[x] -= 1;
             }
-            if entering_y >= 0 && entering_y < hi && temp[(entering_y as usize) * w + x] == 1 {
-                count_in_window += 1;
+            if has_entering && temp[row_entering + x] == 1 {
+                col_counts[x] += 1;
             }
         }
     }
@@ -718,5 +726,58 @@ impl SmartFillCore {
             self.bounds = [min_x, min_y, max_x, max_y];
         }
         count
+    }
+
+    /// Dilatación morfológica binaria rápida (0 o 1) con ventana deslizante en memoria contigua
+    pub fn dilate_binary_mask(
+        &mut self,
+        src: &[u8],
+        w: u32,
+        h: u32,
+        radius: i32,
+    ) -> Vec<u8> {
+        let wi = w as usize;
+        let hi = h as usize;
+        let total = wi * hi;
+        if total == 0 || src.len() < total {
+            return Vec::new();
+        }
+        self.ensure_capacity(total);
+        dilate_binary_mask_into(
+            src,
+            &mut self.scratch_a[..total],
+            &mut self.final_fill_mask[..total],
+            wi,
+            hi,
+            radius,
+        );
+        self.final_fill_mask[..total].to_vec()
+    }
+
+    /// Erosión morfológica binaria rápida (0 o 1) por dualidad morfológica en memoria contigua
+    pub fn erode_binary_mask(
+        &mut self,
+        src: &[u8],
+        w: u32,
+        h: u32,
+        radius: i32,
+    ) -> Vec<u8> {
+        let wi = w as usize;
+        let hi = h as usize;
+        let total = wi * hi;
+        if total == 0 || src.len() < total {
+            return Vec::new();
+        }
+        self.ensure_capacity(total);
+        erode_binary_mask_into(
+            src,
+            &mut self.scratch_a[..total],
+            &mut self.scratch_b[..total],
+            &mut self.final_fill_mask[..total],
+            wi,
+            hi,
+            radius,
+        );
+        self.final_fill_mask[..total].to_vec()
     }
 }
