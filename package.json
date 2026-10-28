@@ -12,6 +12,8 @@
     "build:tauri": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && tauri build\"",
     "preview": "vite preview",
     "app": "cmd /c start msedge --app=http://localhost:5173/",
+    "desktop": "cargo run -p oniri-desktop",
+    "desktop:build": "cargo build -p oniri-desktop --release",
     "tauri": "tauri"
   },
   "keywords": [

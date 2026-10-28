@@ -6,6 +6,7 @@ node_modules/
 dist/
 
 # Tauri / Rust build targets & executables
+target/
 src-tauri/target/
 src-tauri/gen/
 crates/*/target/
