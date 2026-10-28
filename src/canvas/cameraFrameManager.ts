@@ -4,6 +4,8 @@ export interface CameraFrameState {
   outputHeight: number;
   offsetX: number;
   offsetY: number;
+  zoom: number; // Camera zoom factor (1.0 = 100%)
+  rotation: number; // Camera rotation in degrees
   showFrame: boolean;
   showMask: boolean;
   maskOpacity: number;
@@ -26,6 +28,8 @@ class CameraFrameManager {
     outputHeight: 1080,
     offsetX: 0,
     offsetY: 0,
+    zoom: 1.0,
+    rotation: 0,
     showFrame: true,
     showMask: true,
     maskOpacity: 0.42,
@@ -51,6 +55,8 @@ class CameraFrameManager {
     outputHeight?: number;
     offsetX?: number;
     offsetY?: number;
+    zoom?: number;
+    rotation?: number;
     showFrame?: boolean;
     showMask?: boolean;
     showSafeMargin?: boolean;
@@ -60,6 +66,8 @@ class CameraFrameManager {
     if (config.outputHeight !== undefined) this.state.outputHeight = Math.max(32, config.outputHeight);
     if (config.offsetX !== undefined) this.state.offsetX = config.offsetX;
     if (config.offsetY !== undefined) this.state.offsetY = config.offsetY;
+    if (config.zoom !== undefined) this.state.zoom = Math.max(0.01, config.zoom);
+    if (config.rotation !== undefined) this.state.rotation = config.rotation;
     if (config.showFrame !== undefined) this.state.showFrame = config.showFrame;
     if (config.showMask !== undefined) this.state.showMask = config.showMask;
     if (config.showSafeMargin !== undefined) this.state.showSafeMargin = config.showSafeMargin;
@@ -85,8 +93,9 @@ class CameraFrameManager {
     if (!this.state.enabled) {
       return { x: 0, y: 0, w: docW, h: docH };
     }
-    const w = Math.min(docW, this.state.outputWidth);
-    const h = Math.min(docH, this.state.outputHeight);
+    const zoom = Math.max(0.01, this.state.zoom || 1.0);
+    const w = Math.min(docW, Math.round(this.state.outputWidth / zoom));
+    const h = Math.min(docH, Math.round(this.state.outputHeight / zoom));
     const x = Math.max(0, Math.min(docW - w, Math.round((docW - w) / 2 + this.state.offsetX)));
     const y = Math.max(0, Math.min(docH - h, Math.round((docH - h) / 2 + this.state.offsetY)));
     return { x, y, w, h };

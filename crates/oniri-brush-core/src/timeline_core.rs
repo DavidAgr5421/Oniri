@@ -6,6 +6,7 @@ pub enum KeyframeInterpolation {
     Hold = 0,
     Linear = 1,
     Smooth = 2,
+    Bezier = 3,
 }
 
 impl From<u8> for KeyframeInterpolation {
@@ -13,7 +14,8 @@ impl From<u8> for KeyframeInterpolation {
         match val {
             0 => KeyframeInterpolation::Hold,
             1 => KeyframeInterpolation::Linear,
-            _ => KeyframeInterpolation::Smooth,
+            2 => KeyframeInterpolation::Smooth,
+            _ => KeyframeInterpolation::Bezier,
         }
     }
 }
@@ -341,6 +343,21 @@ impl TimelineCore {
                 let sy = lerp(k0.scale_y, k1.scale_y, t);
                 let rot = lerp_angle_deg(k0.rotation, k1.rotation, t);
                 let op = lerp(k0.opacity, k1.opacity, t);
+                Self::compose_matrix(x, y, sx, sy, rot, op)
+            }
+            KeyframeInterpolation::Bezier => {
+                let d_frame = (k1.frame - k0.frame).max(1) as f32;
+                let t_frame = frame as f32;
+                let p0x = k0.frame as f32;
+                let p3x = k1.frame as f32;
+
+                let x = crate::f_curve::solve_cubic_bezier_y(p0x, k0.x, p0x + d_frame * 0.333, k0.x, p3x - d_frame * 0.333, k1.x, p3x, k1.x, t_frame);
+                let y = crate::f_curve::solve_cubic_bezier_y(p0x, k0.y, p0x + d_frame * 0.333, k0.y, p3x - d_frame * 0.333, k1.y, p3x, k1.y, t_frame);
+                let sx = crate::f_curve::solve_cubic_bezier_y(p0x, k0.scale_x, p0x + d_frame * 0.333, k0.scale_x, p3x - d_frame * 0.333, k1.scale_x, p3x, k1.scale_x, t_frame);
+                let sy = crate::f_curve::solve_cubic_bezier_y(p0x, k0.scale_y, p0x + d_frame * 0.333, k0.scale_y, p3x - d_frame * 0.333, k1.scale_y, p3x, k1.scale_y, t_frame);
+                let rot = crate::f_curve::solve_cubic_bezier_y(p0x, k0.rotation, p0x + d_frame * 0.333, k0.rotation, p3x - d_frame * 0.333, k1.rotation, p3x, k1.rotation, t_frame);
+                let op = crate::f_curve::solve_cubic_bezier_y(p0x, k0.opacity, p0x + d_frame * 0.333, k0.opacity, p3x - d_frame * 0.333, k1.opacity, p3x, k1.opacity, t_frame).clamp(0.0, 1.0);
+
                 Self::compose_matrix(x, y, sx, sy, rot, op)
             }
         }

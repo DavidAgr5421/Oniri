@@ -4,6 +4,8 @@ pub mod bone_ik;
 pub mod bones;
 pub mod clip_tiles;
 pub mod color_blend;
+pub mod color_sampler;
+pub mod f_curve;
 pub mod fill;
 pub mod filters;
 pub mod flood_fill;
@@ -13,11 +15,14 @@ pub mod resample;
 pub mod ruler;
 pub mod selection;
 pub mod stabilizer;
+pub mod tile_canvas;
 pub mod timeline_core;
 pub use bone_ik::BoneIKCore;
 pub use bones::BoneSkinCore;
-pub use clip_tiles::ClipTileCore;
+pub use clip_tiles::{ClipTileCore, FastLayerCompositor, FrameCacheCore};
 pub use color_blend::ColorBlendCore;
+pub use color_sampler::ColorSamplerCore;
+pub use f_curve::wasm_solve_bezier_y;
 pub use fill::SmartFillCore;
 pub use filters::FilterCore;
 pub use flood_fill::{FloodFillCore, FloodFillResult};
@@ -27,12 +32,14 @@ pub use resample::{ResampleMode, TransformResampleCore};
 pub use ruler::RulerCore;
 pub use selection::SelectionCore;
 pub use stabilizer::StrokeStabilizerCore;
+pub use tile_canvas::SparseTileGrid;
 pub use timeline_core::TimelineCore;
 
 const MIN_STAMP_DIAMETER: f32 = 0.4;
-const MIN_STAMP_STEP: f32 = 1.1;
+const MIN_STAMP_STEP: f32 = 1.45;
 const STAMP_GUARD: u32 = 20000;
 const SPRAY_SCALE_BUCKETS: [f32; 6] = [0.45, 0.60, 0.75, 0.90, 1.05, 1.20];
+pub const DAB_STRIDE: usize = 11;
 
 #[cfg(feature = "console_error_panic_hook")]
 #[wasm_bindgen]
@@ -158,6 +165,11 @@ struct StrokeCheckpoint {
     distance_since_stamp: f32,
     stamp_index: u32,
     rng_state: u32,
+    smudge_r: f32,
+    smudge_g: f32,
+    smudge_b: f32,
+    smudge_a: f32,
+    has_smudge_color: bool,
 }
 
 /// Motor de cálculo de trazos, dinámicas y rasterización SDF de sellos en Rust + WASM
@@ -175,8 +187,8 @@ pub struct StrokeEngineCore {
     is_active: bool,
     rng_state: u32,
     checkpoint: StrokeCheckpoint,
-    // Buffer plano de dabs (stride 7):
-    // [x, y, diameter, pressure, alpha, angle_rad, tip_index]
+    // Buffer plano de dabs (stride 11):
+    // [x, y, diameter, pressure, alpha, angle_rad, tip_index, r, g, b, flags]
     dabs_buffer: Vec<f32>,
     dirty_min_x: f32,
     dirty_min_y: f32,
@@ -184,6 +196,38 @@ pub struct StrokeEngineCore {
     dirty_max_y: f32,
     // Buffer reutilizable para generación de texturas SDF de punta de pincel (RGBA8)
     stamp_rgba_buffer: Vec<u8>,
+    // Máscara de selección activa
+    selection_mask: Vec<u8>,
+    selection_mask_width: u32,
+    selection_mask_height: u32,
+    selection_bounds_min_x: f32,
+    selection_bounds_min_y: f32,
+    selection_bounds_max_x: f32,
+    selection_bounds_max_y: f32,
+    has_selection_mask: bool,
+    selection_is_rgba: bool,
+    // Parámetros de color y estado cromático de trazo
+    primary_r: u8,
+    primary_g: u8,
+    primary_b: u8,
+    secondary_r: u8,
+    secondary_g: u8,
+    secondary_b: u8,
+    has_sub_color_mix: bool,
+    color_mix: f32,
+    color_mix_alpha: f32,
+    smudge: f32,
+    is_erase: bool,
+    smudge_r: f32,
+    smudge_g: f32,
+    smudge_b: f32,
+    smudge_a: f32,
+    has_smudge_color: bool,
+    // Snapshot del lienzo subyacente para muestreo nativo
+    canvas_snapshot: Vec<u8>,
+    canvas_snapshot_width: u32,
+    canvas_snapshot_height: u32,
+    has_canvas_snapshot: bool,
 }
 
 #[wasm_bindgen]
@@ -209,6 +253,35 @@ impl StrokeEngineCore {
             dirty_max_x: f32::MIN,
             dirty_max_y: f32::MIN,
             stamp_rgba_buffer: Vec::with_capacity(128 * 128 * 4),
+            selection_mask: Vec::new(),
+            selection_mask_width: 0,
+            selection_mask_height: 0,
+            selection_bounds_min_x: 0.0,
+            selection_bounds_min_y: 0.0,
+            selection_bounds_max_x: 0.0,
+            selection_bounds_max_y: 0.0,
+            has_selection_mask: false,
+            selection_is_rgba: false,
+            primary_r: 0,
+            primary_g: 0,
+            primary_b: 0,
+            secondary_r: 255,
+            secondary_g: 255,
+            secondary_b: 255,
+            has_sub_color_mix: false,
+            color_mix: 0.0,
+            color_mix_alpha: 0.0,
+            smudge: 0.0,
+            is_erase: false,
+            smudge_r: 0.0,
+            smudge_g: 0.0,
+            smudge_b: 0.0,
+            smudge_a: 0.0,
+            has_smudge_color: false,
+            canvas_snapshot: Vec::new(),
+            canvas_snapshot_width: 0,
+            canvas_snapshot_height: 0,
+            has_canvas_snapshot: false,
         }
     }
 
@@ -218,6 +291,126 @@ impl StrokeEngineCore {
 
     pub fn set_speed(&mut self, speed: f32) {
         self.current_speed = speed.max(0.0);
+    }
+
+    /// Configura los parámetros cromáticos para evaluación nativa de mezclas y smudge
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_stroke_color(
+        &mut self,
+        primary_r: u8,
+        primary_g: u8,
+        primary_b: u8,
+        secondary_r: u8,
+        secondary_g: u8,
+        secondary_b: u8,
+        has_sub_color_mix: bool,
+        color_mix: f32,
+        color_mix_alpha: f32,
+        smudge: f32,
+        is_erase: bool,
+    ) {
+        self.primary_r = primary_r;
+        self.primary_g = primary_g;
+        self.primary_b = primary_b;
+        self.secondary_r = secondary_r;
+        self.secondary_g = secondary_g;
+        self.secondary_b = secondary_b;
+        self.has_sub_color_mix = has_sub_color_mix;
+        self.color_mix = color_mix.max(0.0);
+        self.color_mix_alpha = color_mix_alpha.max(0.0);
+        self.smudge = smudge.max(0.0);
+        self.is_erase = is_erase;
+    }
+
+    /// Asigna la instantánea plana RGBA8 del lienzo subyacente para muestreo nativo
+    pub fn set_canvas_snapshot(&mut self, snapshot: &[u8], width: u32, height: u32) {
+        if snapshot.is_empty() || width == 0 || height == 0 {
+            self.clear_canvas_snapshot();
+            return;
+        }
+        self.canvas_snapshot.clear();
+        self.canvas_snapshot.extend_from_slice(snapshot);
+        self.canvas_snapshot_width = width;
+        self.canvas_snapshot_height = height;
+        self.has_canvas_snapshot = true;
+    }
+
+    /// Elimina la instantánea del lienzo
+    pub fn clear_canvas_snapshot(&mut self) {
+        self.canvas_snapshot.clear();
+        self.canvas_snapshot_width = 0;
+        self.canvas_snapshot_height = 0;
+        self.has_canvas_snapshot = false;
+    }
+
+    /// Asigna la máscara de selección activa para filtrado y modulación directa de dabs
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_selection_mask(
+        &mut self,
+        mask_data: &[u8],
+        width: u32,
+        height: u32,
+        bounds_min_x: f32,
+        bounds_min_y: f32,
+        bounds_max_x: f32,
+        bounds_max_y: f32,
+        is_rgba: bool,
+    ) {
+        if mask_data.is_empty() || width == 0 || height == 0 {
+            self.clear_selection_mask();
+            return;
+        }
+        self.selection_mask.clear();
+        self.selection_mask.extend_from_slice(mask_data);
+        self.selection_mask_width = width;
+        self.selection_mask_height = height;
+        self.selection_bounds_min_x = bounds_min_x;
+        self.selection_bounds_min_y = bounds_min_y;
+        self.selection_bounds_max_x = bounds_max_x;
+        self.selection_bounds_max_y = bounds_max_y;
+        self.has_selection_mask = true;
+        self.selection_is_rgba = is_rgba;
+    }
+
+    /// Elimina la máscara de selección activa
+    pub fn clear_selection_mask(&mut self) {
+        self.selection_mask.clear();
+        self.selection_mask_width = 0;
+        self.selection_mask_height = 0;
+        self.selection_bounds_min_x = 0.0;
+        self.selection_bounds_min_y = 0.0;
+        self.selection_bounds_max_x = 0.0;
+        self.selection_bounds_max_y = 0.0;
+        self.has_selection_mask = false;
+        self.selection_is_rgba = false;
+    }
+
+    /// Comprueba si hay una máscara de selección asignada
+    pub fn has_selection(&self) -> bool {
+        self.has_selection_mask
+    }
+
+    /// Muestrea el valor de opacidad alfa (0.0..1.0) de la máscara de selección en (x, y)
+    pub fn sample_selection_alpha(&self, x: f32, y: f32) -> f32 {
+        if !self.has_selection_mask {
+            return 1.0;
+        }
+        let xi = x.round() as i32;
+        let yi = y.round() as i32;
+        let w = self.selection_mask_width as i32;
+        let h = self.selection_mask_height as i32;
+        if xi < 0 || xi >= w || yi < 0 || yi >= h {
+            return 0.0;
+        }
+
+        let stride = if self.selection_is_rgba { 4 } else { 1 };
+        let offset = if self.selection_is_rgba { 3 } else { 0 };
+        let idx = ((yi as usize) * (self.selection_mask_width as usize) + (xi as usize)) * stride + offset;
+        if idx < self.selection_mask.len() {
+            (self.selection_mask[idx] as f32) / 255.0
+        } else {
+            0.0
+        }
     }
 
     /// Calcula el diámetro exacto de un dab según curvas de presión, taper, velocidad y tamaño aleatorio
@@ -328,6 +521,11 @@ impl StrokeEngineCore {
         self.current_speed = 0.0;
         self.is_active = true;
         self.rng_state = ((x.to_bits() ^ y.to_bits().rotate_left(13)) | 1) ^ 0xA5A5_5A5A;
+        self.has_smudge_color = false;
+        self.smudge_r = 0.0;
+        self.smudge_g = 0.0;
+        self.smudge_b = 0.0;
+        self.smudge_a = 0.0;
 
         let first_tip = self.select_tip_index(0);
         self.stamp_index = 1;
@@ -359,7 +557,7 @@ impl StrokeEngineCore {
             self.push_dab(x, y, diam, pressure, alpha, self.last_angle_rad, first_tip);
         }
 
-        self.dabs_buffer.len() / 7
+        self.dabs_buffer.len() / DAB_STRIDE
     }
 
     /// Interpola un segmento desde el último punto hasta (x1, y1, p1) con espaciado adaptativo
@@ -371,6 +569,100 @@ impl StrokeEngineCore {
         self.dabs_buffer.clear();
         self.reset_dirty_rect();
 
+        self.step_segment(x1, y1, p1);
+
+        self.dabs_buffer.len() / DAB_STRIDE
+    }
+
+    /// Calcula de una sola llamada nativa el lote completo de dabs predichos
+    /// a partir de una secuencia plana de puntos: `[x0, y0, p0, x1, y1, p1, ...]` (stride 3).
+    /// Guarda y restaura internamente el checkpoint del motor, garantizando cero mutación residual.
+    /// Retorna el número de dabs calculados en `dabs_buffer`.
+    pub fn predict_stroke_batch(&mut self, points: &[f32]) -> usize {
+        let n_points = points.len() / 3;
+        if !self.is_active || n_points == 0 {
+            return 0;
+        }
+
+        self.save_checkpoint();
+
+        self.dabs_buffer.clear();
+        self.reset_dirty_rect();
+
+        for i in 0..n_points {
+            let base = i * 3;
+            self.step_segment(points[base], points[base + 1], points[base + 2]);
+        }
+
+        let total = self.dabs_buffer.len() / DAB_STRIDE;
+
+        self.restore_checkpoint();
+
+        total
+    }
+
+    /// Genera la predicción curva Bézier cuadrática continua C1 directamente en Rust
+    /// a partir de los puntos inicial y objetivo, y el vector de velocidad tangencial.
+    /// Guarda y restaura internamente el checkpoint del motor, garantizando cero mutación residual.
+    /// Retorna el número de dabs calculados en `dabs_buffer`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn predict_bezier_stroke(
+        &mut self,
+        start_x: f32,
+        start_y: f32,
+        start_p: f32,
+        target_x: f32,
+        target_y: f32,
+        target_p: f32,
+        vel_x: f32,
+        vel_y: f32,
+    ) -> usize {
+        if !self.is_active {
+            return 0;
+        }
+
+        let dx = target_x - start_x;
+        let dy = target_y - start_y;
+        let dist = dx.hypot(dy);
+
+        if dist <= 1.5 || dist >= 120.0 {
+            return 0;
+        }
+
+        self.save_checkpoint();
+        self.dabs_buffer.clear();
+        self.reset_dirty_rect();
+
+        let tan_len = vel_x.hypot(vel_y);
+        let (tan_x, tan_y) = if tan_len > 0.01 {
+            (vel_x / tan_len, vel_y / tan_len)
+        } else {
+            (dx / dist, dy / dist)
+        };
+
+        // Punto de control extendido a lo largo de la tangente para continuidad C1 sin codos
+        let lead = (dist * 0.5).min(30.0);
+        let ctrl_x = start_x + tan_x * lead;
+        let ctrl_y = start_y + tan_y * lead;
+
+        // Subdivisión adaptativa de la curva Bézier cuadrática
+        let steps = if dist > 30.0 { 3 } else { 2 };
+        for i in 1..=steps {
+            let t = (i as f32) / (steps as f32);
+            let mt = 1.0 - t;
+            let bx = mt * mt * start_x + 2.0 * mt * t * ctrl_x + t * t * target_x;
+            let by = mt * mt * start_y + 2.0 * mt * t * ctrl_y + t * t * target_y;
+            let bp = start_p + (target_p - start_p) * t;
+            self.step_segment(bx, by, bp);
+        }
+
+        let total = self.dabs_buffer.len() / DAB_STRIDE;
+        self.restore_checkpoint();
+        total
+    }
+
+    #[inline(always)]
+    fn step_segment(&mut self, x1: f32, y1: f32, p1: f32) {
         let x0 = self.last_x;
         let y0 = self.last_y;
         let p0 = self.last_pressure;
@@ -381,7 +673,7 @@ impl StrokeEngineCore {
             self.last_x = x1;
             self.last_y = y1;
             self.last_pressure = p1;
-            return 0;
+            return;
         }
 
         let spacing = if self.config.ribbon {
@@ -412,7 +704,7 @@ impl StrokeEngineCore {
                 is_mouse,
                 self.stamp_index,
             );
-            let min_step = (diam * 0.16).min(3.0).max(MIN_STAMP_STEP);
+            let min_step = (diam * 0.18).clamp(MIN_STAMP_STEP, 3.2);
             let effective_spacing = spacing.max(0.09);
             let step = (diam * effective_spacing).max(min_step);
             let need = (step - since).max(0.0);
@@ -486,8 +778,6 @@ impl StrokeEngineCore {
         self.last_x = x1;
         self.last_y = y1;
         self.last_pressure = p1;
-
-        self.dabs_buffer.len() / 7
     }
 
     /// Guarda el estado actual antes de calcular trazos predichos (renderPredictedStroke)
@@ -501,6 +791,11 @@ impl StrokeEngineCore {
             distance_since_stamp: self.distance_since_stamp,
             stamp_index: self.stamp_index,
             rng_state: self.rng_state,
+            smudge_r: self.smudge_r,
+            smudge_g: self.smudge_g,
+            smudge_b: self.smudge_b,
+            smudge_a: self.smudge_a,
+            has_smudge_color: self.has_smudge_color,
         };
     }
 
@@ -514,6 +809,11 @@ impl StrokeEngineCore {
         self.distance_since_stamp = self.checkpoint.distance_since_stamp;
         self.stamp_index = self.checkpoint.stamp_index;
         self.rng_state = self.checkpoint.rng_state;
+        self.smudge_r = self.checkpoint.smudge_r;
+        self.smudge_g = self.checkpoint.smudge_g;
+        self.smudge_b = self.checkpoint.smudge_b;
+        self.smudge_a = self.checkpoint.smudge_a;
+        self.has_smudge_color = self.checkpoint.has_smudge_color;
     }
 
     pub fn end_stroke(&mut self) {
@@ -522,7 +822,7 @@ impl StrokeEngineCore {
         self.stroke_distance = 0.0;
     }
 
-    /// Puntero zero-copy al buffer de dabs (stride 7: [x, y, diameter, pressure, alpha, angle_rad, tip_index])
+    /// Puntero zero-copy al buffer de dabs (stride 11: [x, y, diameter, pressure, alpha, angle_rad, tip_index, r, g, b, flags])
     pub fn get_dabs_ptr(&self) -> *const f32 {
         self.dabs_buffer.as_ptr()
     }
@@ -773,6 +1073,153 @@ impl StrokeEngineCore {
     }
 
     #[inline(always)]
+    fn is_dab_in_selection(&self, x: f32, y: f32, radius: f32) -> (bool, f32) {
+        if !self.has_selection_mask {
+            return (true, 1.0);
+        }
+
+        // 1. Descarte ultra-rápido por bounding box de selección
+        if (x + radius) < self.selection_bounds_min_x
+            || (x - radius) > self.selection_bounds_max_x
+            || (y + radius) < self.selection_bounds_min_y
+            || (y - radius) > self.selection_bounds_max_y
+        {
+            return (false, 0.0);
+        }
+
+        // 2. Muestreo en el centro del dab
+        let center_a = self.sample_selection_alpha(x, y);
+        if center_a > 0.01 {
+            return (true, center_a);
+        }
+
+        // 3. Comprobar puntos en el perímetro del dab (cardinales y diagonales)
+        let test_r = radius * 0.75;
+        let points = [
+            (x - test_r, y),
+            (x + test_r, y),
+            (x, y - test_r),
+            (x, y + test_r),
+            (x - test_r * 0.707, y - test_r * 0.707),
+            (x + test_r * 0.707, y - test_r * 0.707),
+            (x - test_r * 0.707, y + test_r * 0.707),
+            (x + test_r * 0.707, y + test_r * 0.707),
+        ];
+
+        let mut max_a = 0.0f32;
+        for (px, py) in points {
+            let a = self.sample_selection_alpha(px, py);
+            if a > max_a {
+                max_a = a;
+            }
+            if max_a >= 0.99 {
+                break;
+            }
+        }
+
+        if max_a > 0.01 {
+            (true, max_a)
+        } else {
+            (false, 0.0)
+        }
+    }
+
+    #[inline(always)]
+    fn resolve_dab_color(
+        &mut self,
+        x: f32,
+        y: f32,
+        pressure: f32,
+        base_alpha: f32,
+    ) -> Option<(f32, f32, f32, f32)> {
+        if self.is_erase {
+            return Some((0.0, 0.0, 0.0, base_alpha));
+        }
+
+        let mut r = self.primary_r as f32;
+        let mut g = self.primary_g as f32;
+        let mut b = self.primary_b as f32;
+        let mut alpha = base_alpha;
+
+        // 1. Dual Color / Sub Color Mix
+        if self.has_sub_color_mix {
+            let t = clamp01(pressure).powf(1.2);
+            let r2 = self.secondary_r as f32;
+            let g2 = self.secondary_g as f32;
+            let b2 = self.secondary_b as f32;
+            r = (r2 * (1.0 - t) + r * t).round().clamp(0.0, 255.0);
+            g = (g2 * (1.0 - t) + g * t).round().clamp(0.0, 255.0);
+            b = (b2 * (1.0 - t) + b * t).round().clamp(0.0, 255.0);
+        }
+
+        // 2. Color Mix y Smudge
+        if (self.color_mix > 0.0 || self.smudge > 0.0) && self.has_canvas_snapshot {
+            let sampled = ColorSamplerCore::sample_rgba(
+                &self.canvas_snapshot,
+                self.canvas_snapshot_width,
+                self.canvas_snapshot_height,
+                x,
+                y,
+            );
+            let is_pure_smudger = self.smudge > 0.0 && self.color_mix >= 0.8;
+
+            if !sampled.is_empty() && sampled[3] > 0.02 {
+                if self.smudge > 0.0 {
+                    if !self.has_smudge_color {
+                        self.smudge_r = sampled[0];
+                        self.smudge_g = sampled[1];
+                        self.smudge_b = sampled[2];
+                        self.smudge_a = sampled[3];
+                        self.has_smudge_color = true;
+                    } else {
+                        let pick_rate = 0.35f32;
+                        self.smudge_r = (self.smudge_r * (1.0 - pick_rate) + sampled[0] * pick_rate).round();
+                        self.smudge_g = (self.smudge_g * (1.0 - pick_rate) + sampled[1] * pick_rate).round();
+                        self.smudge_b = (self.smudge_b * (1.0 - pick_rate) + sampled[2] * pick_rate).round();
+                        self.smudge_a = self.smudge_a.max(sampled[3]);
+                    }
+                    r = self.smudge_r;
+                    g = self.smudge_g;
+                    b = self.smudge_b;
+                    alpha *= self.smudge_a;
+                } else {
+                    // Standard watercolor / oil mixing
+                    let lr = sampled[0];
+                    let lg = sampled[1];
+                    let lb = sampled[2];
+                    let la = sampled[3];
+                    let p = clamp01(pressure);
+                    let base_mix = self.color_mix * (1.0 - p.powf(1.3) * 0.85).max(0.05);
+                    let mix = (base_mix * la).clamp(0.0, 1.0);
+                    let one_minus_mix = 1.0 - mix;
+                    r = (r * one_minus_mix + lr * mix).round().clamp(0.0, 255.0);
+                    g = (g * one_minus_mix + lg * mix).round().clamp(0.0, 255.0);
+                    b = (b * one_minus_mix + lb * mix).round().clamp(0.0, 255.0);
+                }
+            } else {
+                // Lienzo transparente bajo el cursor
+                if is_pure_smudger {
+                    if !self.has_smudge_color {
+                        // Blender sobre lienzo vacío: omitir dab por completo (no pintar negro)
+                        return None;
+                    }
+                    self.smudge_a *= 0.96;
+                    if self.smudge_a < 0.01 {
+                        self.has_smudge_color = false;
+                        return None;
+                    }
+                    r = self.smudge_r;
+                    g = self.smudge_g;
+                    b = self.smudge_b;
+                    alpha *= self.smudge_a;
+                }
+            }
+        }
+
+        Some((r, g, b, alpha))
+    }
+
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn push_dab(
         &mut self,
@@ -784,19 +1231,43 @@ impl StrokeEngineCore {
         angle_rad: f32,
         tip_index: f32,
     ) {
+        let radius = diameter * 0.5;
+        let (in_sel, sel_factor) = self.is_dab_in_selection(x, y, radius);
+        if !in_sel {
+            return;
+        }
+
+        let final_alpha = alpha * sel_factor;
+        if final_alpha <= 0.005 {
+            return;
+        }
+
+        let (r, g, b, resolved_alpha) = match self.resolve_dab_color(x, y, pressure, final_alpha) {
+            Some(res) => res,
+            None => return,
+        };
+
+        if resolved_alpha <= 0.005 {
+            return;
+        }
+
         self.dabs_buffer.push(x);
         self.dabs_buffer.push(y);
         self.dabs_buffer.push(diameter);
         self.dabs_buffer.push(pressure);
-        self.dabs_buffer.push(alpha);
+        self.dabs_buffer.push(resolved_alpha);
         self.dabs_buffer.push(angle_rad);
         self.dabs_buffer.push(tip_index);
+        self.dabs_buffer.push(r);
+        self.dabs_buffer.push(g);
+        self.dabs_buffer.push(b);
+        self.dabs_buffer.push(1.0); // flags
 
-        let radius = diameter * 0.6 + 4.0;
-        self.dirty_min_x = self.dirty_min_x.min(x - radius);
-        self.dirty_min_y = self.dirty_min_y.min(y - radius);
-        self.dirty_max_x = self.dirty_max_x.max(x + radius);
-        self.dirty_max_y = self.dirty_max_y.max(y + radius);
+        let dirty_pad = diameter * 0.6 + 4.0;
+        self.dirty_min_x = self.dirty_min_x.min(x - dirty_pad);
+        self.dirty_min_y = self.dirty_min_y.min(y - dirty_pad);
+        self.dirty_max_x = self.dirty_max_x.max(x + dirty_pad);
+        self.dirty_max_y = self.dirty_max_y.max(y + dirty_pad);
     }
 
     #[inline(always)]
@@ -835,6 +1306,70 @@ mod tests {
 
         let real_count = engine.add_point(90.0, 10.0, 0.9);
         assert_eq!(pred_count, real_count);
+
+        // Test predict_stroke_batch
+        let pred_points = vec![110.0, 10.0, 0.9, 130.0, 10.0, 0.95];
+        let batch_pred_count = engine.predict_stroke_batch(&pred_points);
+        assert!(batch_pred_count > 5);
+
+        // El estado real del motor no debió mutar
+        assert_eq!(engine.last_x, 90.0);
+        assert_eq!(engine.last_y, 10.0);
+
+        // Test de máscara de selección directa en el generador de dabs
+        let mut mask = vec![0u8; 100 * 100];
+        // Seleccionar solo la caja [40..60, 40..60]
+        for y in 40..60 {
+            for x in 40..60 {
+                mask[y * 100 + x] = 255;
+            }
+        }
+        engine.set_selection_mask(&mask, 100, 100, 40.0, 40.0, 60.0, 60.0, false);
+        assert!(engine.has_selection());
+
+        // Dab en (10, 10) está completamente fuera de la selección -> debe generar 0 dabs
+        let out_count = engine.begin_stroke(10.0, 10.0, 0.8);
+        assert_eq!(out_count, 0);
+
+        // Dab en (50, 50) está dentro de la selección -> debe generar 1 dab
+        let in_count = engine.begin_stroke(50.0, 50.0, 0.8);
+        assert_eq!(in_count, 1);
+
+        // Limpiar máscara
+        engine.clear_selection_mask();
+        assert!(!engine.has_selection());
+        let unmasked_count = engine.begin_stroke(10.0, 10.0, 0.8);
+        assert_eq!(unmasked_count, 1);
+
+        // Test de Color Mix nativo en Rust
+        let mut snapshot = vec![0u8; 100 * 100 * 4];
+        // Pintar píxel en (50, 50) de azul: RGBA(0, 0, 255, 255)
+        let s_idx = (50 * 100 + 50) * 4;
+        snapshot[s_idx] = 0;
+        snapshot[s_idx + 1] = 0;
+        snapshot[s_idx + 2] = 255;
+        snapshot[s_idx + 3] = 255;
+        engine.set_canvas_snapshot(&snapshot, 100, 100);
+        // Pincel rojo primario, colorMix = 0.5
+        engine.set_stroke_color(255, 0, 0, 255, 255, 255, false, 0.5, 0.5, 0.0, false);
+        let mix_count = engine.begin_stroke(50.0, 50.0, 0.5);
+        assert_eq!(mix_count, 1);
+        let dabs_len = engine.get_dabs_len();
+        assert_eq!(dabs_len, DAB_STRIDE);
+        // Debe tener componente azul mezclado (ni 0 ni 255 puro)
+        assert!(engine.dabs_buffer[7] < 255.0); // Rojo mezclado
+        assert!(engine.dabs_buffer[9] > 0.0);   // Azul mezclado
+
+        // Test de predict_bezier_stroke
+        let bez_count = engine.predict_bezier_stroke(
+            50.0, 50.0, 0.5,
+            75.0, 55.0, 0.6,
+            10.0, 2.0,
+        );
+        assert!(bez_count > 0);
+        // El estado real del motor sigue intacto tras la predicción
+        assert_eq!(engine.last_x, 50.0);
+        assert_eq!(engine.last_y, 50.0);
     }
 
     #[test]
@@ -1002,6 +1537,82 @@ mod tests {
         assert_eq!(rgba[3], 255);
         // transparent pixel untouched
         assert_eq!(rgba[7], 0);
+
+        // Merge stroke rect with lock_alpha
+        // Pixel 0: dest opaque green (0, 255, 0, 255)
+        // Pixel 1: dest transparent (0, 0, 0, 0)
+        let mut dst = vec![0, 255, 0, 255, 0, 0, 0, 0];
+        // Src: opaque red (255, 0, 0, 255)
+        let src = vec![255, 0, 0, 255, 255, 0, 0, 255];
+        let empty_mask: Vec<u8> = vec![];
+
+        let ok = ColorBlendCore::merge_stroke_rect(
+            &mut dst,
+            &src,
+            2,
+            1,
+            0,
+            0,
+            2,
+            1,
+            0, // normal
+            1.0, // opacity 100%
+            true, // lock_alpha = true!
+            &empty_mask,
+        );
+        assert!(ok);
+        // Pixel 0: was opaque green, painted over by red with lock_alpha -> should be red, alpha 255
+        assert_eq!(dst[0], 255);
+        assert_eq!(dst[1], 0);
+        assert_eq!(dst[2], 0);
+        assert_eq!(dst[3], 255);
+        // Pixel 1: was transparent, lock_alpha prevents any color from sticking!
+        assert_eq!(dst[4], 0);
+        assert_eq!(dst[5], 0);
+        assert_eq!(dst[6], 0);
+        assert_eq!(dst[7], 0);
+
+        // Test matricial paper grain pattern tile generation
+        let tooth_mat = vec![0.0f32, 1.0, 0.5, 0.2]; // 2x2 tooth matrix
+        let mut tile_rgba = vec![0u8; 2 * 2 * 4];
+        let tile_ok = ColorBlendCore::generate_paper_pattern_tile(
+            &mut tile_rgba,
+            2,
+            2,
+            &tooth_mat,
+            2,
+            2,
+            0.85,
+            0, // height mode
+            false,
+        );
+        assert!(tile_ok);
+        // Alpha of tile should be generated based on tooth matrix
+        assert_eq!(tile_rgba[0], 255); // R
+        assert_eq!(tile_rgba[1], 255); // G
+        assert_eq!(tile_rgba[2], 255); // B
+        assert!(tile_rgba[3] > 0);     // A > 0
+
+        // Test apply paper grain rect in-place
+        let mut stroke_buf = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // 2 pixels RGBA
+        let apply_ok = ColorBlendCore::apply_paper_grain_rect(
+            &mut stroke_buf,
+            2,
+            2,
+            1,
+            0,
+            0,
+            &tooth_mat,
+            2,
+            2,
+            1.0,
+            0.9,
+            0, // height mode
+            false,
+        );
+        assert!(apply_ok);
+        // Deep valley should lower alpha
+        assert!(stroke_buf[3] < 255);
     }
 
     #[test]

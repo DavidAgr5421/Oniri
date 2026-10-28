@@ -475,6 +475,54 @@ export function getStampTexture(options: StampTextureOptions): HTMLCanvasElement
   return stamp;
 }
 
+const NUM_ANGLE_BINS = 64;
+const BIN_STEP = (Math.PI * 2) / NUM_ANGLE_BINS;
+const rotatedStampMap = new WeakMap<HTMLCanvasElement, (HTMLCanvasElement | undefined)[]>();
+
+/**
+ * Retorna una variante pre-rotada del sello base desde una caché débil (WeakMap).
+ * Cuantiza el ángulo en 64 sectores (5.6° cada uno) para permitir dibujado batched con
+ * matriz identidad en Canvas 2D, eliminando llamadas continuas a `setTransform`.
+ */
+export function getRotatedStamp(baseCanvas: HTMLCanvasElement, angleRad: number): HTMLCanvasElement {
+  if (Math.abs(angleRad) < 0.001) {
+    return baseCanvas;
+  }
+  const binIdx = Math.round(((angleRad % (Math.PI * 2)) + Math.PI * 2) / BIN_STEP) % NUM_ANGLE_BINS;
+  if (binIdx === 0) {
+    return baseCanvas;
+  }
+
+  let variants = rotatedStampMap.get(baseCanvas);
+  if (!variants) {
+    variants = new Array(NUM_ANGLE_BINS);
+    rotatedStampMap.set(baseCanvas, variants);
+  }
+
+  const cached = variants[binIdx];
+  if (cached) {
+    return cached;
+  }
+
+  const bw = baseCanvas.width;
+  const bh = baseCanvas.height;
+  let rotDiam = Math.ceil(Math.hypot(bw, bh)) + 2;
+  if (rotDiam % 2 !== 0) rotDiam++;
+  const rotCanvas = document.createElement('canvas');
+  rotCanvas.width = rotDiam;
+  rotCanvas.height = rotDiam;
+  const rotCtx = rotCanvas.getContext('2d');
+  if (!rotCtx) return baseCanvas;
+
+  const rotAngle = binIdx * BIN_STEP;
+  rotCtx.translate(rotDiam * 0.5, rotDiam * 0.5);
+  rotCtx.rotate(rotAngle);
+  rotCtx.drawImage(baseCanvas, -bw * 0.5, -bh * 0.5);
+
+  variants[binIdx] = rotCanvas;
+  return rotCanvas;
+}
+
 export function clearStampCache(): void {
   cache.clear();
   lastMicroKey = '';

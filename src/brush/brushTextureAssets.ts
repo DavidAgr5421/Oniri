@@ -5,6 +5,8 @@
  * Zero external bitmap dependencies or third-party assets.
  */
 
+import { rustStrokeEngine } from './rustStrokeEngine';
+
 export interface TextureAsset {
   image: HTMLImageElement | HTMLCanvasElement;
   loaded: boolean;
@@ -535,44 +537,62 @@ export function getPaperGrainPattern(
   const ah = asset.height;
   const toothData = asset.toothData;
 
-  for (let py = 0; py < h; py++) {
-    const sy = Math.min(ah - 1, Math.floor((py / h) * ah));
-    for (let px = 0; px < w; px++) {
-      const sx = Math.min(aw - 1, Math.floor((px / w) * aw));
-      let tooth = toothData[sy * aw + sx];
-      if (invert) tooth = 1.0 - tooth;
-      const valley = 1.0 - tooth;
+  const modeCode = mode === 'subtract' ? 1 : mode === 'multiply' ? 2 : mode === 'outline' ? 3 : 0;
+  let generatedInRust = false;
+  if (rustStrokeEngine.available) {
+    generatedInRust = rustStrokeEngine.generatePaperPatternTile(
+      data,
+      w,
+      h,
+      toothData,
+      aw,
+      ah,
+      qDensity,
+      modeCode,
+      invert,
+    );
+  }
 
-      let mult = 1.0;
-      if (mode === 'subtract') {
-        mult = Math.max(0, 1.0 - valley * qDensity * 1.15);
-      } else if (mode === 'multiply') {
-        mult = Math.max(0, 1.0 - valley * qDensity);
-      } else if (mode === 'outline') {
-        const sxR = (sx + 1) % aw;
-        const syD = (sy + 1) % ah;
-        let tR = toothData[sy * aw + sxR];
-        let tD = toothData[syD * aw + sx];
-        if (invert) {
-          tR = 1.0 - tR;
-          tD = 1.0 - tD;
+  if (!generatedInRust) {
+    for (let py = 0; py < h; py++) {
+      const sy = Math.min(ah - 1, Math.floor((py / h) * ah));
+      for (let px = 0; px < w; px++) {
+        const sx = Math.min(aw - 1, Math.floor((px / w) * aw));
+        let tooth = toothData[sy * aw + sx];
+        if (invert) tooth = 1.0 - tooth;
+        const valley = 1.0 - tooth;
+
+        let mult = 1.0;
+        if (mode === 'subtract') {
+          mult = Math.max(0, 1.0 - valley * qDensity * 1.15);
+        } else if (mode === 'multiply') {
+          mult = Math.max(0, 1.0 - valley * qDensity);
+        } else if (mode === 'outline') {
+          const sxR = (sx + 1) % aw;
+          const syD = (sy + 1) % ah;
+          let tR = toothData[sy * aw + sxR];
+          let tD = toothData[syD * aw + sx];
+          if (invert) {
+            tR = 1.0 - tR;
+            tD = 1.0 - tD;
+          }
+          const grad = Math.min(1, Math.hypot(tooth - tR, tooth - tD) * 3.4);
+          const hardTooth = tooth > 0.46 ? 1.0 : Math.max(0, (tooth - 0.15) / 0.31);
+          const edgeBoost = Math.min(1, hardTooth * 0.78 + grad * 0.55);
+          mult = 1.0 - qDensity + qDensity * edgeBoost;
+        } else {
+          // 'height' (Valley threshold)
+          const threshold = valley * qDensity * 0.92;
+          const denom = Math.max(0.12, 1.0 - qDensity * 0.78);
+          mult = Math.max(0, Math.min(1, (1.0 - threshold) / denom));
         }
-        const grad = Math.min(1, Math.hypot(tooth - tR, tooth - tD) * 3.4);
-        const hardTooth = tooth > 0.46 ? 1.0 : Math.max(0, (tooth - 0.15) / 0.31);
-        const edgeBoost = Math.min(1, hardTooth * 0.78 + grad * 0.55);
-        mult = 1.0 - qDensity + qDensity * edgeBoost;
-      } else {
-        // 'height' (Valley threshold)
-        const threshold = valley * qDensity * 0.92;
-        const denom = Math.max(0.12, 1.0 - qDensity * 0.78);
-        mult = Math.max(0, Math.min(1, (1.0 - threshold) / denom));
-      }
 
-      const idx = (py * w + px) * 4;
-      data[idx] = 255;
-      data[idx + 1] = 255;
-      data[idx + 2] = 255;
-      data[idx + 3] = Math.round(Math.max(0, Math.min(1, mult)) * 255);
+        const idx = (py * w + px) * 4;
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        data[idx + 3] = Math.round(Math.max(0, Math.min(1, mult)) * 255);
+      }
     }
   }
 

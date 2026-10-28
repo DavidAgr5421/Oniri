@@ -13,9 +13,9 @@ import { createHistoryManager, HistoryManager, type Rect } from './history';
 import { createLayerManager, getRenderOrder, LayerManager, LayerNode } from './layers';
 import { applyAdjustmentToContext } from './adjustments';
 import { drawShape } from './shapeDrawer';
-import { getStampTexture } from './stampTexture';
+import { getStampTexture, getRotatedStamp } from './stampTexture';
 import type { TiltFootprint } from './pressureResponse';
-import { getPaperGrainPattern, samplePaperGrain } from './brushTextureAssets';
+import { getBrushTextureAsset, getPaperGrainPattern, samplePaperGrain } from './brushTextureAssets';
 import { DOC_H, DOC_W } from './docConstants';
 import { selectionModel, SelectionModel } from '../selection/selectionModel';
 import { brushDiagnostics } from './brushDiagnostics';
@@ -59,15 +59,27 @@ export interface BrushEngine {
   setTimelineManager(tm: TimelineManager): void;
   getTimelineManager(): TimelineManager | null;
   beginStroke(x: number, y: number, pressure: number, isMouse?: boolean): void;
-  continueStroke(x: number, y: number, pressure: number): void;
+  continueStroke(x: number, y: number, pressure: number, deferOverlay?: boolean): void;
   beginErase(x: number, y: number, pressure: number, isMouse?: boolean): void;
-  continueErase(x: number, y: number, pressure: number): void;
+  continueErase(x: number, y: number, pressure: number, deferOverlay?: boolean): void;
+  flushLiveOverlay(): void;
   /** Nib footprint for the next stamps, driven by the pen tilt (null = upright). */
   setStrokeTilt(tilt: TiltFootprint | null): void;
   /** Instantaneous stroke speed in doc px per sample, drives velocity dynamics. */
   setStrokeSpeed(speed: number): void;
   /** Temporary predicted stroke points for zero-latency live drawing. */
   renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void;
+  /** Native C1 continuous Bézier predicted stroke evaluation in Rust. */
+  renderPredictedBezier?(
+    startX: number,
+    startY: number,
+    startP: number,
+    targetX: number,
+    targetY: number,
+    targetP: number,
+    velX: number,
+    velY: number,
+  ): void;
   /** Clears the live prediction overlay canvas. */
   clearPredictedStroke(): void;
   beginShape(x: number, y: number): void;
@@ -339,6 +351,7 @@ export function createBrushEngine(): BrushEngine {
   const layerColorCanvas = makeCanvas(curDocW, curDocH);
   const liveStrokeCanvas = makeCanvas(curDocW, curDocH);
   const topLayersCanvas = makeCanvas(curDocW, curDocH);
+  const virtualCelCanvas = makeCanvas(curDocW, curDocH);
 
   const strokeContext = strokeCanvas.getContext('2d')!;
   const compositeContext = compositeCanvas.getContext('2d')!;
@@ -351,6 +364,7 @@ export function createBrushEngine(): BrushEngine {
   const layerColorContext = layerColorCanvas.getContext('2d')!;
   const liveStrokeContext = liveStrokeCanvas.getContext('2d')!;
   const topLayersContext = topLayersCanvas.getContext('2d')!;
+  const virtualCelContext = virtualCelCanvas.getContext('2d', { willReadFrequently: true })!;
 
   let isLivePainting = false;
   let useOverlayPlanes = false;
@@ -393,12 +407,21 @@ export function createBrushEngine(): BrushEngine {
   let isCurrentStrokeMouse = false;
   let isPredictingStroke = false;
 
+  let preStrokeRawRgba: Uint8Array | null = null;
+
   function samplePreStrokeColor(x: number, y: number): [number, number, number, number] | null {
     if (isPredictingStroke || !preStrokeSnapshot) return null;
-    const ix = Math.floor(x);
-    const iy = Math.floor(y);
     const sw = preStrokeSnapshot.width;
     const sh = preStrokeSnapshot.height;
+    if (!preStrokeRawRgba || preStrokeRawRgba.buffer !== preStrokeSnapshot.data.buffer) {
+      preStrokeRawRgba = new Uint8Array(preStrokeSnapshot.data.buffer, preStrokeSnapshot.data.byteOffset, preStrokeSnapshot.data.byteLength);
+    }
+    const rustSampled = rustStrokeEngine.sampleRgba(preStrokeRawRgba, sw, sh, x, y);
+    if (rustSampled) {
+      return rustSampled;
+    }
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
     if (ix < 0 || ix >= sw || iy < 0 || iy >= sh) return null;
     const idx = (iy * sw + ix) * 4;
     const a = preStrokeSnapshot.data[idx + 3];
@@ -411,6 +434,29 @@ export function createBrushEngine(): BrushEngine {
     ];
   }
 
+  const HEX_BYTE_LOOKUP: string[] = [];
+  for (let i = 0; i < 256; i++) {
+    HEX_BYTE_LOOKUP[i] = i.toString(16).padStart(2, '0');
+  }
+  let lastRgbHexR = -1;
+  let lastRgbHexG = -1;
+  let lastRgbHexB = -1;
+  let lastCachedHexStr = '';
+
+  function getCachedRgbHex(r: number, g: number, b: number): string {
+    const ir = Math.round(r) & 255;
+    const ig = Math.round(g) & 255;
+    const ib = Math.round(b) & 255;
+    if (ir === lastRgbHexR && ig === lastRgbHexG && ib === lastRgbHexB) {
+      return lastCachedHexStr;
+    }
+    lastRgbHexR = ir;
+    lastRgbHexG = ig;
+    lastRgbHexB = ib;
+    lastCachedHexStr = '#' + HEX_BYTE_LOOKUP[ir] + HEX_BYTE_LOOKUP[ig] + HEX_BYTE_LOOKUP[ib];
+    return lastCachedHexStr;
+  }
+
   function stampAt(
     ctx: CanvasRenderingContext2D,
     erase: boolean,
@@ -421,108 +467,112 @@ export function createBrushEngine(): BrushEngine {
     angleRad: number,
     tipTextureOverride?: TipTextureId,
     skipBounds = false,
+    resolvedColorHex?: string,
+    resolvedAlpha?: number,
   ): void {
     const s = strokeSettings;
     const effectiveTip = tipTextureOverride !== undefined ? tipTextureOverride : s.tipTexture;
-    let stampColor = erase ? '#000000' : currentColorHex;
+    let stampColor = erase ? '#000000' : (resolvedColorHex !== undefined ? resolvedColorHex : currentColorHex);
 
-    // 1. Dual Color / Sub Color Mix
-    if (!erase && s.subColorMix) {
-      const sec = getToolState().secondaryColor || '#ffffff';
-      const { r: r2, g: g2, b: b2 } = hexToRgb(sec);
-      const { r: r1, g: g1, b: b1 } = hexToRgb(s.color);
-      const rustDual = rustStrokeEngine.blendDualColor(r1, g1, b1, r2, g2, b2, pressure);
-      if (rustDual) {
-        stampColor = rgbToHex(rustDual[0], rustDual[1], rustDual[2]);
-      } else {
-        const t = Math.pow(clamp01(pressure), 1.2);
-        const r = Math.round(r2 * (1 - t) + r1 * t);
-        const g = Math.round(g2 * (1 - t) + g1 * t);
-        const b = Math.round(b2 * (1 - t) + b1 * t);
-        stampColor = rgbToHex(r, g, b);
-      }
-      currentColorHex = stampColor;
-    }
-
-    // 2. Color Mix and Smudge handling
-    if (!erase && ((s.colorMix && s.colorMix > 0) || (s.smudge && s.smudge > 0))) {
-      const sampled = samplePreStrokeColor(x, y);
-      const isPureSmudger = s.smudge && s.smudge > 0 && (!s.colorMix || s.colorMix >= 0.8);
-
-      if (sampled && sampled[3] > 0.02) {
-        if (s.smudge && s.smudge > 0) {
-          if (!strokePickedColor) {
-            strokePickedColor = [sampled[0], sampled[1], sampled[2], sampled[3]];
-          } else {
-            const rustSmudge = rustStrokeEngine.stepSmudge(
-              strokePickedColor[0],
-              strokePickedColor[1],
-              strokePickedColor[2],
-              strokePickedColor[3],
-              sampled[0],
-              sampled[1],
-              sampled[2],
-              sampled[3],
-              0.35,
-            );
-            if (rustSmudge) {
-              strokePickedColor[0] = Math.round(rustSmudge[0]);
-              strokePickedColor[1] = Math.round(rustSmudge[1]);
-              strokePickedColor[2] = Math.round(rustSmudge[2]);
-              strokePickedColor[3] = rustSmudge[3];
-            } else {
-              const pickRate = 0.35;
-              strokePickedColor[0] = Math.round(strokePickedColor[0] * (1 - pickRate) + sampled[0] * pickRate);
-              strokePickedColor[1] = Math.round(strokePickedColor[1] * (1 - pickRate) + sampled[1] * pickRate);
-              strokePickedColor[2] = Math.round(strokePickedColor[2] * (1 - pickRate) + sampled[2] * pickRate);
-              strokePickedColor[3] = Math.max(strokePickedColor[3], sampled[3]);
-            }
-          }
-          stampColor = rgbToHex(strokePickedColor[0], strokePickedColor[1], strokePickedColor[2]);
-          currentColorHex = stampColor;
+    if (resolvedColorHex === undefined) {
+      // 1. Dual Color / Sub Color Mix
+      if (!erase && s.subColorMix) {
+        const sec = getToolState().secondaryColor || '#ffffff';
+        const { r: r2, g: g2, b: b2 } = hexToRgb(sec);
+        const { r: r1, g: g1, b: b1 } = hexToRgb(s.color);
+        const rustDual = rustStrokeEngine.blendDualColor(r1, g1, b1, r2, g2, b2, pressure);
+        if (rustDual) {
+          stampColor = rgbToHex(rustDual[0], rustDual[1], rustDual[2]);
         } else {
-          // Standard watercolor / oil mixing
-          const [lr, lg, lb, la] = sampled;
-          const { r: br, g: bg, b: bb } = hexToRgb(s.color);
-          const rustMix = rustStrokeEngine.blendColorMix(
-            br, bg, bb,
-            lr, lg, lb,
-            la,
-            s.colorMix ?? 0.5,
-            pressure,
-          );
-          if (rustMix) {
-            stampColor = rgbToHex(rustMix[0], rustMix[1], rustMix[2]);
-          } else {
-            const baseMix = s.colorMix! * Math.max(0.05, 1.0 - Math.pow(pressure, 1.3) * 0.85);
-            const mix = baseMix * la;
-            const r = Math.round(br * (1 - mix) + lr * mix);
-            const g = Math.round(bg * (1 - mix) + lg * mix);
-            const b = Math.round(bb * (1 - mix) + lb * mix);
-            stampColor = rgbToHex(r, g, b);
-          }
-          currentColorHex = stampColor;
+          const t = Math.pow(clamp01(pressure), 1.2);
+          const r = Math.round(r2 * (1 - t) + r1 * t);
+          const g = Math.round(g2 * (1 - t) + g1 * t);
+          const b = Math.round(b2 * (1 - t) + b1 * t);
+          stampColor = rgbToHex(r, g, b);
         }
-      } else {
-        // Blank or transparent canvas under cursor
-        if (isPureSmudger) {
-          if (!strokePickedColor) {
-            // Blender on empty canvas: do NOT paint black! Skip stamping completely.
-            return;
+        currentColorHex = stampColor;
+      }
+
+      // 2. Color Mix and Smudge handling
+      if (!erase && ((s.colorMix && s.colorMix > 0) || (s.smudge && s.smudge > 0))) {
+        const sampled = samplePreStrokeColor(x, y);
+        const isPureSmudger = s.smudge && s.smudge > 0 && (!s.colorMix || s.colorMix >= 0.8);
+
+        if (sampled && sampled[3] > 0.02) {
+          if (s.smudge && s.smudge > 0) {
+            if (!strokePickedColor) {
+              strokePickedColor = [sampled[0], sampled[1], sampled[2], sampled[3]];
+            } else {
+              const rustSmudge = rustStrokeEngine.stepSmudge(
+                strokePickedColor[0],
+                strokePickedColor[1],
+                strokePickedColor[2],
+                strokePickedColor[3],
+                sampled[0],
+                sampled[1],
+                sampled[2],
+                sampled[3],
+                0.35,
+              );
+              if (rustSmudge) {
+                strokePickedColor[0] = Math.round(rustSmudge[0]);
+                strokePickedColor[1] = Math.round(rustSmudge[1]);
+                strokePickedColor[2] = Math.round(rustSmudge[2]);
+                strokePickedColor[3] = rustSmudge[3];
+              } else {
+                const pickRate = 0.35;
+                strokePickedColor[0] = Math.round(strokePickedColor[0] * (1 - pickRate) + sampled[0] * pickRate);
+                strokePickedColor[1] = Math.round(strokePickedColor[1] * (1 - pickRate) + sampled[1] * pickRate);
+                strokePickedColor[2] = Math.round(strokePickedColor[2] * (1 - pickRate) + sampled[2] * pickRate);
+                strokePickedColor[3] = Math.max(strokePickedColor[3], sampled[3]);
+              }
+            }
+            stampColor = rgbToHex(strokePickedColor[0], strokePickedColor[1], strokePickedColor[2]);
+            currentColorHex = stampColor;
+          } else {
+            // Standard watercolor / oil mixing
+            const [lr, lg, lb, la] = sampled;
+            const { r: br, g: bg, b: bb } = hexToRgb(s.color);
+            const rustMix = rustStrokeEngine.blendColorMix(
+              br, bg, bb,
+              lr, lg, lb,
+              la,
+              s.colorMix ?? 0.5,
+              pressure,
+            );
+            if (rustMix) {
+              stampColor = rgbToHex(rustMix[0], rustMix[1], rustMix[2]);
+            } else {
+              const baseMix = s.colorMix! * Math.max(0.05, 1.0 - Math.pow(pressure, 1.3) * 0.85);
+              const mix = baseMix * la;
+              const r = Math.round(br * (1 - mix) + lr * mix);
+              const g = Math.round(bg * (1 - mix) + lg * mix);
+              const b = Math.round(bb * (1 - mix) + lb * mix);
+              stampColor = rgbToHex(r, g, b);
+            }
+            currentColorHex = stampColor;
           }
-          strokePickedColor[3] *= 0.96;
-          if (strokePickedColor[3] < 0.01) {
-            strokePickedColor = null;
-            return;
+        } else {
+          // Blank or transparent canvas under cursor
+          if (isPureSmudger) {
+            if (!strokePickedColor) {
+              // Blender on empty canvas: do NOT paint black! Skip stamping completely.
+              return;
+            }
+            strokePickedColor[3] *= 0.96;
+            if (strokePickedColor[3] < 0.01) {
+              strokePickedColor = null;
+              return;
+            }
+            stampColor = rgbToHex(strokePickedColor[0], strokePickedColor[1], strokePickedColor[2]);
           }
-          stampColor = rgbToHex(strokePickedColor[0], strokePickedColor[1], strokePickedColor[2]);
         }
       }
     }
 
-    let alpha = brushStampAlpha(s, pressure, currentStrokeSpeed);
+    let alpha = resolvedAlpha !== undefined ? resolvedAlpha : brushStampAlpha(s, pressure, currentStrokeSpeed);
 
-    if (strokePickedColor && s.smudge && s.smudge > 0) {
+    if (resolvedAlpha === undefined && strokePickedColor && s.smudge && s.smudge > 0) {
       alpha *= strokePickedColor[3];
     }
 
@@ -570,16 +620,21 @@ export function createBrushEngine(): BrushEngine {
       dualBlendMode: s.dualBlendMode,
     });
 
-    const w = stampCanvas.width;
-    const h = stampCanvas.height;
     const symmetric =
       !useDual &&
       s.tipShape === 'circle' &&
       roundness >= 0.999 &&
       (!effectiveTip || effectiveTip === 'default');
 
+    const drawStamp = (!symmetric && Math.abs(stampAngle) > 0.001)
+      ? getRotatedStamp(stampCanvas, stampAngle)
+      : stampCanvas;
+
+    const rw = drawStamp.width;
+    const rh = drawStamp.height;
+
     if (!skipBounds) {
-      const padB = Math.ceil(Math.max(w, h) * 0.6) + 4;
+      const padB = Math.ceil(Math.max(rw, rh) * 0.6) + 4;
       if (x - padB < strokeBoundsMinX) strokeBoundsMinX = Math.max(0, Math.floor(x - padB));
       if (y - padB < strokeBoundsMinY) strokeBoundsMinY = Math.max(0, Math.floor(y - padB));
       if (x + padB > strokeBoundsMaxX) strokeBoundsMaxX = Math.min(curDocW, Math.ceil(x + padB));
@@ -594,16 +649,8 @@ export function createBrushEngine(): BrushEngine {
     }
     ctx.globalAlpha = Math.min(1, Math.max(0, alpha));
 
-    if (!symmetric && stampAngle !== 0) {
-      const cos = Math.cos(stampAngle);
-      const sin = Math.sin(stampAngle);
-      ctx.setTransform(cos, sin, -sin, cos, x, y);
-      ctx.drawImage(stampCanvas, -w * 0.5, -h * 0.5);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    } else {
-      // Padded texture drawn from its center: true sub-pixel positioning without transform matrix push
-      ctx.drawImage(stampCanvas, x - w * 0.5, y - h * 0.5);
-    }
+    // Axis-aligned drawImage: browser GPU batching executes in a single draw call without context matrix switches
+    ctx.drawImage(drawStamp, x - rw * 0.5, y - rh * 0.5);
   }
 
   function stampAlong(
@@ -644,15 +691,22 @@ export function createBrushEngine(): BrushEngine {
       const dabs = batch.dabs;
       for (let i = 0; i < batch.count; i++) {
         const base = i * DAB_STRIDE;
+        const flags = dabs[base + 10];
+        if (flags < 0.5) continue;
         const dx = dabs[base];
         const dy = dabs[base + 1];
         const diam = dabs[base + 2];
         const press = dabs[base + 3];
+        const alpha = dabs[base + 4];
         const angle = dabs[base + 5];
         const tipIdx = dabs[base + 6];
+        const r = dabs[base + 7];
+        const g = dabs[base + 8];
+        const b = dabs[base + 9];
         lastAngleRad = angle;
         const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, s.tipTexture);
-        stampAt(ctx, erase, dx, dy, diam, press, angle, activeTip, true);
+        const stampColor = erase ? '#000000' : getCachedRgbHex(r, g, b);
+        stampAt(ctx, erase, dx, dy, diam, press, angle, activeTip, true, stampColor, alpha);
       }
       return;
     }
@@ -802,10 +856,12 @@ export function createBrushEngine(): BrushEngine {
     liveStrokeDirty = true;
   }
 
+  let predFlatBuffer = new Float32Array(64);
+
   function renderPredictedStroke(points: { x: number; y: number; pressure: number }[]): void {
     if (!mode || mode === 'shape' || points.length === 0) return;
     const t0 = performance.now();
-    clearPredictedStroke();
+    clearPredictedStroke(true);
     hasPredictions = true;
 
     // Track dirty bounding box of predicted stroke for microsecond clearRect & drawImage
@@ -840,20 +896,79 @@ export function createBrushEngine(): BrushEngine {
     const savedStampIdx = strokeStampIndex;
     const savedAngle = lastAngleRad;
 
-    brushDiagnostics.inPredictedStroke = true;
-    isPredictingStroke = true;
-    rustStrokeEngine.saveCheckpoint();
-    try {
-      for (const pt of points) {
-        stampAlong(predictedContext, isEraseOp, prevX, prevY, prevP, pt.x, pt.y, pt.pressure);
-        prevX = pt.x;
-        prevY = pt.y;
-        prevP = pt.pressure;
+    if (rustStrokeEngine.available) {
+      const totalFloats = points.length * 3;
+      if (predFlatBuffer.length < totalFloats) {
+        predFlatBuffer = new Float32Array(Math.max(totalFloats, predFlatBuffer.length * 2));
       }
-    } finally {
-      rustStrokeEngine.restoreCheckpoint();
-      brushDiagnostics.inPredictedStroke = false;
-      isPredictingStroke = false;
+      for (let i = 0; i < points.length; i++) {
+        const idx = i * 3;
+        predFlatBuffer[idx] = points[i].x;
+        predFlatBuffer[idx + 1] = points[i].y;
+        predFlatBuffer[idx + 2] = points[i].pressure;
+      }
+      const flatPoints = predFlatBuffer.subarray(0, totalFloats);
+
+      brushDiagnostics.inPredictedStroke = true;
+      isPredictingStroke = true;
+      try {
+        const batch = rustStrokeEngine.predictStrokeBatch(flatPoints);
+        if (batch && batch.count > 0) {
+          if (batch.dirtyRect[0] <= batch.dirtyRect[2]) {
+            const padB = Math.ceil((strokeSettings.size || 20) * 0.6) + 8;
+            predBoundsMinX = Math.max(0, Math.floor(batch.dirtyRect[0] - padB));
+            predBoundsMinY = Math.max(0, Math.floor(batch.dirtyRect[1] - padB));
+            predBoundsMaxX = Math.min(curDocW, Math.ceil(batch.dirtyRect[2] + padB));
+            predBoundsMaxY = Math.min(curDocH, Math.ceil(batch.dirtyRect[3] + padB));
+          }
+
+          const targetComp = isEraseOp
+            ? 'destination-out'
+            : (strokeSettings.compositeMode === 'lighter' ? 'lighter' : 'source-over');
+          if (predictedContext.globalCompositeOperation !== targetComp) {
+            predictedContext.globalCompositeOperation = targetComp;
+          }
+
+          const dabs = batch.dabs;
+          for (let i = 0; i < batch.count; i++) {
+            const base = i * DAB_STRIDE;
+            const flags = dabs[base + 10];
+            if (flags < 0.5) continue;
+            const dx = dabs[base];
+            const dy = dabs[base + 1];
+            const diam = dabs[base + 2];
+            const press = dabs[base + 3];
+            const alpha = dabs[base + 4];
+            const angle = dabs[base + 5];
+            const tipIdx = dabs[base + 6];
+            const r = dabs[base + 7];
+            const g = dabs[base + 8];
+            const b = dabs[base + 9];
+            const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, strokeSettings.tipTexture);
+            const stampColor = isEraseOp ? '#000000' : getCachedRgbHex(r, g, b);
+            stampAt(predictedContext, isEraseOp, dx, dy, diam, press, angle, activeTip, true, stampColor, alpha);
+          }
+        }
+      } finally {
+        brushDiagnostics.inPredictedStroke = false;
+        isPredictingStroke = false;
+      }
+    } else {
+      brushDiagnostics.inPredictedStroke = true;
+      isPredictingStroke = true;
+      rustStrokeEngine.saveCheckpoint();
+      try {
+        for (const pt of points) {
+          stampAlong(predictedContext, isEraseOp, prevX, prevY, prevP, pt.x, pt.y, pt.pressure);
+          prevX = pt.x;
+          prevY = pt.y;
+          prevP = pt.pressure;
+        }
+      } finally {
+        rustStrokeEngine.restoreCheckpoint();
+        brushDiagnostics.inPredictedStroke = false;
+        isPredictingStroke = false;
+      }
     }
 
     strokeDistance = savedDist;
@@ -868,7 +983,87 @@ export function createBrushEngine(): BrushEngine {
     brushDiagnostics.recordPredictedStroke(performance.now() - t0);
   }
 
-  function clearPredictedStroke(): void {
+  function renderPredictedBezier(
+    startX: number,
+    startY: number,
+    startP: number,
+    targetX: number,
+    targetY: number,
+    targetP: number,
+    velX: number,
+    velY: number,
+  ): void {
+    if (!mode || mode === 'shape') return;
+    const t0 = performance.now();
+    clearPredictedStroke(true);
+    hasPredictions = true;
+
+    const pad = Math.ceil((strokeSettings.size || 20) * 1.5) + 8;
+    predBoundsMinX = Math.max(0, Math.min(curDocW, Math.floor(Math.min(startX, targetX) - pad)));
+    predBoundsMinY = Math.max(0, Math.min(curDocH, Math.floor(Math.min(startY, targetY) - pad)));
+    predBoundsMaxX = Math.min(curDocW, Math.max(0, Math.ceil(Math.max(startX, targetX) + pad)));
+    predBoundsMaxY = Math.min(curDocH, Math.max(0, Math.ceil(Math.max(startY, targetY) + pad)));
+
+    const erase = mode === 'erase';
+    const eraseToStroke = erase && selectionModel.hasSelection();
+    const isEraseOp = erase && !eraseToStroke;
+
+    brushDiagnostics.inPredictedStroke = true;
+    isPredictingStroke = true;
+    try {
+      const batch = rustStrokeEngine.predictBezierStroke(
+        startX, startY, startP, targetX, targetY, targetP, velX, velY,
+      );
+      if (batch && batch.count > 0) {
+        if (batch.dirtyRect[0] <= batch.dirtyRect[2]) {
+          const padB = Math.ceil((strokeSettings.size || 20) * 0.6) + 8;
+          predBoundsMinX = Math.max(0, Math.floor(batch.dirtyRect[0] - padB));
+          predBoundsMinY = Math.max(0, Math.floor(batch.dirtyRect[1] - padB));
+          predBoundsMaxX = Math.min(curDocW, Math.ceil(batch.dirtyRect[2] + padB));
+          predBoundsMaxY = Math.min(curDocH, Math.ceil(batch.dirtyRect[3] + padB));
+        }
+
+        const targetComp = isEraseOp
+          ? 'destination-out'
+          : (strokeSettings.compositeMode === 'lighter' ? 'lighter' : 'source-over');
+        if (predictedContext.globalCompositeOperation !== targetComp) {
+          predictedContext.globalCompositeOperation = targetComp;
+        }
+
+        const dabs = batch.dabs;
+        for (let i = 0; i < batch.count; i++) {
+          const base = i * DAB_STRIDE;
+          const flags = dabs[base + 10];
+          if (flags < 0.5) continue;
+          const dx = dabs[base];
+          const dy = dabs[base + 1];
+          const diam = dabs[base + 2];
+          const press = dabs[base + 3];
+          const alpha = dabs[base + 4];
+          const angle = dabs[base + 5];
+          const tipIdx = dabs[base + 6];
+          const r = dabs[base + 7];
+          const g = dabs[base + 8];
+          const b = dabs[base + 9];
+          const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, strokeSettings.tipTexture);
+          const stampColor = isEraseOp ? '#000000' : getCachedRgbHex(r, g, b);
+          stampAt(predictedContext, isEraseOp, dx, dy, diam, press, angle, activeTip, true, stampColor, alpha);
+        }
+      }
+    } finally {
+      brushDiagnostics.inPredictedStroke = false;
+      isPredictingStroke = false;
+    }
+
+    if (useOverlayPlanes) {
+      updateLiveInkingCanvas();
+    } else {
+      engine.compositeDirty = true;
+    }
+    brushDiagnostics.recordPredictedStroke(performance.now() - t0);
+  }
+
+  function clearPredictedStroke(skipOverlay = false): void {
     if (hasPredictions) {
       if (predBoundsMaxX > predBoundsMinX && predBoundsMaxY > predBoundsMinY) {
         predictedContext.clearRect(
@@ -885,10 +1080,12 @@ export function createBrushEngine(): BrushEngine {
       predBoundsMinY = 0;
       predBoundsMaxX = 0;
       predBoundsMaxY = 0;
-      if (useOverlayPlanes) {
-        updateLiveInkingCanvas();
-      } else {
-        engine.compositeDirty = true;
+      if (!skipOverlay) {
+        if (useOverlayPlanes) {
+          updateLiveInkingCanvas();
+        } else {
+          engine.compositeDirty = true;
+        }
       }
     }
   }
@@ -902,6 +1099,7 @@ export function createBrushEngine(): BrushEngine {
       if (active.context) {
         // Apply GPU paper grain texture across stroke bounds (single-pass continuous texture)
         if (
+          !rustStrokeEngine.available &&
           mode === 'paint' &&
           strokeSettings.paperTexture &&
           strokeSettings.paperTexture !== 'none' &&
@@ -941,24 +1139,101 @@ export function createBrushEngine(): BrushEngine {
           strokeContext.restore();
         }
         const hasBounds = strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY;
-        const bx = strokeBoundsMinX;
-        const by = strokeBoundsMinY;
-        const bw = strokeBoundsMaxX - strokeBoundsMinX;
-        const bh = strokeBoundsMaxY - strokeBoundsMinY;
+        const pad = 2;
+        const bx = hasBounds ? Math.max(0, strokeBoundsMinX - pad) : 0;
+        const by = hasBounds ? Math.max(0, strokeBoundsMinY - pad) : 0;
+        const bw = hasBounds ? Math.min(curDocW, strokeBoundsMaxX + pad) - bx : curDocW;
+        const bh = hasBounds ? Math.min(curDocH, strokeBoundsMaxY + pad) - by : curDocH;
+        const brushOpacity = getToolState().brush.opacity;
 
-        active.context.save();
-        if (active.lockAlpha) {
-          active.context.globalCompositeOperation = 'source-atop';
-        } else if (strokeSettings.compositeMode === 'lighter') {
-          active.context.globalCompositeOperation = 'lighter';
+        let mergedFast = false;
+        if (bw > 0 && bh > 0 && rustStrokeEngine.available) {
+          try {
+            const dstImg = active.context.getImageData(bx, by, bw, bh);
+            const srcImg = strokeContext.getImageData(bx, by, bw, bh);
+
+            // SIMD matricial paper grain texture in Rust (direct in-place modulation)
+            if (
+              mode === 'paint' &&
+              strokeSettings.paperTexture &&
+              strokeSettings.paperTexture !== 'none' &&
+              (strokeSettings.textureDensity ?? 0) > 0
+            ) {
+              const asset = getBrushTextureAsset(strokeSettings.paperTexture);
+              if (asset && asset.loaded && asset.toothData) {
+                const density = clamp01(strokeSettings.textureDensity ?? 0.85);
+                const scale = strokeSettings.textureScale ?? 0.35;
+                const texMode = strokeSettings.textureMode ?? 'height';
+                const texInvert = !!strokeSettings.textureInvert;
+                const modeCode =
+                  texMode === 'subtract' ? 1 : texMode === 'multiply' ? 2 : texMode === 'outline' ? 3 : 0;
+                rustStrokeEngine.applyPaperGrainRect(
+                  srcImg.data,
+                  bw,
+                  bw,
+                  bh,
+                  bx,
+                  by,
+                  asset.toothData,
+                  asset.width,
+                  asset.height,
+                  scale,
+                  density,
+                  modeCode,
+                  texInvert,
+                );
+              }
+            }
+
+            mergedFast = rustStrokeEngine.mergeStrokeRect(
+              dstImg.data,
+              srcImg.data,
+              bw,
+              bh,
+              0,
+              0,
+              bw,
+              bh,
+              strokeSettings.compositeMode || 'source-over',
+              brushOpacity,
+              !!active.lockAlpha,
+            );
+            if (mergedFast) {
+              active.context.putImageData(dstImg, bx, by);
+              if (active.tileGrid) {
+                active.tileGrid.update_rect_from_buffer(
+                  new Uint8Array(dstImg.data.buffer, dstImg.data.byteOffset, dstImg.data.byteLength),
+                  bw,
+                  bx,
+                  by,
+                  bx + bw,
+                  by + bh,
+                  bx,
+                  by,
+                );
+              }
+            }
+          } catch (e) {
+            console.warn('WASM mergeStrokeRect fallback:', e);
+            mergedFast = false;
+          }
         }
-        active.context.globalAlpha = getToolState().brush.opacity;
-        if (hasBounds && bw > 0 && bh > 0) {
-          active.context.drawImage(strokeCanvas, bx, by, bw, bh, bx, by, bw, bh);
-        } else {
-          active.context.drawImage(strokeCanvas, 0, 0);
+
+        if (!mergedFast) {
+          active.context.save();
+          if (active.lockAlpha) {
+            active.context.globalCompositeOperation = 'source-atop';
+          } else if (strokeSettings.compositeMode === 'lighter') {
+            active.context.globalCompositeOperation = 'lighter';
+          }
+          active.context.globalAlpha = brushOpacity;
+          if (hasBounds && bw > 0 && bh > 0) {
+            active.context.drawImage(strokeCanvas, bx, by, bw, bh, bx, by, bw, bh);
+          } else {
+            active.context.drawImage(strokeCanvas, 0, 0);
+          }
+          active.context.restore();
         }
-        active.context.restore();
       }
       if (strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY) {
         const pad = 12;
@@ -1006,21 +1281,42 @@ export function createBrushEngine(): BrushEngine {
 
         if (cropW > 0 && cropH > 0) {
           const croppedData = new Uint8ClampedArray(cropW * cropH * 4);
-          for (let y = 0; y < cropH; y++) {
-            const srcOffset = ((cropY + y) * curDocW + cropX) * 4;
-            const dstOffset = y * cropW * 4;
-            croppedData.set(
-              preStrokeSnapshot.data.subarray(srcOffset, srcOffset + cropW * 4),
-              dstOffset
-            );
+          // Fast path: delegar el recorte directamente a Rust SIMD en memoria contigua
+          const croppedOk = rustStrokeEngine.cropRgbaRect(
+            preStrokeSnapshot.data,
+            curDocW,
+            curDocH,
+            cropX,
+            cropY,
+            cropW,
+            cropH,
+            croppedData
+          );
+          if (!croppedOk) {
+            for (let y = 0; y < cropH; y++) {
+              const srcOffset = ((cropY + y) * curDocW + cropX) * 4;
+              const dstOffset = y * cropW * 4;
+              croppedData.set(
+                preStrokeSnapshot.data.subarray(srcOffset, srcOffset + cropW * 4),
+                dstOffset
+              );
+            }
           }
           history.push(preStrokeLayerId, { x: cropX, y: cropY, w: cropW, h: cropH }, croppedData);
         }
       } else if (preStrokeRect) {
         history.push(preStrokeLayerId, preStrokeRect, preStrokeSnapshot.data);
       }
+      if (preStrokeLayerId) {
+        const activeLayer = layerManager.layers.find((l) => l.id === preStrokeLayerId);
+        if (activeLayer && (activeLayer.isVirtual || activeLayer.tileGrid) && activeLayer.canvas) {
+          layerManager.syncLayerToTileGrid(activeLayer);
+          layerManager.evictInactiveCelCanvases(4);
+        }
+      }
       meshCache.delete(preStrokeLayerId);
       preStrokeSnapshot = null;
+      preStrokeRawRgba = null;
       preStrokeRect = null;
     }
     isLivePainting = false;
@@ -1031,6 +1327,11 @@ export function createBrushEngine(): BrushEngine {
     liveStrokeContext.clearRect(0, 0, curDocW, curDocH);
     liveStrokeDirty = true;
     engine.compositeDirty = true;
+    if (timelineManager) {
+      rustStrokeEngine.invalidateFrame(timelineManager.settings.currentFrame);
+    }
+    rustStrokeEngine.clearCanvasSnapshot();
+    rustStrokeEngine.clearSelectionMask();
     updateComposite();
     mode = null;
     brushDiagnostics.endStroke();
@@ -1157,6 +1458,25 @@ export function createBrushEngine(): BrushEngine {
       liveStrokeDirty = false;
     }
 
+    const curFrame = timelineManager ? timelineManager.settings.currentFrame : 1;
+    const canUseFrameCache =
+      !planesOnly &&
+      mode !== 'paint' &&
+      !!timelineManager &&
+      !timelineManager.onionSkin.enabled &&
+      timelineManager.bones.length === 0;
+
+    if (canUseFrameCache && rustStrokeEngine.hasCachedFrame(curFrame)) {
+      const imgData = compositeContext.createImageData(curDocW, curDocH);
+      if (rustStrokeEngine.getCachedFrame(curFrame, imgData.data)) {
+        compositeContext.putImageData(imgData, 0, 0);
+        engine.compositeDirty = false;
+        if (engine.onCompositeUpdated) engine.onCompositeUpdated();
+        brushDiagnostics.recordComposite(performance.now() - t0);
+        return;
+      }
+    }
+
     compositeContext.clearRect(0, 0, curDocW, curDocH);
     const evaluatedBones =
       timelineManager && timelineManager.bones.length > 0
@@ -1182,7 +1502,32 @@ export function createBrushEngine(): BrushEngine {
     }
 
     function renderLayerTo(targetCtx: CanvasRenderingContext2D, layer: LayerNode, alpha: number): void {
-      if (!layer.canvas) return;
+      if (!layer.canvas && !layer.tileGrid) return;
+
+      let sourceCanvasToDraw: HTMLCanvasElement;
+
+      if (!layer.canvas && layer.tileGrid) {
+        // Virtual cel projection onto shared reusable scratch canvas (zero VRAM overhead)
+        const imgData = virtualCelContext.createImageData(curDocW, curDocH);
+        const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
+        layer.tileGrid.render_to_full_buffer(rawRgba);
+        virtualCelContext.putImageData(imgData, 0, 0);
+        sourceCanvasToDraw = virtualCelCanvas;
+      } else if (layer.canvas) {
+        // Sparse Tile Grid projection on demand
+        if (layer.tileGrid && (layer as any)._tileGridNeedsProjection) {
+          const ctx = layer.context || layer.canvas.getContext('2d')!;
+          const imgData = ctx.createImageData(curDocW, curDocH);
+          const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
+          layer.tileGrid.render_to_full_buffer(rawRgba);
+          ctx.putImageData(imgData, 0, 0);
+          (layer as any)._tileGridNeedsProjection = false;
+        }
+        sourceCanvasToDraw = layer.canvas;
+      } else {
+        return;
+      }
+
       const kfTransform =
         timelineManager && !layer.isPaper
           ? timelineManager.getLayerTransformAtFrame(layer, timelineManager.settings.currentFrame)
@@ -1222,7 +1567,6 @@ export function createBrushEngine(): BrushEngine {
 
       const isLivePainting =
         !useOverlayPlanes && layer.id === activeDrawable.id && (mode === 'paint' || mode === 'shape');
-      let sourceCanvasToDraw = layer.canvas;
       let liveStrokeDrawnInTint = false;
 
       // Real-time GPU Paper/Canvas grain & Selection mask compositing
@@ -1287,7 +1631,7 @@ export function createBrushEngine(): BrushEngine {
 
       if (isLivePainting && layer.lockAlpha) {
         lockAlphaContext.clearRect(0, 0, curDocW, curDocH);
-        lockAlphaContext.drawImage(layer.canvas, 0, 0);
+        lockAlphaContext.drawImage(sourceCanvasToDraw, 0, 0);
         lockAlphaContext.save();
         lockAlphaContext.globalCompositeOperation = 'source-atop';
         lockAlphaContext.globalAlpha = getToolState().brush.opacity;
@@ -1440,7 +1784,13 @@ export function createBrushEngine(): BrushEngine {
         if (!track.visible) continue;
         const onionCels = timelineManager.getOnionSkinCels(track.id, timelineManager.settings.currentFrame);
         for (const item of onionCels) {
-          if (!item.layer.canvas) continue;
+          if (!item.layer.canvas) {
+            if (item.layer.tileGrid) {
+              layerManager.ensureLayerCanvas(item.layer);
+            } else {
+              continue;
+            }
+          }
           const effectiveAlpha = item.opacity * (item.transform?.opacity ?? 1);
           const isTint = timelineManager.onionSkin.mode === 'tint' && !!item.tintColor;
 
@@ -1449,14 +1799,32 @@ export function createBrushEngine(): BrushEngine {
             compositeContext.save();
             compositeContext.globalAlpha = effectiveAlpha;
             applyOnionTransforms(compositeContext, item);
-            compositeContext.drawImage(item.layer.canvas, 0, 0);
+            compositeContext.drawImage(item.layer.canvas!, 0, 0);
             compositeContext.restore();
           } else {
-            // Tint path: isolated through auxiliary onion canvas
+            // Fast Tint path: usar tintado in-place de Rust si no hay rotación compleja
+            const hasTransforms = (item.transform && (item.transform.x !== 0 || item.transform.y !== 0 || item.transform.scaleX !== 1 || item.transform.scaleY !== 1 || item.transform.rotation !== 0)) || item.onionTransform;
+            if (!hasTransforms && rustStrokeEngine.available && item.layer.canvas) {
+              onionContext.clearRect(0, 0, curDocW, curDocH);
+              onionContext.drawImage(item.layer.canvas!, 0, 0);
+              const onionImg = onionContext.getImageData(0, 0, curDocW, curDocH);
+              const { r: tr, g: tg, b: tb } = hexToRgb(item.tintColor!);
+              const tintOk = rustStrokeEngine.applyTintInPlace(onionImg.data, tr, tg, tb);
+              if (tintOk) {
+                onionContext.putImageData(onionImg, 0, 0);
+                compositeContext.save();
+                compositeContext.globalAlpha = effectiveAlpha;
+                compositeContext.drawImage(onionCanvas, 0, 0);
+                compositeContext.restore();
+                continue;
+              }
+            }
+
+            // Fallback Tint path: isolated through auxiliary onion canvas
             onionContext.clearRect(0, 0, curDocW, curDocH);
             onionContext.save();
             applyOnionTransforms(onionContext, item);
-            onionContext.drawImage(item.layer.canvas, 0, 0);
+            onionContext.drawImage(item.layer.canvas!, 0, 0);
             onionContext.restore();
 
             onionContext.save();
@@ -1526,6 +1894,8 @@ export function createBrushEngine(): BrushEngine {
           renderLayerTo(targetCtx, baseLayer, baseOpacity);
           i++;
         } else {
+          // Fast path: Si las capas son ráster directas y Rust está disponible,
+          // recortar y mezclar directamente en memoria con ColorBlendCore::merge_layers_simd
           groupContext.clearRect(0, 0, curDocW, curDocH);
           renderLayerTo(groupContext, baseLayer, 1);
 
@@ -1533,25 +1903,55 @@ export function createBrushEngine(): BrushEngine {
             const clippedOpacity = getEffectiveOpacity(clipped, layerMap);
 
             if (clipped.type === 'adjustment') {
-              // El ajuste preserva alfa: aplicarlo al grupo lo recorta naturalmente a la capa base.
               if (clipped.adjustment) {
                 applyAdjustmentToContext(groupContext, clipped.adjustment, clippedOpacity, curDocW, curDocH);
               }
               continue;
             }
 
-            clipContext.clearRect(0, 0, curDocW, curDocH);
-            renderLayerTo(clipContext, clipped, clippedOpacity);
+            let mergedInRust = false;
+            // Si la capa base y la recortada tienen canvas estándar
+            if (rustStrokeEngine.available && baseLayer.canvas && clipped.canvas && !clipped.useLayerColor) {
+              const baseCtx = baseLayer.context || baseLayer.canvas.getContext('2d')!;
+              const clippedCtx = clipped.context || clipped.canvas.getContext('2d')!;
+              try {
+                const groupImg = groupContext.getImageData(0, 0, curDocW, curDocH);
+                const clippedImg = clippedCtx.getImageData(0, 0, curDocW, curDocH);
+                const baseImg = baseCtx.getImageData(0, 0, curDocW, curDocH);
 
-            clipContext.save();
-            clipContext.globalCompositeOperation = 'destination-in';
-            clipContext.drawImage(baseLayer.canvas!, 0, 0);
-            clipContext.restore();
+                mergedInRust = rustStrokeEngine.mergeLayers(
+                  groupImg.data,
+                  clippedImg.data,
+                  curDocW,
+                  curDocH,
+                  clipped.blendMode,
+                  clippedOpacity,
+                  false,
+                  baseImg.data
+                );
 
-            groupContext.save();
-            groupContext.globalCompositeOperation = clipped.blendMode;
-            groupContext.drawImage(clipCanvas, 0, 0);
-            groupContext.restore();
+                if (mergedInRust) {
+                  groupContext.putImageData(groupImg, 0, 0);
+                }
+              } catch {
+                mergedInRust = false;
+              }
+            }
+
+            if (!mergedInRust) {
+              clipContext.clearRect(0, 0, curDocW, curDocH);
+              renderLayerTo(clipContext, clipped, clippedOpacity);
+
+              clipContext.save();
+              clipContext.globalCompositeOperation = 'destination-in';
+              clipContext.drawImage(baseLayer.canvas!, 0, 0);
+              clipContext.restore();
+
+              groupContext.save();
+              groupContext.globalCompositeOperation = clipped.blendMode;
+              groupContext.drawImage(clipCanvas, 0, 0);
+              groupContext.restore();
+            }
           }
 
           targetCtx.save();
@@ -1598,6 +1998,14 @@ export function createBrushEngine(): BrushEngine {
     if (engine.onCompositeUpdated) {
       engine.onCompositeUpdated();
     }
+    if (canUseFrameCache) {
+      try {
+        const frameImg = compositeContext.getImageData(0, 0, curDocW, curDocH);
+        rustStrokeEngine.storeCachedFrame(curFrame, curDocW, curDocH, frameImg.data);
+      } catch {
+        // ignore
+      }
+    }
     brushDiagnostics.recordComposite(performance.now() - t0);
   }
 
@@ -1643,6 +2051,39 @@ export function createBrushEngine(): BrushEngine {
     const isEraseOp = erase && !eraseToStroke;
 
     if (rustStrokeEngine.available) {
+      if (preStrokeSnapshot) {
+        rustStrokeEngine.setCanvasSnapshot(preStrokeSnapshot.data, curDocW, curDocH);
+      }
+      const { r: r1, g: g1, b: b1 } = hexToRgb(strokeSettings.color);
+      const { r: r2, g: g2, b: b2 } = hexToRgb(getToolState().secondaryColor || '#ffffff');
+      rustStrokeEngine.setStrokeColor(
+        r1, g1, b1,
+        r2, g2, b2,
+        !erase && !!strokeSettings.subColorMix,
+        !erase ? (strokeSettings.colorMix ?? 0) : 0,
+        !erase ? (strokeSettings.colorMixAlpha ?? 0.55) : 0,
+        !erase ? (strokeSettings.smudge ?? 0) : 0,
+        erase,
+      );
+
+      if (selectionModel.hasSelection()) {
+        const b = selectionModel.getBounds();
+        if (b) {
+          const maskData = selectionModel.maskCtx.getImageData(0, 0, curDocW, curDocH).data;
+          rustStrokeEngine.setSelectionMask(
+            maskData,
+            curDocW,
+            curDocH,
+            b.minX,
+            b.minY,
+            b.maxX,
+            b.maxY,
+            true,
+          );
+        }
+      } else {
+        rustStrokeEngine.clearSelectionMask();
+      }
       const batch = rustStrokeEngine.startStroke(x, y, pressure, strokeSettings, isCurrentStrokeMouse);
       if (batch && batch.count > 0) {
         if (batch.dirtyRect[0] <= batch.dirtyRect[2]) {
@@ -1659,15 +2100,22 @@ export function createBrushEngine(): BrushEngine {
         const dabs = batch.dabs;
         for (let i = 0; i < batch.count; i++) {
           const base = i * DAB_STRIDE;
+          const flags = dabs[base + 10];
+          if (flags < 0.5) continue;
           const dx = dabs[base];
           const dy = dabs[base + 1];
           const diam = dabs[base + 2];
           const press = dabs[base + 3];
+          const alpha = dabs[base + 4];
           const angle = dabs[base + 5];
           const tipIdx = dabs[base + 6];
+          const r = dabs[base + 7];
+          const g = dabs[base + 8];
+          const b = dabs[base + 9];
           lastAngleRad = angle;
           const activeTip = rustStrokeEngine.resolveTipFromIndex(tipIdx, strokeSettings.tipTexture);
-          stampAt(targetCtx, isEraseOp, dx, dy, diam, press, angle, activeTip, true);
+          const stampColor = isEraseOp ? '#000000' : getCachedRgbHex(r, g, b);
+          stampAt(targetCtx, isEraseOp, dx, dy, diam, press, angle, activeTip, true, stampColor, alpha);
         }
       }
     } else if (strokeSettings.spray) {
@@ -1706,6 +2154,7 @@ export function createBrushEngine(): BrushEngine {
 
   // Subscribe to layer changes to trigger composite update
   layerManager.subscribe(() => {
+    rustStrokeEngine.invalidateAllFrames();
     engine.compositeDirty = true;
   });
 
@@ -1738,6 +2187,8 @@ export function createBrushEngine(): BrushEngine {
     liveStrokeCanvas.height = h;
     topLayersCanvas.width = w;
     topLayersCanvas.height = h;
+    virtualCelCanvas.width = w;
+    virtualCelCanvas.height = h;
 
     selectionModel.resize(w, h);
 
@@ -1770,7 +2221,12 @@ export function createBrushEngine(): BrushEngine {
     set topLayersDirty(v: boolean) { topLayersDirty = v; },
     setTimelineManager(tm: TimelineManager) {
       timelineManager = tm;
+      let lastStructuralVer = -1;
       tm.subscribe(() => {
+        if (tm.structuralVersion !== lastStructuralVer) {
+          lastStructuralVer = tm.structuralVersion;
+          rustStrokeEngine.invalidateAllFrames();
+        }
         if (getToolState().boneMode === 'rig') {
           meshCache.clear();
         }
@@ -1796,10 +2252,13 @@ export function createBrushEngine(): BrushEngine {
     renderPredictedStroke(points) {
       renderPredictedStroke(points);
     },
+    renderPredictedBezier(startX, startY, startP, targetX, targetY, targetP, velX, velY) {
+      renderPredictedBezier(startX, startY, startP, targetX, targetY, targetP, velX, velY);
+    },
     clearPredictedStroke() {
       clearPredictedStroke();
     },
-    continueStroke(x, y, pressure) {
+    continueStroke(x, y, pressure, deferOverlay = false) {
       if (mode !== 'paint') return;
 
       stampAlong(strokeContext, false, lastX, lastY, lastPressure, x, y, pressure);
@@ -1807,7 +2266,7 @@ export function createBrushEngine(): BrushEngine {
       lastY = y;
       lastPressure = pressure;
       if (useOverlayPlanes) {
-        updateLiveInkingCanvas();
+        if (!deferOverlay) updateLiveInkingCanvas();
       } else {
         engine.compositeDirty = true;
       }
@@ -1817,7 +2276,7 @@ export function createBrushEngine(): BrushEngine {
       finishStroke();
       beginInkStroke(x, y, pressure, true, !!isMouse);
     },
-    continueErase(x, y, pressure) {
+    continueErase(x, y, pressure, deferOverlay = false) {
       if (mode !== 'erase') return;
       const active = layerManager.getActiveDrawableLayer();
       if (!active.context || active.locked || active.isPaper || active.lockAlpha) return;
@@ -1828,6 +2287,13 @@ export function createBrushEngine(): BrushEngine {
       lastX = x;
       lastY = y;
       lastPressure = pressure;
+      if (useOverlayPlanes) {
+        if (!deferOverlay) updateLiveInkingCanvas();
+      } else {
+        engine.compositeDirty = true;
+      }
+    },
+    flushLiveOverlay() {
       if (useOverlayPlanes) {
         updateLiveInkingCanvas();
       } else {
@@ -1871,6 +2337,7 @@ export function createBrushEngine(): BrushEngine {
         }
       }
       preStrokeSnapshot = null;
+      preStrokeRawRgba = null;
       preStrokeRect = null;
       mode = null;
       strokeTilt = null;
@@ -2128,6 +2595,9 @@ export function createBrushEngine(): BrushEngine {
   });
 
   selectionModel.subscribe(() => {
+    if (!selectionModel.hasSelection()) {
+      rustStrokeEngine.clearSelectionMask();
+    }
     engine.compositeDirty = true;
   });
 

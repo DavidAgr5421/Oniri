@@ -69,7 +69,7 @@ fn project_on_line(px: f32, py: f32, ox: f32, oy: f32, dx: f32, dy: f32) -> (f32
 #[wasm_bindgen]
 pub struct RulerCore {
     ruler_type: RulerType,
-    snap_enabled: boolean_t,
+    snap_enabled: BooleanT,
     // Symmetry settings
     sym_center_x: f32,
     sym_center_y: f32,
@@ -92,7 +92,7 @@ pub struct RulerCore {
     sym_points_buffer: Vec<f32>,
 }
 
-type boolean_t = bool;
+type BooleanT = bool;
 
 #[wasm_bindgen]
 impl RulerCore {

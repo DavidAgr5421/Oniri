@@ -16,6 +16,10 @@ import type {
   AnimationTrack,
   AudioClip,
   AudioTrack,
+  BezierHandle,
+  CameraKeyframe,
+  CameraKeyframeCurves,
+  EvaluatedCameraTransform,
   EvaluatedTransform,
   InterpolationType,
   LightTableRegistration,
@@ -25,13 +29,17 @@ import type {
   OnionSkinCustomReference,
   OnionSkinSettings,
   OnionSkinTransform,
+  TangentMode,
   TimeDisplayFormat,
   TimelineSettings,
   TransformKeyframe,
+  TransformKeyframeCurves,
 } from './timelineModel';
 import { transformManager } from '../selection/transformGizmo';
+import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { timelineAudioManager } from './audioManager';
 import { timelineCoreEngine } from './rustTimelineCore';
+import { applyCurvePresetToSegment, type CurvePreset } from './fCurveEvaluator';
 
 export interface TimelineManager {
   readonly settings: TimelineSettings;
@@ -45,6 +53,9 @@ export interface TimelineManager {
   readonly boneKeyframes: Map<number, SkeletonKeyframe>;
   readonly selectedBoneId: string | null;
   readonly audioTracks: AudioTrack[];
+  readonly cameraKeyframes: Map<number, CameraKeyframe>;
+  readonly cameraKeyframesEnabled: boolean;
+  readonly structuralVersion: number;
 
   // Audio Tracks (Sync & Lip-Sync)
   addAudioTrack(name?: string): AudioTrack;
@@ -129,6 +140,39 @@ export interface TimelineManager {
   deleteKeyframe(trackId: string, frame: number): boolean;
   setKeyframeInterpolation(trackId: string, frame: number, interpolation: InterpolationType): void;
   getInterpolatedTransform(trackId: string, frame: number): EvaluatedTransform;
+  setTrackChannelTangents(
+    trackId: string,
+    frame: number,
+    channel: keyof TransformKeyframeCurves,
+    inTangent?: BezierHandle,
+    outTangent?: BezierHandle,
+    tangentMode?: TangentMode
+  ): void;
+
+  // Camera Keyframes & F-Curve Animation
+  toggleCameraKeyframes(force?: boolean): void;
+  addOrUpdateCameraKeyframe(
+    frame: number,
+    patch?: Partial<Omit<CameraKeyframe, 'frame'>>
+  ): CameraKeyframe;
+  moveCameraKeyframe(fromFrame: number, toFrame: number): boolean;
+  deleteCameraKeyframe(frame: number): boolean;
+  setCameraKeyframeInterpolation(frame: number, interpolation: InterpolationType): void;
+  getInterpolatedCameraTransform(frame: number): EvaluatedCameraTransform;
+  setCameraChannelTangents(
+    frame: number,
+    channel: keyof CameraKeyframeCurves,
+    inTangent?: BezierHandle,
+    outTangent?: BezierHandle,
+    tangentMode?: TangentMode
+  ): void;
+  applyCurvePreset(
+    target: string | 'camera',
+    channel: string,
+    k0Frame: number,
+    k1Frame: number,
+    preset: CurvePreset
+  ): void;
 
   // 2D Bone / Skeleton System (Rigging, FK, IK, and Bone Keyframes)
   selectBone(boneId: string | null): void;
@@ -295,6 +339,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     bones: [],
     boneKeyframes: new Map(),
     audioTracks: [],
+    cameraKeyframes: new Map(),
+    cameraKeyframesEnabled: false,
   };
 
   const scenes: AnimationScene[] = [initialScene];
@@ -331,8 +377,12 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
   };
 
   const listeners = new Set<() => void>();
+  let structuralVersion = 1;
 
-  function notify(): void {
+  function notify(isStructural = false): void {
+    if (isStructural) {
+      structuralVersion++;
+    }
     for (const listener of listeners) {
       listener();
     }
@@ -405,6 +455,18 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (activeCel && activeCel.id !== activeLayer.id) {
         layerManager.setActiveLayer(activeCel.id);
       }
+    }
+
+    // Dynamic Camera Sync when Camera Keyframes are enabled
+    if (scene.cameraKeyframesEnabled && scene.cameraKeyframes && scene.cameraKeyframes.size > 0) {
+      const cam = timelineCoreEngine.evaluateCameraTransform(scene.cameraKeyframes, settings.currentFrame);
+      cameraFrameManager.update({
+        enabled: true,
+        offsetX: cam.x,
+        offsetY: cam.y,
+        zoom: cam.zoom,
+        rotation: cam.rotation,
+      });
     }
   }
 
@@ -508,6 +570,17 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       const sc = getActiveScene();
       if (!sc.audioTracks) sc.audioTracks = [];
       return sc.audioTracks;
+    },
+    get cameraKeyframes() {
+      const sc = getActiveScene();
+      if (!sc.cameraKeyframes) sc.cameraKeyframes = new Map();
+      return sc.cameraKeyframes;
+    },
+    get cameraKeyframesEnabled() {
+      return Boolean(getActiveScene().cameraKeyframesEnabled);
+    },
+    get structuralVersion() {
+      return structuralVersion;
     },
 
     // --- Audio Tracks (Lip-Sync & Sound Sync) ---
@@ -755,6 +828,13 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
           }))
         : [];
 
+      const clonedCameraKfs = new Map<number, CameraKeyframe>();
+      if (duplicateCurrent && current.cameraKeyframes) {
+        for (const [f, ckf] of current.cameraKeyframes.entries()) {
+          clonedCameraKfs.set(f, JSON.parse(JSON.stringify(ckf)));
+        }
+      }
+
       const newScene: AnimationScene = {
         id: `scene-${Date.now()}-${sceneCounter}`,
         name: name?.trim() || `Escena ${sceneCounter}`,
@@ -763,6 +843,8 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         bones: clonedBones,
         boneKeyframes: clonedBoneKfs,
         audioTracks: clonedAudioTracks,
+        cameraKeyframes: clonedCameraKfs,
+        cameraKeyframesEnabled: duplicateCurrent ? Boolean(current.cameraKeyframesEnabled) : false,
       };
 
       scenes.push(newScene);
@@ -1520,6 +1602,195 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
         return { ...DEFAULT_TRANSFORM };
       }
       return timelineCoreEngine.evaluateTrackTransform(track, frame).transform;
+    },
+
+    setTrackChannelTangents(
+      trackId: string,
+      frame: number,
+      channel: keyof TransformKeyframeCurves,
+      inTangent?: BezierHandle,
+      outTangent?: BezierHandle,
+      tangentMode: TangentMode = 'aligned'
+    ) {
+      const { tracks } = getActiveScene();
+      const track = tracks.find((t) => t.id === trackId);
+      if (!track) return;
+      const kf = track.keyframes.get(frame);
+      if (!kf) return;
+      kf.interpolation = 'bezier';
+      if (!kf.curves) kf.curves = {};
+      kf.curves[channel] = {
+        inTangent: inTangent ? { ...inTangent } : kf.curves[channel]?.inTangent,
+        outTangent: outTangent ? { ...outTangent } : kf.curves[channel]?.outTangent,
+        tangentMode,
+      };
+      notify();
+    },
+
+    // --- Camera Keyframes & F-Curve Animation ---
+    toggleCameraKeyframes(force?: boolean) {
+      const sc = getActiveScene();
+      sc.cameraKeyframesEnabled = force !== undefined ? force : !sc.cameraKeyframesEnabled;
+      if (sc.cameraKeyframesEnabled && (!sc.cameraKeyframes || sc.cameraKeyframes.size === 0)) {
+        manager.addOrUpdateCameraKeyframe(sc.settings.currentFrame);
+      }
+      cameraFrameManager.update({ enabled: sc.cameraKeyframesEnabled });
+      notify();
+    },
+
+    addOrUpdateCameraKeyframe(
+      frame: number,
+      patch?: Partial<Omit<CameraKeyframe, 'frame'>>
+    ): CameraKeyframe {
+      const sc = getActiveScene();
+      if (!sc.cameraKeyframes) sc.cameraKeyframes = new Map();
+      sc.cameraKeyframesEnabled = true;
+
+      const minF = sc.settings.minFrame ?? 0;
+      const clampedFrame = Math.max(minF, Math.min(sc.settings.totalFrames, Math.round(frame)));
+      const existing = sc.cameraKeyframes.get(clampedFrame);
+      if (existing) {
+        if (patch) Object.assign(existing, patch);
+        notify();
+        return existing;
+      }
+
+      const curCam = manager.getInterpolatedCameraTransform(clampedFrame);
+      const camState = cameraFrameManager.getState();
+      const kf: CameraKeyframe = {
+        frame: clampedFrame,
+        x: patch?.x ?? (curCam.x || camState.offsetX || 0),
+        y: patch?.y ?? (curCam.y || camState.offsetY || 0),
+        zoom: patch?.zoom ?? (curCam.zoom || camState.zoom || 1.0),
+        rotation: patch?.rotation ?? (curCam.rotation || camState.rotation || 0),
+        interpolation: patch?.interpolation ?? 'bezier',
+        curves: patch?.curves,
+      };
+      sc.cameraKeyframes.set(clampedFrame, kf);
+      notify();
+      return kf;
+    },
+
+    moveCameraKeyframe(fromFrame: number, toFrame: number): boolean {
+      const sc = getActiveScene();
+      if (!sc.cameraKeyframes) return false;
+      const kf = sc.cameraKeyframes.get(fromFrame);
+      if (!kf) return false;
+      const minF = sc.settings.minFrame ?? 0;
+      const target = Math.max(minF, Math.min(sc.settings.totalFrames, Math.round(toFrame)));
+      if (target === fromFrame) return false;
+
+      sc.cameraKeyframes.delete(fromFrame);
+      kf.frame = target;
+      sc.cameraKeyframes.set(target, kf);
+      notify();
+      return true;
+    },
+
+    deleteCameraKeyframe(frame: number): boolean {
+      const sc = getActiveScene();
+      if (!sc.cameraKeyframes) return false;
+      const del = sc.cameraKeyframes.delete(frame);
+      if (del) notify();
+      return del;
+    },
+
+    setCameraKeyframeInterpolation(frame: number, interpolation: InterpolationType) {
+      const sc = getActiveScene();
+      if (!sc.cameraKeyframes) return;
+      const kf = sc.cameraKeyframes.get(frame);
+      if (kf) {
+        kf.interpolation = interpolation;
+        notify();
+      }
+    },
+
+    getInterpolatedCameraTransform(frame: number): EvaluatedCameraTransform {
+      const sc = getActiveScene();
+      return timelineCoreEngine.evaluateCameraTransform(sc.cameraKeyframes, frame);
+    },
+
+    setCameraChannelTangents(
+      frame: number,
+      channel: keyof CameraKeyframeCurves,
+      inTangent?: BezierHandle,
+      outTangent?: BezierHandle,
+      tangentMode: TangentMode = 'aligned'
+    ) {
+      const sc = getActiveScene();
+      if (!sc.cameraKeyframes) return;
+      const kf = sc.cameraKeyframes.get(frame);
+      if (!kf) return;
+      kf.interpolation = 'bezier';
+      if (!kf.curves) kf.curves = {};
+      kf.curves[channel] = {
+        inTangent: inTangent ? { ...inTangent } : kf.curves[channel]?.inTangent,
+        outTangent: outTangent ? { ...outTangent } : kf.curves[channel]?.outTangent,
+        tangentMode,
+      };
+      notify();
+    },
+
+    applyCurvePreset(
+      target: string | 'camera',
+      channel: string,
+      k0Frame: number,
+      k1Frame: number,
+      preset: CurvePreset
+    ) {
+      const sc = getActiveScene();
+      if (target === 'camera') {
+        if (!sc.cameraKeyframes) return;
+        const k0 = sc.cameraKeyframes.get(k0Frame);
+        const k1 = sc.cameraKeyframes.get(k1Frame);
+        if (!k0 || !k1) return;
+        const ch = channel as keyof CameraKeyframeCurves;
+        const pt0 = {
+          frame: k0.frame,
+          value: (k0 as any)[channel] ?? 0,
+          interpolation: k0.interpolation,
+          inTangent: k0.curves?.[ch]?.inTangent,
+          outTangent: k0.curves?.[ch]?.outTangent,
+          tangentMode: k0.curves?.[ch]?.tangentMode,
+        };
+        const pt1 = {
+          frame: k1.frame,
+          value: (k1 as any)[channel] ?? 0,
+          interpolation: k1.interpolation,
+          inTangent: k1.curves?.[ch]?.inTangent,
+          outTangent: k1.curves?.[ch]?.outTangent,
+          tangentMode: k1.curves?.[ch]?.tangentMode,
+        };
+        applyCurvePresetToSegment(pt0, pt1, preset);
+        manager.setCameraChannelTangents(k0Frame, ch, pt0.inTangent, pt0.outTangent, 'aligned');
+        manager.setCameraChannelTangents(k1Frame, ch, pt1.inTangent, pt1.outTangent, 'aligned');
+      } else {
+        const tr = sc.tracks.find((t) => t.id === target);
+        if (!tr) return;
+        const k0 = tr.keyframes.get(k0Frame);
+        const k1 = tr.keyframes.get(k1Frame);
+        if (!k0 || !k1) return;
+        const ch = channel as keyof TransformKeyframeCurves;
+        const pt0 = {
+          frame: k0.frame,
+          value: (k0 as any)[channel] ?? 0,
+          interpolation: k0.interpolation,
+          inTangent: k0.curves?.[ch]?.inTangent,
+          outTangent: k0.curves?.[ch]?.outTangent,
+          tangentMode: k0.curves?.[ch]?.tangentMode,
+        };
+        const pt1 = {
+          frame: k1.frame,
+          value: (k1 as any)[channel] ?? 0,
+          interpolation: k1.interpolation,
+          inTangent: k1.curves?.[ch]?.inTangent,
+          outTangent: k1.curves?.[ch]?.outTangent,
+          tangentMode: k1.curves?.[ch]?.tangentMode,
+        };
+        applyCurvePresetToSegment(pt0, pt1, preset);
+        manager.setTrackChannelTangents(target, k0Frame, ch, pt0.inTangent, pt0.outTangent, 'aligned');
+        manager.setTrackChannelTangents(target, k1Frame, ch, pt1.inTangent, pt1.outTangent, 'aligned');
+      }
     },
 
     // --- 2D Bone / Skeleton System (Rigging, FK, IK, and Bone Keyframes) ---

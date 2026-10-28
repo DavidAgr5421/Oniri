@@ -274,11 +274,32 @@ export class NavigatorPalette {
 
     this.element.appendChild(controls);
 
-    // Subscribe to viewport navigation updates
-    this.unsubNav = viewportNav.subscribe((state) => this.updateUI(state));
+    // Subscribe to viewport navigation updates (On-Demand)
+    this.unsubNav = viewportNav.subscribe((state) => {
+      this.updateUI(state);
+      this.requestRender();
+    });
 
-    // Live Render Loop for thumbnail & viewfinder
-    this.startRenderLoop();
+    // Redraw whenever composite changes (e.g. stroke or frame change)
+    const prevCb = this.engine.onCompositeUpdated;
+    this.engine.onCompositeUpdated = () => {
+      if (prevCb) prevCb();
+      this.requestRender();
+    };
+
+    // Initial render
+    this.requestRender();
+  }
+
+  private isRenderPending = false;
+
+  public requestRender(): void {
+    if (this.isRenderPending) return;
+    this.isRenderPending = true;
+    requestAnimationFrame(() => {
+      this.isRenderPending = false;
+      this.render();
+    });
   }
 
   private updateUI(state: ViewportState): void {
@@ -345,13 +366,6 @@ export class NavigatorPalette {
     }
   }
 
-  private startRenderLoop(): void {
-    const loop = () => {
-      this.render();
-      this.animFrameId = requestAnimationFrame(loop);
-    };
-    this.animFrameId = requestAnimationFrame(loop);
-  }
 
   public toggle(): void {
     const isHidden = this.element.style.display === 'none';

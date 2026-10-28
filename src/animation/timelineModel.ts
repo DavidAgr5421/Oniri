@@ -4,7 +4,29 @@ import type { AudioClip, AudioTrack } from './audioModel';
 
 export type { AudioClip, AudioTrack };
 
-export type InterpolationType = 'hold' | 'linear' | 'smooth';
+export type InterpolationType = 'hold' | 'linear' | 'smooth' | 'bezier';
+
+export type TangentMode = 'auto' | 'aligned' | 'free' | 'vector' | 'linear';
+
+export interface BezierHandle {
+  frameOffset: number; // Offset horizontal en frames relativo al keyframe (ej: -2 o +2)
+  valueOffset: number; // Offset vertical en valor relativo al keyframe (ej: -10 o +10)
+}
+
+export interface ChannelCurveData {
+  inTangent?: BezierHandle;
+  outTangent?: BezierHandle;
+  tangentMode?: TangentMode;
+}
+
+export interface TransformKeyframeCurves {
+  x?: ChannelCurveData;
+  y?: ChannelCurveData;
+  scaleX?: ChannelCurveData;
+  scaleY?: ChannelCurveData;
+  rotation?: ChannelCurveData;
+  opacity?: ChannelCurveData;
+}
 
 export interface TransformKeyframe {
   frame: number; // 1-based frame index
@@ -15,6 +37,31 @@ export interface TransformKeyframe {
   rotation: number; // Rotation in degrees (default 0)
   opacity: number; // Track keyframe opacity 0..1 (default 1)
   interpolation: InterpolationType;
+  curves?: TransformKeyframeCurves;
+}
+
+export interface CameraKeyframeCurves {
+  x?: ChannelCurveData;
+  y?: ChannelCurveData;
+  zoom?: ChannelCurveData;
+  rotation?: ChannelCurveData;
+}
+
+export interface CameraKeyframe {
+  frame: number;
+  x: number; // Pan X in pixels (default 0)
+  y: number; // Pan Y in pixels (default 0)
+  zoom: number; // Camera Zoom factor (default 1.0)
+  rotation: number; // Camera Rotation in degrees (default 0)
+  interpolation: InterpolationType;
+  curves?: CameraKeyframeCurves;
+}
+
+export interface EvaluatedCameraTransform {
+  x: number;
+  y: number;
+  zoom: number;
+  rotation: number;
 }
 
 export interface EvaluatedTransform {
@@ -62,6 +109,8 @@ export interface AnimationScene {
   bones: Bone2D[];
   boneKeyframes: Map<number, SkeletonKeyframe>;
   audioTracks: AudioTrack[];
+  cameraKeyframes?: Map<number, CameraKeyframe>;
+  cameraKeyframesEnabled?: boolean;
 }
 
 export interface OnionSkinTransform {

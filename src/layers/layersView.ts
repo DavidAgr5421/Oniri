@@ -832,6 +832,8 @@ export function mountLayersView(
   }
 
   layerManager.subscribe(scheduleRender);
-  timeline?.subscribe(scheduleRender);
+  timeline?.subscribe(() => {
+    syncActiveHighlightOnly();
+  });
   render();
 }

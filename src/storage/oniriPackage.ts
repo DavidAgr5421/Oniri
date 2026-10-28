@@ -223,6 +223,8 @@ export async function exportOniriPackage(
       })),
       bones: s.bones,
       boneKeyframes: Array.from(s.boneKeyframes.entries()),
+      cameraKeyframes: s.cameraKeyframes ? Array.from(s.cameraKeyframes.entries()) : [],
+      cameraKeyframesEnabled: Boolean(s.cameraKeyframesEnabled),
     })),
     activeSceneId: timeline.activeSceneId,
     bones: timeline.bones,
@@ -409,6 +411,8 @@ export async function importOniriPackage(
       bones: sc.bones || [],
       boneKeyframes: new Map<number, SkeletonKeyframe>(sc.boneKeyframes || []),
       audioTracks: [],
+      cameraKeyframes: new Map(sc.cameraKeyframes || []),
+      cameraKeyframesEnabled: Boolean(sc.cameraKeyframesEnabled),
     }));
 
     timeline.loadTimelineState({

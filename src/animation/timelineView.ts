@@ -6,6 +6,7 @@ import type { TimelineManager } from './timelineManager';
 import type { AnimationTrack, AudioClip, InterpolationType, TimeDisplayFormat } from './timelineModel';
 import { openExportAnimationModal } from './exportAnimation';
 import { timelineAudioManager } from './audioManager';
+import { FCurveView } from './fCurveView';
 
 let cellWidth = 24;
 const MIN_CELL_WIDTH = 10;
@@ -441,6 +442,7 @@ export function mountTimelineView(
   interpSelect.title = 'Interpolación del Keyframe (Suave / Lineal / Fijo)';
   interpSelect.innerHTML = `
     <option value="smooth">◆ Suave</option>
+    <option value="bezier">∿ Curva Bézier</option>
     <option value="linear">◇ Lineal</option>
     <option value="hold">■ Fijo</option>
   `;
@@ -562,12 +564,93 @@ export function mountTimelineView(
   zoomGroup.append(zoomOutBtn, zoomSlider, zoomInBtn, zoomLabel);
   actionsGroup.appendChild(zoomGroup);
 
+  // --- View Mode Toggle: Dope Sheet vs F-Curve Graph Editor ---
+  let viewMode: 'dopesheet' | 'fcurve' = 'dopesheet';
+
+  const viewModeGroup = document.createElement('div');
+  viewModeGroup.className = 'timeline-view-mode-toggle';
+
+  const dopeSheetBtn = document.createElement('button');
+  dopeSheetBtn.className = 'timeline-view-mode-btn active';
+  dopeSheetBtn.title = 'Vista Hoja de Exposición / Celdas (Dope Sheet)';
+  dopeSheetBtn.innerHTML = `
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="7" height="7"/>
+      <rect x="14" y="3" width="7" height="7"/>
+      <rect x="14" y="14" width="7" height="7"/>
+      <rect x="3" y="14" width="7" height="7"/>
+    </svg>
+    <span>Dope Sheet</span>
+  `;
+
+  const fCurveBtn = document.createElement('button');
+  fCurveBtn.className = 'timeline-view-mode-btn';
+  fCurveBtn.title = 'Vista Editor Gráfico de Curvas F-Curve (Atajo: Tab)';
+  fCurveBtn.innerHTML = `
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 3v18h18"/>
+      <path d="M18 9c-3 0-5 6-8 6s-4-6-7-6"/>
+      <circle cx="10" cy="15" r="1.5" fill="#ffd43b"/>
+      <circle cx="18" cy="9" r="1.5" fill="#ffd43b"/>
+    </svg>
+    <span>Curvas F-Curve</span>
+  `;
+
+  viewModeGroup.append(dopeSheetBtn, fCurveBtn);
+  actionsGroup.appendChild(viewModeGroup);
+
   header.appendChild(actionsGroup);
   panel.appendChild(header);
+
+  const fCurveView = new FCurveView(timeline);
+  const fCurveWrapper = fCurveView.getElement();
+  fCurveWrapper.style.display = 'none';
+
+  function setTimelineViewMode(mode: 'dopesheet' | 'fcurve') {
+    viewMode = mode;
+    if (viewMode === 'dopesheet') {
+      dopeSheetBtn.classList.add('active');
+      fCurveBtn.classList.remove('active');
+      body.style.display = 'flex';
+      fCurveWrapper.style.display = 'none';
+      render();
+    } else {
+      fCurveBtn.classList.add('active');
+      dopeSheetBtn.classList.remove('active');
+      body.style.display = 'none';
+      fCurveWrapper.style.display = 'flex';
+      const tr = getSelectedTrack();
+      fCurveView.setTarget(tr ? 'track' : 'camera', tr?.id);
+      fCurveView.render();
+    }
+  }
+
+  dopeSheetBtn.addEventListener('click', () => setTimelineViewMode('dopesheet'));
+  fCurveBtn.addEventListener('click', () => setTimelineViewMode('fcurve'));
+
+  // Tab key to toggle Dope Sheet / F-Curve view
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const activeEl = document.activeElement;
+      if (
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.tagName === 'SELECT')
+      ) {
+        return;
+      }
+      if (panel.contains(activeEl) || (e.target as HTMLElement)?.closest?.('.timeline-panel')) {
+        e.preventDefault();
+        setTimelineViewMode(viewMode === 'dopesheet' ? 'fcurve' : 'dopesheet');
+      }
+    }
+  });
 
   // --- 2. Body (Tracks column on left + Grid on right) ---
   const body = document.createElement('div');
   body.className = 'timeline-body';
+  panel.appendChild(fCurveWrapper);
 
   // Left Column: Track Headers
   const leftCol = document.createElement('div');
@@ -695,10 +778,18 @@ export function mountTimelineView(
   let activePlayheadEl: HTMLElement | null = null;
 
   function syncPlaybackUI(): void {
+    const curF = timeline.settings.currentFrame;
     if (activePlayheadEl) {
-      activePlayheadEl.style.left = `${frameToX(timeline.settings.currentFrame) + cellWidth / 2}px`;
+      activePlayheadEl.style.left = `${frameToX(curF) + cellWidth / 2}px`;
     }
-    frameDisplay.textContent = `${timeline.settings.currentFrame} / ${timeline.settings.totalFrames}`;
+    frameDisplay.textContent = `${curF} / ${timeline.settings.totalFrames}`;
+
+    // Update active keyframe toolbar status in O(1)
+    const trSelected = getSelectedTrack();
+    const activeKf = trSelected?.keyframes.get(curF);
+    if (activeKf) {
+      interpSelect.value = activeKf.interpolation;
+    }
   }
 
   // --- 4. Render Grid & Tracks ---
@@ -780,6 +871,47 @@ export function mountTimelineView(
 
       trackHeadersList.appendChild(boneHeaderItem);
     }
+
+    // Camera Track Header
+    const camHeaderItem = document.createElement('div');
+    camHeaderItem.className = `timeline-track-header-item camera-track-header ${timeline.cameraKeyframesEnabled ? 'has-kf-lane' : ''}`;
+    camHeaderItem.title = 'Pista de Cámara de Escena (Pan, Zoom, Rotación)';
+
+    const camIcon = document.createElement('span');
+    camIcon.style.marginRight = '4px';
+    camIcon.style.fontSize = '12px';
+    camIcon.textContent = '🎥';
+    camHeaderItem.appendChild(camIcon);
+
+    const camName = document.createElement('span');
+    camName.className = 'timeline-track-name';
+    camName.style.color = '#ffd43b';
+    camName.style.fontWeight = '600';
+    camName.textContent = 'Cámara';
+    camHeaderItem.appendChild(camName);
+
+    const camToggleBtn = document.createElement('button');
+    camToggleBtn.className = `timeline-track-kf-btn ${timeline.cameraKeyframesEnabled ? 'active' : ''}`;
+    camToggleBtn.title = timeline.cameraKeyframesEnabled
+      ? 'Animación de cámara activada (Clic para alternar)'
+      : 'Activar animación por Keyframes en la Cámara';
+    camToggleBtn.innerHTML = `
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="${timeline.cameraKeyframesEnabled ? '#ffd43b' : 'none'}" stroke="currentColor" stroke-width="2">
+        <polygon points="12 2 22 12 12 22 2 12 12 2"/>
+      </svg>
+    `;
+    camToggleBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      timeline.toggleCameraKeyframes();
+    });
+    camHeaderItem.appendChild(camToggleBtn);
+
+    const camKfCount = document.createElement('span');
+    camKfCount.className = 'timeline-track-badge';
+    camKfCount.textContent = `${timeline.cameraKeyframes.size}k`;
+    camHeaderItem.appendChild(camKfCount);
+
+    trackHeadersList.appendChild(camHeaderItem);
 
     for (const track of timeline.tracks) {
       const item = document.createElement('div');
@@ -1099,6 +1231,102 @@ export function mountTimelineView(
       }
 
       gridContent.appendChild(boneLane);
+    }
+
+    // 1c. Master Camera Keyframe Row if enabled
+    if (timeline.cameraKeyframesEnabled) {
+      const camLane = document.createElement('div');
+      camLane.className = 'timeline-keyframe-lane camera-keyframe-lane';
+      camLane.style.width = `${totalW}px`;
+      camLane.style.height = '28px';
+      camLane.style.background = 'rgba(255, 212, 59, 0.05)';
+      camLane.style.borderBottom = '1px solid rgba(255, 212, 59, 0.25)';
+
+      for (let f = minF; f <= totalFrames; f++) {
+        const ccell = document.createElement('div');
+        ccell.className = 'timeline-kf-cell';
+        if (f === 0) ccell.classList.add('frame-zero-cell');
+        else if (f < 0) ccell.classList.add('negative-frame-cell');
+        ccell.title = `Fotograma ${f}: Doble clic para registrar Keyframe de Cámara`;
+        ccell.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          timeline.goToFrame(f);
+        });
+        ccell.addEventListener('dblclick', (ev) => {
+          ev.stopPropagation();
+          timeline.goToFrame(f);
+          timeline.addOrUpdateCameraKeyframe(f, {
+            interpolation: interpSelect.value as InterpolationType,
+          });
+        });
+        camLane.appendChild(ccell);
+      }
+
+      const sortedCamKfs = Array.from(timeline.cameraKeyframes.values()).sort(
+        (a, b) => a.frame - b.frame,
+      );
+      for (let i = 0; i < sortedCamKfs.length - 1; i++) {
+        const k0 = sortedCamKfs[i];
+        const k1 = sortedCamKfs[i + 1];
+        if (k0.interpolation !== 'hold') {
+          const spanBar = document.createElement('div');
+          spanBar.className = `timeline-kf-span-line ${k0.interpolation}`;
+          spanBar.style.left = `${frameToX(k0.frame) + cellWidth / 2}px`;
+          spanBar.style.width = `${(k1.frame - k0.frame) * cellWidth}px`;
+          spanBar.style.background = '#ffd43b';
+          camLane.appendChild(spanBar);
+        }
+      }
+
+      for (const ckf of sortedCamKfs) {
+        if (ckf.frame > totalFrames || ckf.frame < minF) continue;
+        const diamond = document.createElement('div');
+        diamond.className = `timeline-kf-diamond ${ckf.interpolation} ${
+          timeline.settings.currentFrame === ckf.frame ? 'active' : ''
+        }`;
+        diamond.style.left = `${frameToX(ckf.frame) + cellWidth / 2}px`;
+        diamond.style.borderColor = '#ffd43b';
+        diamond.title = `Keyframe de Cámara F${ckf.frame} (${ckf.interpolation}) | Pan:(${Math.round(ckf.x)}, ${Math.round(ckf.y)}) Zoom:${ckf.zoom.toFixed(2)}x Rot:${Math.round(ckf.rotation)}°\nClic para ir al frame, Arrastra para mover, Clic derecho para eliminar`;
+
+        diamond.addEventListener('mousedown', (e: MouseEvent) => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          e.preventDefault();
+          let moved = false;
+          let targetFrame = ckf.frame;
+
+          const onMove = (moveEv: MouseEvent) => {
+            const f = clientXToFrame(moveEv.clientX, false);
+            if (f !== ckf.frame) moved = true;
+            targetFrame = f;
+            diamond.style.left = `${frameToX(f) + cellWidth / 2}px`;
+          };
+
+          const onUp = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            if (moved && targetFrame !== ckf.frame) {
+              timeline.moveCameraKeyframe(ckf.frame, targetFrame);
+              timeline.goToFrame(targetFrame);
+            } else {
+              timeline.goToFrame(ckf.frame);
+            }
+          };
+
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+
+        diamond.addEventListener('contextmenu', (e: MouseEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          timeline.deleteCameraKeyframe(ckf.frame);
+        });
+
+        camLane.appendChild(diamond);
+      }
+
+      gridContent.appendChild(camLane);
     }
 
     // 2. Track Rows (with Clip Container, Resizable Cels, and Keyframe Diamonds Lane)
@@ -1817,17 +2045,24 @@ export function mountTimelineView(
     }
   });
 
-  let wasPlaying = false;
+  let lastStructuralVer = -1;
+  let lastRenderedFrame = -1;
+
   timeline.subscribe(() => {
-    const isPlaying = timeline.settings.isPlaying;
-    if (isPlaying) {
-      wasPlaying = true;
-      syncPlaybackUI();
-    } else {
-      if (wasPlaying) {
-        wasPlaying = false;
-      }
+    const curVer = timeline.structuralVersion;
+
+    // Structural change: Tracks, clips, keyframes, or scenes added/removed/resized
+    if (curVer !== lastStructuralVer) {
+      lastStructuralVer = curVer;
+      lastRenderedFrame = timeline.settings.currentFrame;
       render();
+      return;
+    }
+
+    // Fast-path: Only playhead / active frame changed (Scrubbing / Playback / Navigation)
+    if (timeline.settings.currentFrame !== lastRenderedFrame) {
+      lastRenderedFrame = timeline.settings.currentFrame;
+      syncPlaybackUI();
     }
   });
   render();
@@ -2223,6 +2458,7 @@ function openKeyframeEditorModal(
       <label>Interpolación</label>
       <select id="kf-interp" style="width:130px;">
         <option value="smooth" ${currentVal.interpolation === 'smooth' ? 'selected' : ''}>◆ Suave (Smooth)</option>
+        <option value="bezier" ${currentVal.interpolation === 'bezier' ? 'selected' : ''}>∿ Curva Bézier (F-Curve)</option>
         <option value="linear" ${currentVal.interpolation === 'linear' ? 'selected' : ''}>◇ Lineal (Linear)</option>
         <option value="hold" ${currentVal.interpolation === 'hold' ? 'selected' : ''}>■ Fijo (Hold)</option>
       </select>

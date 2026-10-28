@@ -1,4 +1,5 @@
 import { rustStrokeEngine } from './rustStrokeEngine';
+import type { SparseTileGrid } from '../wasm/oniri-brush-core/oniri_brush_core';
 import {
   ADJUSTMENT_LABELS,
   cloneAdjustment,
@@ -15,6 +16,8 @@ export interface LayerNode {
   name: string;
   canvas?: HTMLCanvasElement;
   context?: CanvasRenderingContext2D;
+  tileGrid?: SparseTileGrid; // Rust Sparse Tile memory grid (zero RAM for transparent areas)
+  isVirtual?: boolean; // Virtualized cel backed by Rust SparseTileGrid (canvas instantiated on demand)
   visible: boolean;
   opacity: number; // 0 to 1
   blendMode: GlobalCompositeOperation;
@@ -58,6 +61,9 @@ export interface LayerManager {
   toggleLayerClipping(id: string): void;
   setLayerBoneBinding(layerId: string, boneId: string | null, meshSkinning?: boolean): void;
   moveToFolder(layerId: string, targetFolderId: string | null): boolean;
+  ensureLayerCanvas(layer: LayerNode): HTMLCanvasElement;
+  syncLayerToTileGrid(layer: LayerNode): void;
+  evictInactiveCelCanvases(keepCount?: number): void;
   getActiveLayer(): LayerNode;
   getActiveDrawableLayer(): LayerNode;
   setActiveLayer(id: string): void;
@@ -545,20 +551,67 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       notify();
       return true;
     },
+    ensureLayerCanvas(layer: LayerNode): HTMLCanvasElement {
+      if (layer.canvas) return layer.canvas;
+      const canvas = makeCanvas(currentDocW, currentDocH);
+      const context = canvas.getContext('2d', { willReadFrequently: true })!;
+      if (layer.tileGrid) {
+        const imgData = context.createImageData(currentDocW, currentDocH);
+        const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
+        layer.tileGrid.render_to_full_buffer(rawRgba);
+        context.putImageData(imgData, 0, 0);
+      }
+      layer.canvas = canvas;
+      layer.context = context;
+      return canvas;
+    },
+    syncLayerToTileGrid(layer: LayerNode): void {
+      if (!layer.canvas || !layer.tileGrid) return;
+      const ctx = layer.context || layer.canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      const imgData = ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height);
+      const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
+      layer.tileGrid.import_from_full_buffer(rawRgba);
+    },
+    evictInactiveCelCanvases(keepCount: number = 4): void {
+      const virtualWithCanvases = layers.filter(
+        (l) => l.isVirtual && l.canvas && l.tileGrid && l.id !== activeId
+      );
+      if (virtualWithCanvases.length <= keepCount) return;
+      const toEvict = virtualWithCanvases.slice(0, virtualWithCanvases.length - keepCount);
+      for (const layer of toEvict) {
+        manager.syncLayerToTileGrid(layer);
+        if (layer.canvas) {
+          layer.canvas.width = 0;
+          layer.canvas.height = 0;
+        }
+        layer.canvas = undefined;
+        layer.context = undefined;
+      }
+    },
     getActiveLayer(): LayerNode {
       return layers.find((l) => l.id === activeId) ?? layers[layers.length - 1];
     },
     getActiveDrawableLayer(): LayerNode {
       const active = layers.find((l) => l.id === activeId);
-      if (active && active.type === 'raster' && active.context && !active.locked) {
+      if (active && active.type === 'raster' && !active.locked) {
+        if (!active.canvas) {
+          manager.ensureLayerCanvas(active);
+        }
         return active;
       }
       if (active && active.type === 'folder') {
-        const child = layers.find((l) => l.parentId === active.id && l.type === 'raster' && l.context && !l.locked);
-        if (child) return child;
+        const child = layers.find((l) => l.parentId === active.id && l.type === 'raster' && !l.locked);
+        if (child) {
+          if (!child.canvas) manager.ensureLayerCanvas(child);
+          return child;
+        }
       }
-      const topRaster = [...layers].reverse().find((l) => l.type === 'raster' && l.context && !l.isPaper && !l.locked);
-      if (topRaster) return topRaster;
+      const topRaster = [...layers].reverse().find((l) => l.type === 'raster' && !l.isPaper && !l.locked);
+      if (topRaster) {
+        if (!topRaster.canvas) manager.ensureLayerCanvas(topRaster);
+        return topRaster;
+      }
       return manager.createLayer();
     },
     setActiveLayer(id: string) {

@@ -305,22 +305,22 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     return { x: hits[0].uv.x * currentDocW, y: (1 - hits[0].uv.y) * currentDocH };
   };
 
-  const emitTo = (x: number, y: number, pressure: number): void => {
+  const emitTo = (x: number, y: number, pressure: number, deferOverlay = false): void => {
     const rState = rulerManager.getState();
     if (rState.type === 'symmetry') {
       const symPts = rulerManager.getSymmetricPoints(x, y);
       for (const pt of symPts) {
         if (activeStroke === 'eraser') {
-          engine.continueErase(pt.x, pt.y, pressure);
+          engine.continueErase(pt.x, pt.y, pressure, deferOverlay);
         } else if (activeStroke === 'brush') {
-          engine.continueStroke(pt.x, pt.y, pressure);
+          engine.continueStroke(pt.x, pt.y, pressure, deferOverlay);
         }
       }
     } else {
       if (activeStroke === 'eraser') {
-        engine.continueErase(x, y, pressure);
+        engine.continueErase(x, y, pressure, deferOverlay);
       } else if (activeStroke === 'brush') {
-        engine.continueStroke(x, y, pressure);
+        engine.continueStroke(x, y, pressure, deferOverlay);
       }
     }
   };
@@ -343,8 +343,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     engine.setStrokeTilt(tiltFootprint(event.tiltX ?? 0, event.tiltY ?? 0, tablet.tiltAmount));
   };
 
-  const enqueuePoint = (x: number, y: number, p: number): void => {
-    emitTo(x, y, p);
+  const enqueuePoint = (x: number, y: number, p: number, deferOverlay = false): void => {
+    emitTo(x, y, p, deferOverlay);
   };
 
   /**
@@ -353,7 +353,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
    * Each new point continues exactly where the previous one ended, so there
    * are no polygonal corners when the pointer moves fast.
    */
-  const pushSmoothed = (x: number, y: number, p: number): void => {
+  const pushSmoothed = (x: number, y: number, p: number, deferOverlay = false): void => {
     const pt: SmoothPoint = { x, y, p };
     if (smoothHist.length === 0) {
       smoothHist.push(pt);
@@ -379,14 +379,14 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       const qx = mt * mt * m1x + 2 * mt * t * p1.x + t * t * m2x;
       const qy = mt * mt * m1y + 2 * mt * t * p1.y + t * t * m2y;
       const qp = m1p + (m2p - m1p) * t;
-      enqueuePoint(qx, qy, qp);
+      enqueuePoint(qx, qy, qp, deferOverlay);
     }
 
     smoothHist.push(pt);
     if (smoothHist.length > 3) smoothHist.shift();
   };
 
-  const handleStrokePoint = (doc: { x: number; y: number }, pressure: number): void => {
+  const handleStrokePoint = (doc: { x: number; y: number }, pressure: number, deferOverlay = false): void => {
     const rState = rulerManager.getState();
     if (rState.type !== 'none' && rState.type !== 'symmetry' && rState.snapEnabled) {
       const snapped = rulerManager.snapPoint(strokeStartDocX, strokeStartDocY, doc.x, doc.y);
@@ -419,7 +419,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
         const pts = rustRes.points;
         for (let i = 0; i < rustRes.count; i++) {
           const off = i * 3;
-          enqueuePoint(pts[off], pts[off + 1], pts[off + 2]);
+          enqueuePoint(pts[off], pts[off + 1], pts[off + 2], deferOverlay);
         }
         const lastIdx = (rustRes.count - 1) * 3;
         smoothedX = pts[lastIdx];
@@ -454,7 +454,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       smoothedY += (doc.y - smoothedY) * alpha;
     }
 
-    pushSmoothed(smoothedX, smoothedY, pressure);
+    pushSmoothed(smoothedX, smoothedY, pressure, deferOverlay);
   };
 
   const finish = (pointerId?: number, endEvent?: PointerEvent): void => {
@@ -1439,7 +1439,7 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       applyTiltFrom(sample);
       const doc = pointerToDoc(sample);
       if (!doc) continue;
-      handleStrokePoint(doc, pressureOf(sample));
+      handleStrokePoint(doc, pressureOf(sample), true);
     }
 
     // Zero-latency curved prediction (W3C getPredictedEvents + tangent-aligned Bézier):
@@ -1484,38 +1484,51 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       const dist = Math.hypot(dx, dy);
 
       if (dist > 1.5 && dist < 120) {
-        let tanX = velX;
-        let tanY = velY;
-        const tanLen = Math.hypot(tanX, tanY);
-        if (tanLen > 0.01) {
-          tanX /= tanLen;
-          tanY /= tanLen;
+        if (engine.renderPredictedBezier) {
+          engine.renderPredictedBezier(
+            startPredX,
+            startPredY,
+            startPredP,
+            targetX,
+            targetY,
+            targetP,
+            velX,
+            velY,
+          );
         } else {
-          tanX = dx / dist;
-          tanY = dy / dist;
+          let tanX = velX;
+          let tanY = velY;
+          const tanLen = Math.hypot(tanX, tanY);
+          if (tanLen > 0.01) {
+            tanX /= tanLen;
+            tanY /= tanLen;
+          } else {
+            tanX = dx / dist;
+            tanY = dy / dist;
+          }
+
+          // Control point extending along tangent to guarantee C1 tangent continuity from the smoothed stroke
+          const lead = Math.min(dist * 0.5, 30);
+          const ctrlX = startPredX + tanX * lead;
+          const ctrlY = startPredY + tanY * lead;
+
+          // Subdivide quadratic Bézier into smooth arc points (max 3 points to eliminate latency without overhead)
+          const steps = dist > 30 ? 3 : 2;
+          for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const mt = 1 - t;
+            const bx = mt * mt * startPredX + 2 * mt * t * ctrlX + t * t * targetX;
+            const by = mt * mt * startPredY + 2 * mt * t * ctrlY + t * t * targetY;
+            const bp = startPredP + (targetP - startPredP) * t;
+            predictedPoints.push({ x: bx, y: by, pressure: bp });
+          }
+          if (predictedPoints.length > 0) {
+            engine.renderPredictedStroke(predictedPoints);
+          }
         }
-
-        // Control point extending along tangent to guarantee C1 tangent continuity from the smoothed stroke
-        const lead = Math.min(dist * 0.5, 30);
-        const ctrlX = startPredX + tanX * lead;
-        const ctrlY = startPredY + tanY * lead;
-
-        // Subdivide quadratic Bézier into smooth arc points (max 3 points to eliminate latency without overhead)
-        const steps = dist > 30 ? 3 : 2;
-        for (let i = 1; i <= steps; i++) {
-          const t = i / steps;
-          const mt = 1 - t;
-          const bx = mt * mt * startPredX + 2 * mt * t * ctrlX + t * t * targetX;
-          const by = mt * mt * startPredY + 2 * mt * t * ctrlY + t * t * targetY;
-          const bp = startPredP + (targetP - startPredP) * t;
-          predictedPoints.push({ x: bx, y: by, pressure: bp });
-        }
-      }
-
-      if (predictedPoints.length > 0) {
-        engine.renderPredictedStroke(predictedPoints);
       } else {
         engine.clearPredictedStroke();
+        engine.flushLiveOverlay();
       }
     }
     brushDiagnostics.recordPointerMove(samples.length, performance.now() - tMove0);

@@ -6,6 +6,8 @@ import type { LayerNode } from '../brush/layers';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { rustStrokeEngine } from '../brush/rustStrokeEngine';
+import type { SparseTileGrid } from '../wasm/oniri-brush-core/oniri_brush_core';
+import { clipDiagnostics } from './clipDiagnostics';
 
 export interface CelDescriptor {
   mainId: number;
@@ -215,6 +217,16 @@ function parseBlockSizes(attrBuf: Uint8Array): number[] {
   return sizes;
 }
 
+let sharedDecodeBuffer: Uint8Array | null = null;
+function getSharedDecodeBuffer(len: number): Uint8Array {
+  if (!sharedDecodeBuffer || sharedDecodeBuffer.length < len) {
+    sharedDecodeBuffer = new Uint8Array(len);
+  } else {
+    sharedDecodeBuffer.fill(0, 0, len);
+  }
+  return sharedDecodeBuffer;
+}
+
 /**
  * Decompresses tile raster data from CHNKExta and paints it onto the cel's canvas.
  */
@@ -223,8 +235,12 @@ export function decodeCelToCanvas(
   desc: CelDescriptor,
   clipBuffer: Uint8Array
 ): boolean {
-  if (!layer.canvas || (layer as any)._hasDecodedPixels) return true;
+  if ((layer as any)._hasDecodedPixels) return true;
   if (desc.offset + desc.length > clipBuffer.length) return false;
+  const tDecode0 = performance.now();
+  let rustHits = 0;
+  let jsHits = 0;
+  let emptyTiles = 0;
 
   const chunkData = clipBuffer.subarray(desc.offset, desc.offset + desc.length);
   let curr = 130; // Standard tile payload start
@@ -235,13 +251,25 @@ export function decodeCelToCanvas(
   const originX = desc.originX ?? 0;
   const originY = desc.originY ?? 0;
 
-  // Fast path: direct buffer creation on layer context, avoiding intermediate DOM canvases
-  const isDirect = layer.canvas.width === desc.docW && layer.canvas.height === desc.docH;
-  const ctx = layer.context || layer.canvas.getContext('2d', { willReadFrequently: true })!;
-  if (!ctx) return false;
+  const requiredBytes = desc.docW * desc.docH * 4;
+  let rawRgba: Uint8Array;
+  let imgData: ImageData | null = null;
+  let ctx: CanvasRenderingContext2D | null = null;
+  let isDirect = false;
 
-  const imgData = ctx.createImageData(desc.docW, desc.docH);
-  const rgba = imgData.data;
+  if (layer.canvas) {
+    ctx = layer.context || layer.canvas.getContext('2d', { willReadFrequently: true });
+    if (ctx) {
+      imgData = ctx.createImageData(desc.docW, desc.docH);
+      rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
+      isDirect = layer.canvas.width === desc.docW && layer.canvas.height === desc.docH;
+    } else {
+      rawRgba = getSharedDecodeBuffer(requiredBytes);
+    }
+  } else {
+    rawRgba = getSharedDecodeBuffer(requiredBytes);
+  }
+
   let tilesDrawn = 0;
 
   for (let i = 0; i < Math.min(cols * rows, desc.sizes.length); i++) {
@@ -249,36 +277,42 @@ export function decodeCelToCanvas(
     if (curr + sz > chunkData.length) break;
 
     // Tokens of size <= 104 represent empty transparent tiles
-    if (sz > 104) {
+    if (sz <= 104) {
+      emptyTiles++;
+    } else {
       const tileCompressed = chunkData.subarray(curr, curr + sz);
-      try {
-        const decomp = fflate.unzlibSync(tileCompressed);
-        if (decomp.length === 327680) { // 256 * 256 * 5 channels
-          tilesDrawn++;
-          const col = i % cols;
-          const row = Math.floor(i / cols);
-          const startX = originX + col * tileW;
-          const startY = originY + row * tileH;
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const startX = originX + col * tileW;
+      const startY = originY + row * tileH;
+      const isMonochrome = desc.colorType === 0 || desc.colorType === 1 || desc.colorType === undefined;
 
-          const c0 = decomp.subarray(0, 65536);       // Alpha / Density
-          const c1 = decomp.subarray(65536, 131072);  // Red or Black mask
-          const c2 = decomp.subarray(131072, 196608); // Green or White mask
-          const c3 = decomp.subarray(196608, 262144); // Blue
+      // Fast-path: Native Rust miniz_oxide decompression + SIMD planar unroll in a single call
+      const rustOk = rustStrokeEngine.decompressAndBlitTile(
+        rawRgba,
+        desc.docW,
+        desc.docH,
+        tileCompressed,
+        startX,
+        startY,
+        isMonochrome
+      );
 
-          const isMonochrome = desc.colorType === 0 || desc.colorType === 1 || desc.colorType === undefined;
+      if (rustOk) {
+        tilesDrawn++;
+        rustHits++;
+      } else {
+        // Fallback: JS fflate unzlib + manual unpack
+        try {
+          const decomp = fflate.unzlibSync(tileCompressed);
+          if (decomp.length === 327680) { // 256 * 256 * 5 channels
+            tilesDrawn++;
+            jsHits++;
+            const c0 = decomp.subarray(0, 65536);       // Alpha / Density
+            const c1 = decomp.subarray(65536, 131072);  // Red or Black mask
+            const c2 = decomp.subarray(131072, 196608); // Green or White mask
+            const c3 = decomp.subarray(196608, 262144); // Blue
 
-          const rawRgba = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
-          const rustOk = rustStrokeEngine.blitPlanarTile(
-            rawRgba,
-            desc.docW,
-            desc.docH,
-            decomp,
-            startX,
-            startY,
-            isMonochrome
-          );
-
-          if (!rustOk) {
             for (let ty = 0; ty < tileH; ty++) {
               const py = startY + ty;
               if (py < 0 || py >= desc.docH) continue;
@@ -294,42 +328,53 @@ export function decodeCelToCanvas(
 
                 const pidx = (rowOffset + px) * 4;
                 if (isMonochrome) {
-                  rgba[pidx] = 0;
-                  rgba[pidx + 1] = 0;
-                  rgba[pidx + 2] = 0;
+                  rawRgba[pidx] = 0;
+                  rawRgba[pidx + 1] = 0;
+                  rawRgba[pidx + 2] = 0;
                 } else {
-                  rgba[pidx] = c1[tidx];     // R
-                  rgba[pidx + 1] = c2[tidx]; // G
-                  rgba[pidx + 2] = c3[tidx]; // B
+                  rawRgba[pidx] = c1[tidx];
+                  rawRgba[pidx + 1] = c2[tidx];
+                  rawRgba[pidx + 2] = c3[tidx];
                 }
-                rgba[pidx + 3] = a;        // A
+                rawRgba[pidx + 3] = a;
               }
             }
           }
+        } catch {
+          // Ignore invalid tile
         }
-      } catch {
-        // Continue to next tile
       }
     }
     curr += sz;
   }
 
   if (tilesDrawn > 0) {
-    ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
-    if (isDirect) {
-      ctx.putImageData(imgData, 0, 0);
-    } else {
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = desc.docW;
-      tempCanvas.height = desc.docH;
-      const tempCtx = tempCanvas.getContext('2d')!;
-      tempCtx.putImageData(imgData, 0, 0);
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(tempCanvas, 0, 0, layer.canvas.width, layer.canvas.height);
+    // Store in Rust Sparse Tile Grid for near-zero RAM footprint
+    if (rustStrokeEngine.available && !layer.tileGrid) {
+      layer.tileGrid = rustStrokeEngine.createSparseTileGrid(desc.docW, desc.docH) || undefined;
+    }
+    if (layer.tileGrid) {
+      layer.tileGrid.import_from_full_buffer(rawRgba);
+    }
+
+    if (layer.canvas && ctx && imgData) {
+      ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
+      if (isDirect) {
+        ctx.putImageData(imgData, 0, 0);
+      } else {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = desc.docW;
+        tempCanvas.height = desc.docH;
+        const tempCtx = tempCanvas.getContext('2d')!;
+        tempCtx.putImageData(imgData, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(tempCanvas, 0, 0, layer.canvas.width, layer.canvas.height);
+      }
     }
   }
 
   (layer as any)._hasDecodedPixels = true;
+  clipDiagnostics.recordCelDecode(rustHits >= jsHits, tilesDrawn, emptyTiles, performance.now() - tDecode0);
   return true;
 }
 
@@ -450,7 +495,11 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
   };
 
   try {
+    const tSqliteExtract0 = performance.now();
     const sqliteBuffer = extractSqliteFromClipBuffer(clipBuffer);
+    clipDiagnostics.recordSqliteExtract(performance.now() - tSqliteExtract0);
+
+    const tSqliteQuery0 = performance.now();
     const SQL = await getSqlJs();
     const db: Database = new SQL.Database(sqliteBuffer);
 
@@ -613,6 +662,8 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
     }
 
     db.close();
+    clipDiagnostics.recordSqliteQuery(performance.now() - tSqliteQuery0);
+    clipDiagnostics.recordDimensions(meta.width, meta.height);
   } catch (err) {
     console.warn('Clip metadata query encountered error, falling back to basic preview:', err);
   }
@@ -708,6 +759,8 @@ export async function importClipProject(
     throw new Error('El archivo seleccionado no es un archivo .clip válido.');
   }
 
+  clipDiagnostics.startImport(title, clipBuffer.length);
+
   lastImportedClipBuffer = clipBuffer;
   lastImportedClipTitle = title;
 
@@ -738,6 +791,11 @@ export async function importClipProject(
     layerMap.set(l.mainId, l);
   }
 
+  const tHierarchy0 = performance.now();
+  let htmlCanvases = 0;
+  let foldersCount = 0;
+  let celsCount = 0;
+
   // 1. Paper Layer (Bottom background)
   const paperCanvas = document.createElement('canvas');
   paperCanvas.width = meta.width;
@@ -745,6 +803,8 @@ export async function importClipProject(
   const paperCtx = paperCanvas.getContext('2d', { willReadFrequently: true })!;
   paperCtx.fillStyle = '#ffffff';
   paperCtx.fillRect(0, 0, meta.width, meta.height);
+  htmlCanvases++;
+  celsCount++;
 
   layers.push({
     id: 'layer-paper',
@@ -813,7 +873,7 @@ export async function importClipProject(
   // 3. Reconstruct Layer Hierarchy
   const animFolders: { node: LayerNode; info: ClipLayerInfo; trackId: string }[] = [];
 
-  function buildSubtree(startId: number, parentId: string | null) {
+  function buildSubtree(startId: number, parentId: string | null, isInsideAnimFolder = false) {
     let curr = startId;
     while (curr !== 0 && layerMap.has(curr)) {
       const info = layerMap.get(curr)!;
@@ -823,16 +883,29 @@ export async function importClipProject(
       }
 
       const isFolder = info.isFolder || info.isAnimationFolder;
+      const isAnimCel = !isFolder && isInsideAnimFolder;
       const nodeId = `layer-clip-${info.mainId}`;
 
       let canvas: HTMLCanvasElement | undefined = undefined;
       let context: CanvasRenderingContext2D | undefined = undefined;
+      let tileGrid: SparseTileGrid | undefined = undefined;
 
       if (!isFolder) {
-        canvas = document.createElement('canvas');
-        canvas.width = meta.width;
-        canvas.height = meta.height;
-        context = canvas.getContext('2d', { willReadFrequently: true })!;
+        celsCount++;
+        if (isAnimCel) {
+          // Virtualized Cel: zero canvas overhead. Backed by Rust SparseTileGrid (~28 KB vs 12 MB)
+          if (rustStrokeEngine.available) {
+            tileGrid = rustStrokeEngine.createSparseTileGrid(meta.width, meta.height) || undefined;
+          }
+        } else {
+          canvas = document.createElement('canvas');
+          canvas.width = meta.width;
+          canvas.height = meta.height;
+          context = canvas.getContext('2d')!;
+          htmlCanvases++;
+        }
+      } else {
+        foldersCount++;
       }
 
       const node: LayerNode = {
@@ -841,6 +914,8 @@ export async function importClipProject(
         name: info.name,
         canvas,
         context,
+        tileGrid,
+        isVirtual: isAnimCel,
         visible: info.visibility,
         opacity: info.opacity,
         blendMode: info.blendMode,
@@ -860,7 +935,7 @@ export async function importClipProject(
       }
 
       if (info.firstChild !== 0) {
-        buildSubtree(info.firstChild, nodeId);
+        buildSubtree(info.firstChild, nodeId, isInsideAnimFolder || !!info.isAnimationFolder);
       }
 
       curr = info.nextIdx;
@@ -869,13 +944,24 @@ export async function importClipProject(
 
   const rootInfo = layerMap.get(meta.rootFolderId);
   if (rootInfo && rootInfo.firstChild !== 0) {
-    buildSubtree(rootInfo.firstChild, null);
+    buildSubtree(rootInfo.firstChild, null, false);
   }
 
+  clipDiagnostics.recordHierarchy(
+    performance.now() - tHierarchy0,
+    layers.length,
+    foldersCount,
+    celsCount,
+    htmlCanvases
+  );
+
   // Load layers into engine
+  const tDom0 = performance.now();
   engine.layerManager.loadLayers(layers);
+  clipDiagnostics.recordDomMount(performance.now() - tDom0);
 
   // 4. Configure Timeline & Animation Tracks
+  const tTimeline0 = performance.now();
   try {
     const sFrame = meta.startFrame !== undefined ? meta.startFrame : 1;
     timeline.setFps(meta.fps || 24);
@@ -925,12 +1011,19 @@ export async function importClipProject(
   } catch (tlErr) {
     console.warn('Error setting up timeline tracks from .clip file:', tlErr);
   }
+  clipDiagnostics.recordTimelineSetup(
+    performance.now() - tTimeline0,
+    animFolders.length,
+    meta.totalFrames || 24,
+    meta.fps || 24
+  );
 
   // 5. Decode Initial Frame Cels Immediately for High Fidelity Display
   const initFrame = meta.currentFrame || 1;
   for (const track of timeline.tracks) {
     const activeCel = timeline.getActiveCelForFrame(track.id, initFrame);
     if (activeCel) {
+      engine.layerManager.ensureLayerCanvas(activeCel);
       const matchId = Number(activeCel.id.replace('layer-clip-', ''));
       const desc = meta.celDescriptors.get(matchId);
       if (desc) {
@@ -944,6 +1037,7 @@ export async function importClipProject(
     for (const track of timeline.tracks) {
       const cel1 = timeline.getActiveCelForFrame(track.id, 1);
       if (cel1) {
+        engine.layerManager.ensureLayerCanvas(cel1);
         const matchId = Number(cel1.id.replace('layer-clip-', ''));
         const desc = meta.celDescriptors.get(matchId);
         if (desc) {
@@ -959,12 +1053,14 @@ export async function importClipProject(
     let needsUpdate = false;
     for (const track of timeline.tracks) {
       const activeCel = timeline.getActiveCelForFrame(track.id, curFrame);
-      if (activeCel && !(activeCel as any)._hasDecodedPixels) {
-        const matchId = Number(activeCel.id.replace('layer-clip-', ''));
-        const desc = meta.celDescriptors.get(matchId);
-        if (desc) {
-          decodeCelToCanvas(activeCel, desc, clipBuffer);
-          needsUpdate = true;
+      if (activeCel) {
+        if (!(activeCel as any)._hasDecodedPixels) {
+          const matchId = Number(activeCel.id.replace('layer-clip-', ''));
+          const desc = meta.celDescriptors.get(matchId);
+          if (desc) {
+            decodeCelToCanvas(activeCel, desc, clipBuffer);
+            needsUpdate = true;
+          }
         }
       }
     }
@@ -977,8 +1073,12 @@ export async function importClipProject(
   // 7. Background Progressive Decoder for remaining cels (non-blocking idle queue)
   startProgressiveCelDecoder(engine, timeline, clipBuffer, meta.celDescriptors, layers);
 
+  const tComp0 = performance.now();
   engine.compositeDirty = true;
   engine.updateComposite();
+  clipDiagnostics.recordFirstComposite(performance.now() - tComp0);
+
+  clipDiagnostics.endImport();
 
   return {
     title,

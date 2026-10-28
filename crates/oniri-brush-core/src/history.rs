@@ -10,7 +10,7 @@ const QOI_MASK_2: u8 = 0xc0;
 
 #[inline(always)]
 fn color_hash(r: u8, g: u8, b: u8, a: u8) -> usize {
-    ((r as usize * 3 + g as usize * 5 + b as usize * 7 + a as usize * 11) % 64)
+    (r as usize * 3 + g as usize * 5 + b as usize * 7 + a as usize * 11) % 64
 }
 
 /// Motor nativo de compresión y descompresión ultrarrápida QOI para el historial de Deshacer/Rehacer
@@ -194,5 +194,74 @@ impl HistoryCompressorCore {
 
     pub fn get_buffer_len(&self) -> usize {
         self.buffer.len()
+    }
+
+    /// Recorta un rectángulo `[crop_x, crop_y, crop_w, crop_h]` de una imagen completa RGBA
+    /// de tamaño `doc_w x doc_h` en un único buffer de destino plano.
+    /// Evita miles de llamadas `subarray()` y recolección de basura en JavaScript.
+    pub fn crop_rgba_rect(
+        src_rgba: &[u8],
+        doc_w: u32,
+        doc_h: u32,
+        crop_x: u32,
+        crop_y: u32,
+        crop_w: u32,
+        crop_h: u32,
+        out_rgba: &mut [u8],
+    ) -> bool {
+        let dw = doc_w as usize;
+        let dh = doc_h as usize;
+        let cx = crop_x as usize;
+        let cy = crop_y as usize;
+        let cw = crop_w as usize;
+        let ch = crop_h as usize;
+
+        if dw == 0 || dh == 0 || cw == 0 || ch == 0 {
+            return false;
+        }
+        if cx + cw > dw || cy + ch > dh {
+            return false;
+        }
+        let expected_out_len = cw * ch * 4;
+        if src_rgba.len() < dw * dh * 4 || out_rgba.len() < expected_out_len {
+            return false;
+        }
+
+        let row_bytes = cw * 4;
+        for y in 0..ch {
+            let src_start = ((cy + y) * dw + cx) * 4;
+            let src_end = src_start + row_bytes;
+            let dst_start = y * row_bytes;
+            let dst_end = dst_start + row_bytes;
+
+            out_rgba[dst_start..dst_end].copy_from_slice(&src_rgba[src_start..src_end]);
+        }
+
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crop_rgba_rect() {
+        // 4x4 RGBA image
+        let mut src = vec![0u8; 4 * 4 * 4];
+        // Set pixel at (1, 1) to Red
+        let p_idx = (1 * 4 + 1) * 4;
+        src[p_idx] = 255;
+        src[p_idx + 3] = 255;
+
+        // Crop 2x2 from (1, 1)
+        let mut out = vec![0u8; 2 * 2 * 4];
+        let ok = HistoryCompressorCore::crop_rgba_rect(&src, 4, 4, 1, 1, 2, 2, &mut out);
+        assert!(ok);
+        // First pixel of cropped image should be the red pixel
+        assert_eq!(out[0], 255);
+        assert_eq!(out[1], 0);
+        assert_eq!(out[2], 0);
+        assert_eq!(out[3], 255);
     }
 }

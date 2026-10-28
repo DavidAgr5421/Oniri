@@ -4,12 +4,17 @@ import initWasm, {
   BrushDynamicsConfig,
   ClipTileCore,
   ColorBlendCore,
+  ColorSamplerCore,
+  FastLayerCompositor,
   FilterCore,
   FloodFillCore,
+  FrameCacheCore,
+  HistoryCompressorCore,
   GifEncoderCore,
   ResampleMode,
   SelectionCore,
   SmartFillCore,
+  SparseTileGrid,
   StrokeEngineCore,
   StrokeStabilizerCore,
   TransformResampleCore,
@@ -17,10 +22,10 @@ import initWasm, {
 } from '../wasm/oniri-brush-core/oniri_brush_core';
 import type { BrushSettings, TipTextureId } from '../tools/toolState';
 
-export const DAB_STRIDE = 7;
+export const DAB_STRIDE = 11;
 
 export interface RustDabsBatch {
-  /** Stride 7: [x, y, diameter, pressure, alpha, angleRad, tipIndex] */
+  /** Stride 11: [x, y, diameter, pressure, alpha, angleRad, tipIndex, r, g, b, flags] */
   dabs: Float32Array;
   count: number;
   dirtyRect: [number, number, number, number];
@@ -132,6 +137,7 @@ class RustStrokeEngineWrapper {
   private boneCore: BoneSkinCore | null = null;
   private gifCore: GifEncoderCore | null = null;
   private stabilizerCore: StrokeStabilizerCore | null = null;
+  private frameCache: FrameCacheCore | null = null;
   private wasmMemory: WebAssembly.Memory | null = null;
   private isReady = false;
   private initPromise: Promise<boolean> | null = null;
@@ -184,6 +190,7 @@ class RustStrokeEngineWrapper {
         this.boneCore = new BoneSkinCore();
         this.gifCore = new GifEncoderCore();
         this.stabilizerCore = new StrokeStabilizerCore();
+        this.frameCache = new FrameCacheCore(64);
         this.isReady = true;
         console.log('[Oniri] Rust Stroke Engine Core initialized and active (Wasm + Zero-Copy).');
         return true;
@@ -239,6 +246,43 @@ class RustStrokeEngineWrapper {
     return this.readBatch(count);
   }
 
+  predictStrokeBatch(pointsFlat: Float32Array): RustDabsBatch | null {
+    if (!this.available || !this.core) return null;
+    const coreAny = this.core as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof coreAny.predict_stroke_batch !== 'function') return null;
+    try {
+      const count = Number(coreAny.predict_stroke_batch(pointsFlat));
+      return this.readBatch(count);
+    } catch (e) {
+      console.warn('WASM predictStrokeBatch fallback:', e);
+      return null;
+    }
+  }
+
+  predictBezierStroke(
+    startX: number,
+    startY: number,
+    startP: number,
+    targetX: number,
+    targetY: number,
+    targetP: number,
+    velX: number,
+    velY: number,
+  ): RustDabsBatch | null {
+    if (!this.available || !this.core) return null;
+    const coreAny = this.core as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof coreAny.predict_bezier_stroke !== 'function') return null;
+    try {
+      const count = Number(
+        coreAny.predict_bezier_stroke(startX, startY, startP, targetX, targetY, targetP, velX, velY),
+      );
+      return this.readBatch(count);
+    } catch (e) {
+      console.warn('WASM predictBezierStroke fallback:', e);
+      return null;
+    }
+  }
+
   saveCheckpoint(): void {
     if (this.core) {
       this.core.save_checkpoint();
@@ -286,6 +330,107 @@ class RustStrokeEngineWrapper {
     if (this.core) {
       this.core.end_stroke();
     }
+  }
+
+  setSelectionMask(
+    maskRgba: Uint8Array | Uint8ClampedArray,
+    width: number,
+    height: number,
+    boundsMinX: number,
+    boundsMinY: number,
+    boundsMaxX: number,
+    boundsMaxY: number,
+    isRgba = true,
+  ): void {
+    if (!this.available || !this.core) return;
+    const coreAny = this.core as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof coreAny.set_selection_mask !== 'function') return;
+    try {
+      const u8 = new Uint8Array(maskRgba.buffer, maskRgba.byteOffset, maskRgba.byteLength);
+      coreAny.set_selection_mask(
+        u8,
+        width,
+        height,
+        boundsMinX,
+        boundsMinY,
+        boundsMaxX,
+        boundsMaxY,
+        isRgba,
+      );
+    } catch (e) {
+      console.warn('WASM setSelectionMask fallback:', e);
+    }
+  }
+
+  clearSelectionMask(): void {
+    if (!this.available || !this.core) return;
+    const coreAny = this.core as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof coreAny.clear_selection_mask === 'function') {
+      try {
+        coreAny.clear_selection_mask();
+      } catch (e) {
+        console.warn('WASM clearSelectionMask fallback:', e);
+      }
+    }
+  }
+
+  setStrokeColor(
+    primaryR: number,
+    primaryG: number,
+    primaryB: number,
+    secondaryR: number,
+    secondaryG: number,
+    secondaryB: number,
+    hasSubColorMix: boolean,
+    colorMix: number,
+    colorMixAlpha: number,
+    smudge: number,
+    isErase: boolean,
+  ): void {
+    if (!this.available || !this.core) return;
+    this.core.set_stroke_color(
+      primaryR,
+      primaryG,
+      primaryB,
+      secondaryR,
+      secondaryG,
+      secondaryB,
+      hasSubColorMix,
+      colorMix,
+      colorMixAlpha,
+      smudge,
+      isErase,
+    );
+  }
+
+  setCanvasSnapshot(
+    snapshotData: Uint8Array | Uint8ClampedArray,
+    width: number,
+    height: number,
+  ): void {
+    if (!this.available || !this.core) return;
+    const bytes = snapshotData instanceof Uint8Array
+      ? snapshotData
+      : new Uint8Array(snapshotData.buffer, snapshotData.byteOffset, snapshotData.byteLength);
+    this.core.set_canvas_snapshot(bytes, width, height);
+  }
+
+  clearCanvasSnapshot(): void {
+    if (!this.available || !this.core) return;
+    this.core.clear_canvas_snapshot();
+  }
+
+  hasSelectionMask(): boolean {
+    if (!this.available || !this.core) return false;
+    const coreAny = this.core as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof coreAny.has_selection === 'function') {
+      try {
+        return !!coreAny.has_selection();
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   private readFillMaskResult(totalPixels: number, filledCount: number): RustFillMaskResult | null {
@@ -691,6 +836,82 @@ class RustStrokeEngineWrapper {
     }
   }
 
+  decompressAndBlitTile(
+    destRgba: Uint8Array,
+    docW: number,
+    docH: number,
+    compressedData: Uint8Array,
+    startX: number,
+    startY: number,
+    isMonochrome: boolean,
+  ): boolean {
+    if (!this.available) return false;
+    try {
+      return ClipTileCore.decompress_and_blit_tile(
+        destRgba,
+        docW,
+        docH,
+        compressedData,
+        startX,
+        startY,
+        isMonochrome,
+      );
+    } catch (e) {
+      console.warn('WASM ClipTileCore.decompress_and_blit_tile fallback:', e);
+      return false;
+    }
+  }
+
+  cropRgbaRect(
+    srcRgba: Uint8Array | Uint8ClampedArray,
+    docW: number,
+    docH: number,
+    cropX: number,
+    cropY: number,
+    cropW: number,
+    cropH: number,
+    outRgba: Uint8Array | Uint8ClampedArray,
+  ): boolean {
+    if (!this.available) return false;
+    try {
+      const src = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const out = new Uint8Array(outRgba.buffer, outRgba.byteOffset, outRgba.byteLength);
+      return HistoryCompressorCore.crop_rgba_rect(
+        src,
+        docW,
+        docH,
+        cropX,
+        cropY,
+        cropW,
+        cropH,
+        out,
+      );
+    } catch (e) {
+      console.warn('WASM HistoryCompressorCore.crop_rgba_rect fallback:', e);
+      return false;
+    }
+  }
+
+  sampleRgba(
+    buffer: Uint8Array,
+    width: number,
+    height: number,
+    x: number,
+    y: number,
+  ): [number, number, number, number] | null {
+    if (!this.available) return null;
+    try {
+      const res = ColorSamplerCore.sample_rgba(buffer, width, height, x, y);
+      if (res && res.length === 4) {
+        return [res[0], res[1], res[2], res[3]];
+      }
+      return null;
+    } catch (e) {
+      console.warn('WASM ColorSamplerCore.sample_rgba fallback:', e);
+      return null;
+    }
+  }
+
   blendDualColor(
     r1: number, g1: number, b1: number,
     r2: number, g2: number, b2: number,
@@ -749,14 +970,15 @@ class RustStrokeEngineWrapper {
   }
 
   applyTintInPlace(
-    rgbaBuffer: Uint8Array,
+    rgbaBuffer: Uint8Array | Uint8ClampedArray,
     tintR: number,
     tintG: number,
     tintB: number,
   ): boolean {
     if (!this.available) return false;
     try {
-      ColorBlendCore.apply_tint_in_place(rgbaBuffer, tintR, tintG, tintB);
+      const bytes = new Uint8Array(rgbaBuffer.buffer, rgbaBuffer.byteOffset, rgbaBuffer.byteLength);
+      ColorBlendCore.apply_tint_in_place(bytes, tintR, tintG, tintB);
       return true;
     } catch (e) {
       console.warn('WASM ColorBlendCore.apply_tint_in_place fallback:', e);
@@ -790,6 +1012,49 @@ class RustStrokeEngineWrapper {
     }
   }
 
+  mergeStrokeRect(
+    dstRgba: Uint8Array | Uint8ClampedArray,
+    srcRgba: Uint8Array | Uint8ClampedArray,
+    strideWidth: number,
+    strideHeight: number,
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    blendMode: string,
+    opacity = 1.0,
+    lockAlpha = false,
+    clipMask?: Uint8Array | Uint8ClampedArray,
+  ): boolean {
+    if (!this.available) return false;
+    const blendAny = ColorBlendCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof blendAny.merge_stroke_rect !== 'function') return false;
+    const modeCode = BLEND_MODE_MAP[blendMode.toLowerCase()] ?? 0;
+    try {
+      const dst = new Uint8Array(dstRgba.buffer, dstRgba.byteOffset, dstRgba.byteLength);
+      const src = new Uint8Array(srcRgba.buffer, srcRgba.byteOffset, srcRgba.byteLength);
+      const clip = clipMask
+        ? new Uint8Array(clipMask.buffer, clipMask.byteOffset, clipMask.byteLength)
+        : EMPTY_MAT;
+      return !!blendAny.merge_stroke_rect(
+        dst,
+        src,
+        strideWidth,
+        strideHeight,
+        minX,
+        minY,
+        maxX,
+        maxY,
+        modeCode,
+        opacity,
+        lockAlpha,
+        clip,
+      );
+    } catch {
+      return false;
+    }
+  }
+
   evaluatePaperTexture(
     grainVal: number,
     baseAlpha: number,
@@ -811,6 +1076,80 @@ class RustStrokeEngineWrapper {
     } catch (e) {
       console.warn('WASM ColorBlendCore.evaluate_paper_texture fallback:', e);
       return null;
+    }
+  }
+
+  generatePaperPatternTile(
+    outRgba: Uint8Array | Uint8ClampedArray,
+    tileWidth: number,
+    tileHeight: number,
+    toothMatrix: Float32Array,
+    toothWidth: number,
+    toothHeight: number,
+    density: number,
+    mode: number,
+    invert: boolean,
+  ): boolean {
+    if (!this.available) return false;
+    const blendAny = ColorBlendCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof blendAny.generate_paper_pattern_tile !== 'function') return false;
+    try {
+      const bytes = new Uint8Array(outRgba.buffer, outRgba.byteOffset, outRgba.byteLength);
+      return !!blendAny.generate_paper_pattern_tile(
+        bytes,
+        tileWidth,
+        tileHeight,
+        toothMatrix,
+        toothWidth,
+        toothHeight,
+        density,
+        mode,
+        invert,
+      );
+    } catch (e) {
+      console.warn('WASM generatePaperPatternTile fallback:', e);
+      return false;
+    }
+  }
+
+  applyPaperGrainRect(
+    rgbaBuffer: Uint8Array | Uint8ClampedArray,
+    strideWidth: number,
+    rectWidth: number,
+    rectHeight: number,
+    docOriginX: number,
+    docOriginY: number,
+    toothMatrix: Float32Array,
+    toothWidth: number,
+    toothHeight: number,
+    scale: number,
+    density: number,
+    mode: number,
+    invert: boolean,
+  ): boolean {
+    if (!this.available) return false;
+    const blendAny = ColorBlendCore as unknown as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof blendAny.apply_paper_grain_rect !== 'function') return false;
+    try {
+      const bytes = new Uint8Array(rgbaBuffer.buffer, rgbaBuffer.byteOffset, rgbaBuffer.byteLength);
+      return !!blendAny.apply_paper_grain_rect(
+        bytes,
+        strideWidth,
+        rectWidth,
+        rectHeight,
+        docOriginX,
+        docOriginY,
+        toothMatrix,
+        toothWidth,
+        toothHeight,
+        scale,
+        density,
+        mode,
+        invert,
+      );
+    } catch (e) {
+      console.warn('WASM applyPaperGrainRect fallback:', e);
+      return false;
     }
   }
 
@@ -1222,6 +1561,63 @@ class RustStrokeEngineWrapper {
     } catch (e) {
       console.warn('WASM TransformResampleCore.compute_inverse_transform_matrix fallback:', e);
       return null;
+    }
+  }
+
+  // --- High Performance Frame Cache in Rust ---
+  hasCachedFrame(frame: number): boolean {
+    if (!this.available || !this.frameCache) return false;
+    return this.frameCache.has_frame(frame);
+  }
+
+  getCachedFrame(frame: number, outRgba: Uint8ClampedArray): boolean {
+    if (!this.available || !this.frameCache) return false;
+    return this.frameCache.get_frame(frame, outRgba as any);
+  }
+
+  storeCachedFrame(frame: number, width: number, height: number, rgba: Uint8ClampedArray): void {
+    if (!this.available || !this.frameCache) return;
+    this.frameCache.store_frame(frame, width, height, rgba as any);
+  }
+
+  invalidateFrame(frame: number): void {
+    if (!this.available || !this.frameCache) return;
+    this.frameCache.invalidate_frame(frame);
+  }
+
+  invalidateAllFrames(): void {
+    if (!this.available || !this.frameCache) return;
+    this.frameCache.invalidate_all();
+  }
+
+  // --- SIMD Fast Layer Compositing ---
+  // --- Sparse Tile Memory Grid in Rust ---
+  createSparseTileGrid(docWidth: number, docHeight: number): SparseTileGrid | null {
+    if (!this.available) return null;
+    try {
+      return new SparseTileGrid(docWidth, docHeight);
+    } catch (e) {
+      console.warn('WASM SparseTileGrid fallback:', e);
+      return null;
+    }
+  }
+
+  // --- Extended SIMD Layer Blending ---
+  blendLayer(dest: Uint8Array, src: Uint8Array, opacity: number, blendMode: number): void {
+    if (!this.available) return;
+    try {
+      FastLayerCompositor.blend_layer(dest, src, opacity, blendMode);
+    } catch (e) {
+      console.warn('WASM FastLayerCompositor.blend_layer fallback:', e);
+    }
+  }
+
+  blendSourceOver(dest: Uint8Array, src: Uint8Array, opacity: number): void {
+    if (!this.available) return;
+    try {
+      FastLayerCompositor.blend_source_over(dest, src, opacity);
+    } catch (e) {
+      console.warn('WASM FastLayerCompositor.blend_source_over fallback:', e);
     }
   }
 }
