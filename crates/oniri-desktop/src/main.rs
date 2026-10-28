@@ -4,6 +4,7 @@ mod brush;
 mod compositor;
 mod viewport;
 
+use brush::{BrushPreset, BrushSettings, StrokeTracker};
 use eframe::egui;
 use oniri_brush_core::{SparseTileGrid, TimelineCore};
 use std::collections::HashMap;
@@ -27,16 +28,16 @@ pub struct OniriApp {
     pub is_playing: bool,
     pub last_playback_tick: Instant,
 
-    // Herramientas y pincel
+    // Herramientas y pincel nativo optimizado
     pub tool_mode: ToolMode,
-    pub brush_size: f32,
+    pub brush_settings: BrushSettings,
     pub brush_color: [f32; 3],
     pub onion_skin: bool,
+    pub stroke_tracker: StrokeTracker,
 
     // Viewport y lienzo
     pub viewport: ViewportState,
     pub viewport_initialized: bool,
-    pub last_stroke_pos: Option<egui::Pos2>,
 
     // Animación y búferes
     pub frames: HashMap<i32, Vec<u8>>,
@@ -78,12 +79,12 @@ impl Default for OniriApp {
             is_playing: false,
             last_playback_tick: Instant::now(),
             tool_mode: ToolMode::Brush,
-            brush_size: 14.0,
+            brush_settings: BrushSettings::from_preset(BrushPreset::GPen),
             brush_color: [0.12, 0.12, 0.12],
             onion_skin: true,
+            stroke_tracker: StrokeTracker::default(),
             viewport: ViewportState::default(),
             viewport_initialized: false,
-            last_stroke_pos: None,
             frames,
             composite_buffer,
             canvas_texture: None,
@@ -92,7 +93,7 @@ impl Default for OniriApp {
             redo_stack: Vec::new(),
             tile_grid: SparseTileGrid::new(width, height),
             timeline,
-            status_msg: "Oniri Native Studio (egui + wgpu) listo".to_string(),
+            status_msg: "Oniri Native Studio listo (Motor de pinceles optimizado)".to_string(),
         }
     }
 }
@@ -199,9 +200,15 @@ impl eframe::App for OniriApp {
             if !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.alt {
                 if i.key_pressed(egui::Key::B) {
                     self.tool_mode = ToolMode::Brush;
+                    if self.brush_settings.preset.is_eraser() {
+                        self.brush_settings = BrushSettings::from_preset(BrushPreset::GPen);
+                    }
                     self.status_msg = "Herramienta: Pincel (B)".to_string();
                 } else if i.key_pressed(egui::Key::E) {
                     self.tool_mode = ToolMode::Eraser;
+                    if !self.brush_settings.preset.is_eraser() {
+                        self.brush_settings = BrushSettings::from_preset(BrushPreset::HardEraser);
+                    }
                     self.status_msg = "Herramienta: Borrador (E)".to_string();
                 } else if i.key_pressed(egui::Key::I) {
                     self.tool_mode = ToolMode::Eyedropper;
@@ -390,9 +397,14 @@ impl eframe::App for OniriApp {
                 ui.label(egui::RichText::new(&self.status_msg).small());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new("120 FPS Native | Pure Rust + wgpu + egui")
-                            .small()
-                            .color(egui::Color32::from_rgb(16, 185, 129)),
+                        egui::RichText::new(format!(
+                            "Pincel: {} | Tamaño: {:.1} px | Estabilizador: {:.0}",
+                            self.brush_settings.preset.name(),
+                            self.brush_settings.size,
+                            self.brush_settings.stabilization
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(16, 185, 129)),
                     );
                 });
             });
@@ -497,33 +509,45 @@ impl eframe::App for OniriApp {
                 });
             });
 
-        // --- 4. Panel Izquierdo de Herramientas ---
+        // --- 4. Panel Izquierdo de Herramientas y Pinceles ---
         egui::SidePanel::left("tools_panel")
             .resizable(false)
-            .default_width(56.0)
+            .default_width(70.0)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
 
-                    if ui.selectable_label(self.tool_mode == ToolMode::Brush, "✏")
-                        .on_hover_text("Pincel (B)")
-                        .clicked()
-                    {
-                        self.tool_mode = ToolMode::Brush;
+                    // Presets de entintado y dibujo
+                    let presets = [
+                        (BrushPreset::GPen, "✒", "Plumilla G (Inking)"),
+                        (BrushPreset::MaruPen, "🖋", "Plumilla Maru (Detalle)"),
+                        (BrushPreset::TexturedPen, "🖌", "Plumilla Rugosa (Gasa)"),
+                        (BrushPreset::Calligraphy, "🪶", "Caligráfico (Cincel)"),
+                        (BrushPreset::Pencil, "✏", "Lápiz Grafito"),
+                        (BrushPreset::Airbrush, "💨", "Aerógrafo"),
+                        (BrushPreset::HardEraser, "🧼", "Borrador Duro"),
+                        (BrushPreset::SoftEraser, "🧽", "Borrador Suave"),
+                    ];
+
+                    for (preset, icon, tooltip) in presets {
+                        let is_sel = self.brush_settings.preset == preset && (
+                            (!preset.is_eraser() && self.tool_mode == ToolMode::Brush) ||
+                            (preset.is_eraser() && self.tool_mode == ToolMode::Eraser)
+                        );
+                        if ui.selectable_label(is_sel, icon).on_hover_text(tooltip).clicked() {
+                            self.brush_settings = BrushSettings::from_preset(preset);
+                            self.tool_mode = if preset.is_eraser() { ToolMode::Eraser } else { ToolMode::Brush };
+                            self.status_msg = format!("Pincel activo: {}", preset.name());
+                        }
                     }
 
-                    if ui.selectable_label(self.tool_mode == ToolMode::Eraser, "🧼")
-                        .on_hover_text("Borrador (E)")
-                        .clicked()
-                    {
-                        self.tool_mode = ToolMode::Eraser;
-                    }
-
+                    ui.separator();
                     if ui.selectable_label(self.tool_mode == ToolMode::Eyedropper, "🔍")
                         .on_hover_text("Cuentagotas (I)")
                         .clicked()
                     {
                         self.tool_mode = ToolMode::Eyedropper;
+                        self.status_msg = "Herramienta: Cuentagotas (I)".to_string();
                     }
 
                     if ui.selectable_label(self.tool_mode == ToolMode::Pan, "✋")
@@ -531,6 +555,7 @@ impl eframe::App for OniriApp {
                         .clicked()
                     {
                         self.tool_mode = ToolMode::Pan;
+                        self.status_msg = "Herramienta: Mano / Paneo (H)".to_string();
                     }
 
                     ui.separator();
@@ -538,15 +563,19 @@ impl eframe::App for OniriApp {
                     ui.color_edit_button_rgb(&mut self.brush_color);
 
                     ui.add_space(8.0);
-                    ui.label("Grosor");
-                    ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0).vertical().text(""));
+                    ui.label(format!("{:.0}px", self.brush_settings.size));
+                    ui.add(egui::Slider::new(&mut self.brush_settings.size, 1.0..=140.0).vertical().text(""));
+
+                    ui.add_space(4.0);
+                    ui.label("Estabil.");
+                    ui.add(egui::Slider::new(&mut self.brush_settings.stabilization, 0.0..=40.0).vertical().text(""));
                 });
             });
 
         // --- 5. Panel Derecho de Capas e Información ---
         egui::SidePanel::right("layers_panel")
             .resizable(true)
-            .default_width(220.0)
+            .default_width(230.0)
             .show(ctx, |ui| {
                 ui.heading("Capas de Animación");
                 ui.separator();
@@ -561,6 +590,27 @@ impl eframe::App for OniriApp {
                         }
                     }
                 });
+
+                ui.separator();
+                ui.heading("Ajustes de Pincel");
+                ui.horizontal(|ui| {
+                    ui.label("Grosor:");
+                    ui.add(egui::Slider::new(&mut self.brush_settings.size, 0.5..=150.0).text("px"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Opacidad:");
+                    ui.add(egui::Slider::new(&mut self.brush_settings.opacity, 0.05..=1.0).text(""));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Flujo:");
+                    ui.add(egui::Slider::new(&mut self.brush_settings.flow, 0.05..=1.0).text(""));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Estabilizador:");
+                    ui.add(egui::Slider::new(&mut self.brush_settings.stabilization, 0.0..=40.0).text(""));
+                });
+                ui.checkbox(&mut self.brush_settings.pressure_size, "Presión -> Tamaño");
+                ui.checkbox(&mut self.brush_settings.pressure_flow, "Presión -> Opacidad");
 
                 ui.separator();
                 ui.heading("Atajos Rápidos");
@@ -633,10 +683,10 @@ impl eframe::App for OniriApp {
                 egui::StrokeKind::Outside,
             );
 
-            // Cursor circular dinámico de tamaño de pincel en el lienzo
+            // Cursor circular dinámico con diámetro real del pincel en coordenadas de pantalla
             if let Some(hover_pos) = response.hover_pos() {
                 if canvas_rect.contains(hover_pos) && (self.tool_mode == ToolMode::Brush || self.tool_mode == ToolMode::Eraser) {
-                    let radius_screen = (self.brush_size * 0.5) * self.viewport.zoom;
+                    let radius_screen = (self.brush_settings.size * 0.5) * self.viewport.zoom;
                     let cursor_color = if self.tool_mode == ToolMode::Eraser {
                         egui::Color32::from_rgb(244, 63, 94)
                     } else {
@@ -646,6 +696,22 @@ impl eframe::App for OniriApp {
                 }
             }
 
+            // Detección de presión de lápiz / stylus en eventos
+            let mut raw_pressure = 1.0f32;
+            let mut is_pen = false;
+            ctx.input(|i| {
+                for ev in &i.events {
+                    if let egui::Event::Touch { force: Some(f), .. } = ev {
+                        raw_pressure = *f;
+                        is_pen = true;
+                    }
+                }
+            });
+
+            let dw = self.doc_width;
+            let dh = self.doc_height;
+            let cur_frame_id = self.current_frame;
+
             // --- Interacción de Dibujo / Borrado / Cuentagotas ---
             if wants_pan {
                 if response.dragged_by(egui::PointerButton::Primary) {
@@ -654,7 +720,37 @@ impl eframe::App for OniriApp {
             } else if response.drag_started_by(egui::PointerButton::Primary) {
                 if self.tool_mode == ToolMode::Brush || self.tool_mode == ToolMode::Eraser {
                     self.push_undo_snapshot();
-                    self.last_stroke_pos = None;
+                    if let Some(screen_pos) = response.interact_pointer_pos() {
+                        if let Some(doc_pos) = self.viewport.screen_to_doc(screen_pos, center, doc_w, doc_h) {
+                            self.stroke_tracker.begin(doc_pos, raw_pressure);
+
+                            let total_pixels = (dw * dh) as usize;
+                            self.frames.entry(cur_frame_id).or_insert_with(|| vec![0u8; total_pixels * 4]);
+                            let cur_buf = self.frames.get_mut(&cur_frame_id).unwrap();
+
+                            let color = [
+                                (self.brush_color[0] * 255.0) as u8,
+                                (self.brush_color[1] * 255.0) as u8,
+                                (self.brush_color[2] * 255.0) as u8,
+                                255,
+                            ];
+                            let diam = self.brush_settings.evaluate_diameter(raw_pressure, 0.0);
+                            let alpha = self.brush_settings.evaluate_alpha(raw_pressure);
+
+                            brush::stamp_preset_dab(
+                                cur_buf,
+                                dw,
+                                dh,
+                                doc_pos.x,
+                                doc_pos.y,
+                                diam,
+                                alpha,
+                                color,
+                                self.brush_settings.preset,
+                            );
+                            self.needs_composite = true;
+                        }
+                    }
                 }
             }
 
@@ -663,34 +759,60 @@ impl eframe::App for OniriApp {
                     if let Some(doc_pos) = self.viewport.screen_to_doc(screen_pos, center, doc_w, doc_h) {
                         match self.tool_mode {
                             ToolMode::Brush | ToolMode::Eraser => {
-                                let p0 = self.last_stroke_pos.unwrap_or(doc_pos);
-                                let p1 = doc_pos;
-                                let is_eraser = self.tool_mode == ToolMode::Eraser;
-                                let color = [
-                                    (self.brush_color[0] * 255.0) as u8,
-                                    (self.brush_color[1] * 255.0) as u8,
-                                    (self.brush_color[2] * 255.0) as u8,
-                                    255,
-                                ];
-                                let radius = self.brush_size * 0.5;
-                                let dw = self.doc_width;
-                                let dh = self.doc_height;
-
-                                let cur_buf = self.get_or_create_current_frame_mut();
-                                brush::stamp_stroke_segment(
-                                    cur_buf,
-                                    dw,
-                                    dh,
-                                    p0,
-                                    p1,
-                                    radius,
-                                    color,
-                                    is_eraser,
+                                let stab = self.brush_settings.stabilization;
+                                let emitted_count = self.stroke_tracker.stabilizer.add_raw_point(
+                                    doc_pos.x,
+                                    doc_pos.y,
+                                    raw_pressure,
+                                    stab,
+                                    is_pen,
                                 );
 
-                                self.last_stroke_pos = Some(p1);
-                                self.needs_composite = true;
-                                self.status_msg = format!("Trazo en ({:.0}, {:.0}) px", p1.x, p1.y);
+                                if emitted_count > 0 {
+                                    let total_len = self.stroke_tracker.stabilizer.get_emitted_len();
+                                    let ptr = self.stroke_tracker.stabilizer.get_emitted_ptr();
+                                    let points = unsafe { std::slice::from_raw_parts(ptr, total_len) };
+
+                                    let color = [
+                                        (self.brush_color[0] * 255.0) as u8,
+                                        (self.brush_color[1] * 255.0) as u8,
+                                        (self.brush_color[2] * 255.0) as u8,
+                                        255,
+                                    ];
+
+                                    let total_pixels = (dw * dh) as usize;
+                                    self.frames.entry(cur_frame_id).or_insert_with(|| vec![0u8; total_pixels * 4]);
+
+                                    let cur_buf = self.frames.get_mut(&cur_frame_id).unwrap();
+                                    let tracker = &mut self.stroke_tracker;
+                                    let settings = &self.brush_settings;
+
+                                    for i in 0..emitted_count {
+                                        let next_pt = egui::pos2(points[i * 3], points[i * 3 + 1]);
+                                        let next_p = points[i * 3 + 2];
+                                        let last_pt = tracker.last_pos.unwrap_or(next_pt);
+                                        let last_p = tracker.last_pressure;
+
+                                        brush::stamp_stroke_segment_advanced(
+                                            cur_buf,
+                                            dw,
+                                            dh,
+                                            last_pt,
+                                            next_pt,
+                                            last_p,
+                                            next_p,
+                                            &mut tracker.stroke_distance,
+                                            settings,
+                                            color,
+                                        );
+
+                                        tracker.last_pos = Some(next_pt);
+                                        tracker.last_pressure = next_p;
+                                    }
+
+                                    self.needs_composite = true;
+                                    self.status_msg = format!("Trazo estabilizado en ({:.0}, {:.0}) px", doc_pos.x, doc_pos.y);
+                                }
                             }
                             ToolMode::Eyedropper => {
                                 if let Some(rgb) = brush::sample_color_at(
@@ -712,7 +834,53 @@ impl eframe::App for OniriApp {
             }
 
             if response.drag_stopped() {
-                self.last_stroke_pos = None;
+                if self.tool_mode == ToolMode::Brush || self.tool_mode == ToolMode::Eraser {
+                    let tail_count = self.stroke_tracker.stabilizer.flush_tail();
+                    if tail_count > 0 {
+                        let total_len = self.stroke_tracker.stabilizer.get_emitted_len();
+                        let ptr = self.stroke_tracker.stabilizer.get_emitted_ptr();
+                        let points = unsafe { std::slice::from_raw_parts(ptr, total_len) };
+
+                        let color = [
+                            (self.brush_color[0] * 255.0) as u8,
+                            (self.brush_color[1] * 255.0) as u8,
+                            (self.brush_color[2] * 255.0) as u8,
+                            255,
+                        ];
+
+                        let total_pixels = (dw * dh) as usize;
+                        self.frames.entry(cur_frame_id).or_insert_with(|| vec![0u8; total_pixels * 4]);
+
+                        let cur_buf = self.frames.get_mut(&cur_frame_id).unwrap();
+                        let tracker = &mut self.stroke_tracker;
+                        let settings = &self.brush_settings;
+
+                        for i in 0..tail_count {
+                            let next_pt = egui::pos2(points[i * 3], points[i * 3 + 1]);
+                            let next_p = points[i * 3 + 2];
+                            let last_pt = tracker.last_pos.unwrap_or(next_pt);
+                            let last_p = tracker.last_pressure;
+
+                            brush::stamp_stroke_segment_advanced(
+                                cur_buf,
+                                dw,
+                                dh,
+                                last_pt,
+                                next_pt,
+                                last_p,
+                                next_p,
+                                &mut tracker.stroke_distance,
+                                settings,
+                                color,
+                            );
+
+                            tracker.last_pos = Some(next_pt);
+                            tracker.last_pressure = next_p;
+                        }
+                        self.needs_composite = true;
+                    }
+                }
+                self.stroke_tracker.reset();
             }
         });
     }
