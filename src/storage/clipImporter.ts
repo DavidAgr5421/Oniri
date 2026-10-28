@@ -10,6 +10,7 @@ import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 import type { SparseTileGrid } from '../wasm/oniri-brush-core/oniri_brush_core';
 import { clipDiagnostics } from './clipDiagnostics';
 import { clipDecodeClient } from './clipDecodeClient';
+import { PlatformAdapter } from '../platform/platformAdapter';
 
 export interface CelDescriptor {
   mainId: number;
@@ -1348,18 +1349,17 @@ export async function exportClipPackage(
 }
 
 /**
- * Triggers browser download of current project as .clip file.
+ * Triggers native save dialog (in Tauri) or browser download (in Web) of current project as .clip file.
  */
 export async function saveClipToFile(engine: BrushEngine, timeline: TimelineManager): Promise<void> {
   const clipBytes = await exportClipPackage(engine, timeline);
-  const blob = new Blob([clipBytes as any], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
   const fileName = lastImportedClipTitle.endsWith('.clip')
     ? lastImportedClipTitle
     : `${lastImportedClipTitle}.clip`;
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(url);
+  await PlatformAdapter.saveFileDialog(clipBytes, {
+    title: 'Guardar archivo Clip Studio Paint (*.clip)',
+    defaultPath: fileName,
+    filters: [{ name: 'Clip Studio Paint (*.clip)', extensions: ['clip'] }],
+    mimeType: 'application/octet-stream',
+  });
 }

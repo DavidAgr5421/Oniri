@@ -195,4 +195,15 @@ export class PlatformAdapter {
       return null;
     }
   }
+
+  /**
+   * Inspecciona y analiza un archivo .clip mediante el motor nativo SQLite de Rust en modo escritorio.
+   */
+  public static async inspectClipFileNative(filePath: string): Promise<{
+    canvas: { width: number; height: number; resolution: number; root_folder_id: number };
+    layers: Array<{ id: number; name: string; layer_type: number; folder_id: number; visible: boolean; opacity: number }>;
+    preview_base64?: string;
+  } | null> {
+    return await this.invokeNative('inspect_clip_file', { filePath });
+  }
 }

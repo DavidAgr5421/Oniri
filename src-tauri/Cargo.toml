@@ -10,6 +10,7 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
 oniri-brush-core = { path = "../crates/oniri-brush-core" }
 
 [build-dependencies]

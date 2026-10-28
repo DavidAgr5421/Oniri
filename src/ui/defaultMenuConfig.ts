@@ -26,6 +26,7 @@ import { commandDispatcher } from './commandDispatcher';
 import type { TopMenuCategory } from './topMenuBar';
 import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 import { rulerManager } from '../canvas/rulerManager';
+import { PlatformAdapter } from '../platform/platformAdapter';
 
 export interface MenuDependencies {
   engine: BrushEngine;
@@ -93,14 +94,15 @@ export function buildTopMenuCategories(deps: MenuDependencies): TopMenuCategory[
     category: 'file',
     execute: () => {
       engine.updateComposite();
-      engine.compositeCanvas.toBlob((blob) => {
+      engine.compositeCanvas.toBlob(async (blob) => {
         if (!blob) return;
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'ilustracion.png';
-        a.click();
-        URL.revokeObjectURL(url);
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        await PlatformAdapter.saveFileDialog(buf, {
+          title: 'Exportar imagen PNG',
+          defaultPath: 'ilustracion.png',
+          filters: [{ name: 'Imagen PNG (*.png)', extensions: ['png'] }],
+          mimeType: 'image/png',
+        });
       }, 'image/png');
     },
   });

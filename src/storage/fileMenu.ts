@@ -8,6 +8,7 @@ import { buildTopMenuCategories } from '../ui/defaultMenuConfig';
 import { TopMenuBar } from '../ui/topMenuBar';
 import { commandDispatcher } from '../ui/commandDispatcher';
 import { viewportNav } from '../canvas/viewportNavigation';
+import { PlatformAdapter } from '../platform/platformAdapter';
 
 export interface FileMenuOptions {
   engine: BrushEngine;
@@ -63,14 +64,32 @@ export function mountFileMenu(container: HTMLElement, options: FileMenuOptions):
 
   const brandBrand = document.createElement('div');
   brandBrand.className = 'csp-cmd-brand';
-  brandBrand.innerHTML = `<span class="csp-app-logo">ONIRI</span>`;
+  const isTauri = PlatformAdapter.isTauri();
+  brandBrand.innerHTML = `<span class="csp-app-logo">ONIRI</span><span class="csp-platform-badge ${isTauri ? 'desktop' : 'web'}">${isTauri ? 'DESKTOP' : 'WEB'}</span>`;
   topMenuRow.appendChild(brandBrand);
 
   // Build Menus and register commands
   const menuCategories = buildTopMenuCategories({
     engine,
     timeline,
-    onOpenFileInput: () => fileInput.click(),
+    onOpenFileInput: async () => {
+      if (PlatformAdapter.isTauri()) {
+        const files = await PlatformAdapter.openFileDialog({
+          title: 'Abrir proyecto o imagen en Oniri',
+          filters: [
+            { name: 'Archivos compatibles (*.oniri, *.clip, imágenes)', extensions: ['oniri', 'clip', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] },
+            { name: 'Proyecto Oniri (*.oniri)', extensions: ['oniri'] },
+            { name: 'Clip Studio Paint (*.clip)', extensions: ['clip'] },
+            { name: 'Imágenes', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] },
+          ],
+        });
+        if (files && files.length > 0) {
+          await processIncomingBuffer(files[0].name, files[0].data, engine, timeline);
+        }
+      } else {
+        fileInput.click();
+      }
+    },
     onNewCanvas: () => {
       openNewProjectModal(engine, timeline);
     },
@@ -260,23 +279,17 @@ function createCmdBtn(
   return btn;
 }
 
-/**
- * Updates active document name in UI.
- */
-function setProjectTitle(name: string): void {
-  activeProjectName = name;
-  const label = document.getElementById('csp-active-project-title');
-  if (label) {
-    label.textContent = name;
-  }
-}
 
 /**
- * Processes an incoming File (.oniri, .clip, or image).
+ * Processes an incoming raw buffer (.oniri, .clip, or image) from native dialog or drag-and-drop.
  */
-async function processIncomingFile(file: File, engine: BrushEngine, timeline: TimelineManager): Promise<void> {
-  const ext = file.name.split('.').pop()?.toLowerCase() || '';
-  const buffer = new Uint8Array(await file.arrayBuffer());
+export async function processIncomingBuffer(
+  fileName: string,
+  buffer: Uint8Array,
+  engine: BrushEngine,
+  timeline: TimelineManager
+): Promise<void> {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
 
   const isClip =
     ext === 'clip' ||
@@ -287,13 +300,13 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
   try {
     if (ext === 'oniri' || (!ext && buffer[0] === 0x50 && buffer[1] === 0x4b)) {
       const res = await importOniriPackage(buffer, engine, timeline);
-      setProjectTitle(file.name);
+      setActiveProjectName(fileName);
       viewportNav.resetView();
       showNotification('Proyecto Oniri cargado', `Cargado "${res.title}" con ${res.layersCount} capas.`);
     } else if (isClip) {
       const { importClipProject } = await import('./clipImporter');
-      const res = await importClipProject(buffer, engine, timeline, file.name);
-      setActiveProjectName(file.name);
+      const res = await importClipProject(buffer, engine, timeline, fileName);
+      setActiveProjectName(fileName);
       viewportNav.resetView();
       showNotification(
         'Archivo .clip importado',
@@ -307,7 +320,9 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
       (buffer.length >= 3 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) || // GIF
       (buffer.length >= 12 && buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) // WEBP
     ) {
-      await openImageAsDocument(file, file.name, engine, timeline);
+      const blob = new Blob([buffer as any]);
+      const file = new File([blob], fileName);
+      await openImageAsDocument(file, fileName, engine, timeline);
     } else {
       alert(`Formato de archivo no reconocido: .${ext}`);
     }
@@ -315,6 +330,14 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
     console.error('Error importing file:', err);
     alert(`Error al abrir archivo: ${err?.message || err}`);
   }
+}
+
+/**
+ * Processes an incoming File (.oniri, .clip, or image).
+ */
+async function processIncomingFile(file: File, engine: BrushEngine, timeline: TimelineManager): Promise<void> {
+  const buffer = new Uint8Array(await file.arrayBuffer());
+  await processIncomingBuffer(file.name, buffer, engine, timeline);
 }
 
 /**

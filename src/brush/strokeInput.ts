@@ -1843,10 +1843,19 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
     engine.layerManager.getActiveDrawableLayer();
   };
 
+  const onPointerRawUpdate = (event: PointerEvent): void => {
+    if (activeStroke === 'brush' || activeStroke === 'eraser') {
+      onPointerMove(event);
+    }
+  };
+
   canvas.setAttribute('inputmode', 'none');
   canvas.addEventListener('contextmenu', onContextMenu);
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
+  if ('onpointerrawupdate' in window) {
+    canvas.addEventListener('pointerrawupdate', onPointerRawUpdate as EventListener);
+  }
   canvas.addEventListener('pointerup', onPointerEnd);
   canvas.addEventListener('pointercancel', onPointerEnd);
   canvas.addEventListener('pointerleave', onPointerLeave);
@@ -1870,6 +1879,9 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       canvas.removeEventListener('contextmenu', onContextMenu);
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
+      if ('onpointerrawupdate' in window) {
+        canvas.removeEventListener('pointerrawupdate', onPointerRawUpdate as EventListener);
+      }
       canvas.removeEventListener('pointerup', onPointerEnd);
       canvas.removeEventListener('pointercancel', onPointerEnd);
       canvas.removeEventListener('pointerleave', onPointerLeave);

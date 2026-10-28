@@ -7,6 +7,7 @@ import type { AnimationScene } from '../animation/timelineModel';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 import { sanitizeAdjustment } from '../brush/adjustments';
+import { PlatformAdapter } from '../platform/platformAdapter';
 
 export interface OniriManifest {
   format: 'oniri';
@@ -449,7 +450,7 @@ export async function importOniriPackage(
 }
 
 /**
- * Triggers browser download for the .oniri package.
+ * Triggers native save dialog (in Tauri) or browser download (in Web) for the .oniri package.
  */
 export async function saveOniriToFile(
   engine: BrushEngine,
@@ -457,15 +458,13 @@ export async function saveOniriToFile(
   filename = 'proyecto.oniri'
 ): Promise<void> {
   const bytes = await exportOniriPackage(engine, timeline, filename.replace(/\.oniri$/i, ''));
-  const blob = new Blob([bytes as any], { type: 'application/x-oniri' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename.endsWith('.oniri') ? filename : `${filename}.oniri`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const defaultName = filename.endsWith('.oniri') ? filename : `${filename}.oniri`;
+  await PlatformAdapter.saveFileDialog(bytes, {
+    title: 'Guardar proyecto Oniri',
+    defaultPath: defaultName,
+    filters: [{ name: 'Proyecto Oniri (*.oniri)', extensions: ['oniri'] }],
+    mimeType: 'application/x-oniri',
+  });
 }
 
 /**
