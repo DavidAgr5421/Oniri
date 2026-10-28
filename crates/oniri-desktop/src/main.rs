@@ -1,7 +1,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod brush;
+mod compositor;
+mod viewport;
+
 use eframe::egui;
 use oniri_brush_core::{SparseTileGrid, TimelineCore};
+use std::collections::HashMap;
+use std::time::Instant;
+use viewport::ViewportState;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToolMode {
+    Brush,
+    Eraser,
+    Eyedropper,
+    Pan,
+}
 
 pub struct OniriApp {
     pub doc_width: u32,
@@ -10,8 +25,30 @@ pub struct OniriApp {
     pub total_frames: i32,
     pub fps: u32,
     pub is_playing: bool,
+    pub last_playback_tick: Instant,
+
+    // Herramientas y pincel
+    pub tool_mode: ToolMode,
     pub brush_size: f32,
     pub brush_color: [f32; 3],
+    pub onion_skin: bool,
+
+    // Viewport y lienzo
+    pub viewport: ViewportState,
+    pub viewport_initialized: bool,
+    pub last_stroke_pos: Option<egui::Pos2>,
+
+    // Animación y búferes
+    pub frames: HashMap<i32, Vec<u8>>,
+    pub composite_buffer: Vec<u8>,
+    pub canvas_texture: Option<egui::TextureHandle>,
+    pub needs_composite: bool,
+
+    // Historial (Deshacer / Rehacer)
+    pub undo_stack: Vec<(i32, Vec<u8>)>,
+    pub redo_stack: Vec<(i32, Vec<u8>)>,
+
+    // Núcleo Rust
     pub tile_grid: SparseTileGrid,
     pub timeline: TimelineCore,
     pub status_msg: String,
@@ -25,6 +62,13 @@ impl Default for OniriApp {
         timeline.add_track(1, true, false);
         timeline.add_clip(1, 1, 1, 24);
 
+        let total_pixels = (width * height) as usize;
+        let composite_buffer = vec![255u8; total_pixels * 4];
+
+        // Primer frame inicial (en blanco con canal alfa cero / transparente)
+        let mut frames = HashMap::new();
+        frames.insert(1, vec![0u8; total_pixels * 4]);
+
         Self {
             doc_width: width,
             doc_height: height,
@@ -32,8 +76,20 @@ impl Default for OniriApp {
             total_frames: 24,
             fps: 24,
             is_playing: false,
+            last_playback_tick: Instant::now(),
+            tool_mode: ToolMode::Brush,
             brush_size: 14.0,
             brush_color: [0.12, 0.12, 0.12],
+            onion_skin: true,
+            viewport: ViewportState::default(),
+            viewport_initialized: false,
+            last_stroke_pos: None,
+            frames,
+            composite_buffer,
+            canvas_texture: None,
+            needs_composite: true,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             tile_grid: SparseTileGrid::new(width, height),
             timeline,
             status_msg: "Oniri Native Studio (egui + wgpu) listo".to_string(),
@@ -41,9 +97,155 @@ impl Default for OniriApp {
     }
 }
 
+impl OniriApp {
+    /// Obtiene o inicializa el búfer de dibujo para el frame indicado
+    pub fn get_or_create_current_frame_mut(&mut self) -> &mut Vec<u8> {
+        let total_pixels = (self.doc_width * self.doc_height) as usize;
+        self.frames
+            .entry(self.current_frame)
+            .or_insert_with(|| vec![0u8; total_pixels * 4])
+    }
+
+    /// Guarda el estado actual en el historial para permitir deshacer
+    pub fn push_undo_snapshot(&mut self) {
+        let frame_id = self.current_frame;
+        let buffer_clone = self.get_or_create_current_frame_mut().clone();
+        if self.undo_stack.len() >= 30 {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push((frame_id, buffer_clone));
+        self.redo_stack.clear();
+    }
+
+    /// Deshace la última acción
+    pub fn undo(&mut self) {
+        if let Some((frame_id, previous_buf)) = self.undo_stack.pop() {
+            let current_buf = self.frames.get(&frame_id).cloned().unwrap_or_default();
+            self.redo_stack.push((frame_id, current_buf));
+            self.frames.insert(frame_id, previous_buf);
+            self.current_frame = frame_id;
+            self.needs_composite = true;
+            self.status_msg = format!("Deshacer en frame {}", frame_id);
+        }
+    }
+
+    /// Rehace la última acción deshecha
+    pub fn redo(&mut self) {
+        if let Some((frame_id, next_buf)) = self.redo_stack.pop() {
+            let current_buf = self.frames.get(&frame_id).cloned().unwrap_or_default();
+            self.undo_stack.push((frame_id, current_buf));
+            self.frames.insert(frame_id, next_buf);
+            self.current_frame = frame_id;
+            self.needs_composite = true;
+            self.status_msg = format!("Rehacer en frame {}", frame_id);
+        }
+    }
+
+    /// Recompone la textura del lienzo
+    pub fn update_canvas_texture(&mut self, ctx: &egui::Context) {
+        let total_pixels = (self.doc_width * self.doc_height) as usize;
+        self.frames
+            .entry(self.current_frame)
+            .or_insert_with(|| vec![0u8; total_pixels * 4]);
+
+        let doc_w = self.doc_width;
+        let doc_h = self.doc_height;
+        let onion = self.onion_skin;
+        let current_frame = self.current_frame;
+
+        let prev_cel = self.frames.get(&(current_frame - 1)).map(|v| v.as_slice());
+        let next_cel = self.frames.get(&(current_frame + 1)).map(|v| v.as_slice());
+        let cur_cel = self.frames.get(&current_frame).unwrap().as_slice();
+
+        compositor::composite_canvas(
+            &mut self.composite_buffer,
+            doc_w,
+            doc_h,
+            cur_cel,
+            prev_cel,
+            next_cel,
+            onion,
+        );
+
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [doc_w as usize, doc_h as usize],
+            &self.composite_buffer,
+        );
+
+        match &mut self.canvas_texture {
+            Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
+            None => {
+                self.canvas_texture = Some(ctx.load_texture("oniri_canvas", image, egui::TextureOptions::LINEAR));
+            }
+        }
+        self.needs_composite = false;
+    }
+}
+
 impl eframe::App for OniriApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1. Barra de Menú Superior
+        // --- 0. Control de Teclado y Atajos Globales ---
+        ctx.input(|i| {
+            if i.modifiers.command && i.key_pressed(egui::Key::Z) {
+                if i.modifiers.shift {
+                    self.redo();
+                } else {
+                    self.undo();
+                }
+            } else if i.modifiers.command && i.key_pressed(egui::Key::Y) {
+                self.redo();
+            }
+
+            if !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.alt {
+                if i.key_pressed(egui::Key::B) {
+                    self.tool_mode = ToolMode::Brush;
+                    self.status_msg = "Herramienta: Pincel (B)".to_string();
+                } else if i.key_pressed(egui::Key::E) {
+                    self.tool_mode = ToolMode::Eraser;
+                    self.status_msg = "Herramienta: Borrador (E)".to_string();
+                } else if i.key_pressed(egui::Key::I) {
+                    self.tool_mode = ToolMode::Eyedropper;
+                    self.status_msg = "Herramienta: Cuentagotas (I)".to_string();
+                } else if i.key_pressed(egui::Key::H) {
+                    self.tool_mode = ToolMode::Pan;
+                    self.status_msg = "Herramienta: Mano / Paneo (H)".to_string();
+                } else if i.key_pressed(egui::Key::O) {
+                    self.onion_skin = !self.onion_skin;
+                    self.needs_composite = true;
+                    self.status_msg = format!("Papel Cebolla: {}", if self.onion_skin { "Activado" } else { "Desactivado" });
+                } else if i.key_pressed(egui::Key::Space) {
+                    self.is_playing = !self.is_playing;
+                } else if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::Comma) {
+                    if self.current_frame > 1 {
+                        self.current_frame -= 1;
+                        self.needs_composite = true;
+                    }
+                } else if i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::Period) {
+                    if self.current_frame < self.total_frames {
+                        self.current_frame += 1;
+                        self.needs_composite = true;
+                    }
+                }
+            }
+        });
+
+        // --- 0.1 Bucle de Reproducción de Animación a FPS constante ---
+        if self.is_playing {
+            let now = Instant::now();
+            let frame_dur = std::time::Duration::from_secs_f32(1.0 / self.fps.max(1) as f32);
+            if now.duration_since(self.last_playback_tick) >= frame_dur {
+                self.last_playback_tick = now;
+                self.current_frame = if self.current_frame >= self.total_frames {
+                    1
+                } else {
+                    self.current_frame + 1
+                };
+                self.needs_composite = true;
+            }
+            ctx.request_repaint();
+        }
+
+        // --- 1. Barra de Menú Superior ---
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.label(
@@ -60,12 +262,59 @@ impl eframe::App for OniriApp {
 
                 ui.menu_button("Archivo", |ui| {
                     if ui.button("Nuevo... (Ctrl+N)").clicked() {
+                        let total_pixels = (self.doc_width * self.doc_height) as usize;
+                        self.frames.clear();
+                        self.frames.insert(1, vec![0u8; total_pixels * 4]);
+                        self.undo_stack.clear();
+                        self.redo_stack.clear();
+                        self.current_frame = 1;
+                        self.needs_composite = true;
+                        self.status_msg = "Nuevo documento creado".to_string();
                         ui.close_menu();
                     }
-                    if ui.button("Abrir... (Ctrl+O)").clicked() {
+                    if ui.button("Abrir Imagen... (Ctrl+O)").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Imágenes", &["png", "jpg", "jpeg"])
+                            .pick_file()
+                        {
+                            if let Ok(img) = image::open(&path) {
+                                let rgba = img.to_rgba8();
+                                let total_pixels = (self.doc_width * self.doc_height) as usize;
+                                let mut buf = vec![0u8; total_pixels * 4];
+                                let copy_w = rgba.width().min(self.doc_width) as usize;
+                                let copy_h = rgba.height().min(self.doc_height) as usize;
+                                for y in 0..copy_h {
+                                    for x in 0..copy_w {
+                                        let p = rgba.get_pixel(x as u32, y as u32);
+                                        let d_idx = (y * self.doc_width as usize + x) * 4;
+                                        buf[d_idx] = p[0];
+                                        buf[d_idx + 1] = p[1];
+                                        buf[d_idx + 2] = p[2];
+                                        buf[d_idx + 3] = p[3];
+                                    }
+                                }
+                                self.frames.insert(self.current_frame, buf);
+                                self.needs_composite = true;
+                                self.status_msg = format!("Imagen cargada: {:?}", path.file_name().unwrap_or_default());
+                            }
+                        }
                         ui.close_menu();
                     }
-                    if ui.button("Guardar (Ctrl+S)").clicked() {
+                    if ui.button("Exportar Frame como PNG...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("PNG", &["png"])
+                            .set_file_name(format!("frame_{:03}.png", self.current_frame))
+                            .save_file()
+                        {
+                            let _ = image::save_buffer(
+                                path,
+                                &self.composite_buffer,
+                                self.doc_width,
+                                self.doc_height,
+                                image::ExtendedColorType::Rgba8,
+                            );
+                            self.status_msg = "Frame exportado con éxito a PNG".to_string();
+                        }
                         ui.close_menu();
                     }
                     ui.separator();
@@ -76,37 +325,72 @@ impl eframe::App for OniriApp {
 
                 ui.menu_button("Edición", |ui| {
                     if ui.button("Deshacer (Ctrl+Z)").clicked() {
+                        self.undo();
                         ui.close_menu();
                     }
                     if ui.button("Rehacer (Ctrl+Y)").clicked() {
+                        self.redo();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Limpiar Cel Actual (Del)").clicked() {
+                        self.push_undo_snapshot();
+                        let total_pixels = (self.doc_width * self.doc_height) as usize;
+                        self.frames.insert(self.current_frame, vec![0u8; total_pixels * 4]);
+                        self.needs_composite = true;
+                        ui.close_menu();
+                    }
+                });
+
+                ui.menu_button("Ver", |ui| {
+                    if ui.button("Ajustar a Pantalla (Ctrl+0)").clicked() {
+                        self.viewport_initialized = false;
+                        ui.close_menu();
+                    }
+                    if ui.button("Zoom 100%").clicked() {
+                        self.viewport.zoom = 1.0;
+                        self.viewport.pan = egui::Vec2::ZERO;
                         ui.close_menu();
                     }
                 });
 
                 ui.menu_button("Animación", |ui| {
-                    if ui.button("Reproducir / Pausar (Espacio)").clicked() {
+                    let play_text = if self.is_playing { "Pausar (Espacio)" } else { "Reproducir (Espacio)" };
+                    if ui.button(play_text).clicked() {
                         self.is_playing = !self.is_playing;
+                        ui.close_menu();
+                    }
+                    let onion_text = if self.onion_skin { "Desactivar Papel Cebolla (O)" } else { "Activar Papel Cebolla (O)" };
+                    if ui.button(onion_text).clicked() {
+                        self.onion_skin = !self.onion_skin;
+                        self.needs_composite = true;
                         ui.close_menu();
                     }
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new(format!("{}×{} px @ {} fps", self.doc_width, self.doc_height, self.fps))
-                            .small()
-                            .color(egui::Color32::GRAY),
+                        egui::RichText::new(format!(
+                            "{}×{} px @ {} fps | Zoom: {:.0}%",
+                            self.doc_width,
+                            self.doc_height,
+                            self.fps,
+                            self.viewport.zoom * 100.0
+                        ))
+                        .small()
+                        .color(egui::Color32::GRAY),
                     );
                 });
             });
         });
 
-        // 2. Barra de Estado Inferior
+        // --- 2. Barra de Estado Inferior ---
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&self.status_msg).small());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new("120 FPS | Pure Rust Engine")
+                        egui::RichText::new("120 FPS Native | Pure Rust + wgpu + egui")
                             .small()
                             .color(egui::Color32::from_rgb(16, 185, 129)),
                     );
@@ -114,12 +398,12 @@ impl eframe::App for OniriApp {
             });
         });
 
-        // 3. Panel de Timeline Inferior (Modo Inmediato - Cero DOM)
+        // --- 3. Panel de Timeline Inferior ---
         egui::TopBottomPanel::bottom("timeline_panel")
             .resizable(true)
-            .default_height(180.0)
-            .min_height(120.0)
-            .max_height(400.0)
+            .default_height(160.0)
+            .min_height(100.0)
+            .max_height(350.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Línea de Tiempo");
@@ -130,16 +414,27 @@ impl eframe::App for OniriApp {
                         self.is_playing = !self.is_playing;
                     }
 
+                    if ui.selectable_label(self.onion_skin, "🧅 Papel Cebolla").clicked() {
+                        self.onion_skin = !self.onion_skin;
+                        self.needs_composite = true;
+                    }
+
+                    ui.separator();
                     ui.label(format!("Frame {} / {}", self.current_frame, self.total_frames));
-                    ui.add(egui::Slider::new(&mut self.current_frame, 1..=self.total_frames).text("Frame"));
+                    if ui.add(egui::Slider::new(&mut self.current_frame, 1..=self.total_frames).text("Frame")).changed() {
+                        self.needs_composite = true;
+                    }
+
+                    ui.label("FPS:");
+                    ui.add(egui::Slider::new(&mut self.fps, 1..=60).text(""));
                 });
 
                 ui.separator();
 
-                // Regla virtualizada del Timeline
+                // Regla interactiva inmediata de frames
                 egui::ScrollArea::horizontal().show(ui, |ui| {
-                    let frame_width = 24.0;
-                    let height = 80.0;
+                    let frame_width = 28.0;
+                    let height = 70.0;
                     let (response, painter) = ui.allocate_painter(
                         egui::vec2(frame_width * (self.total_frames as f32 + 2.0), height),
                         egui::Sense::click_and_drag(),
@@ -149,10 +444,10 @@ impl eframe::App for OniriApp {
                     let bg_color = egui::Color32::from_rgb(26, 29, 36);
                     painter.rect_filled(rect, 0.0, bg_color);
 
-                    // Dibujar marcas de frames
                     for f in 1..=self.total_frames {
                         let fx = rect.min.x + (f - 1) as f32 * frame_width;
                         let is_active = f == self.current_frame;
+                        let has_drawing = self.frames.get(&f).is_some();
 
                         let col_rect = egui::Rect::from_min_size(
                             egui::pos2(fx, rect.min.y),
@@ -169,15 +464,21 @@ impl eframe::App for OniriApp {
                                 [egui::pos2(fx, rect.min.y), egui::pos2(fx, rect.max.y)],
                                 egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(56, 189, 248)),
                             );
+                        } else if has_drawing {
+                            // Marca pequeña para indicar que el frame contiene trazos
+                            painter.circle_filled(
+                                egui::pos2(fx + frame_width * 0.5, rect.min.y + height - 12.0),
+                                3.0,
+                                egui::Color32::from_rgb(52, 211, 153),
+                            );
                         }
 
-                        // Número de frame cada 5 frames
                         if f % 5 == 0 || f == 1 {
                             painter.text(
                                 egui::pos2(fx + 2.0, rect.min.y + 4.0),
                                 egui::Align2::LEFT_TOP,
                                 format!("{}", f),
-                                egui::FontId::proportional(10.0),
+                                egui::FontId::proportional(11.0),
                                 egui::Color32::LIGHT_GRAY,
                             );
                         }
@@ -187,44 +488,94 @@ impl eframe::App for OniriApp {
                         if let Some(pos) = response.interact_pointer_pos() {
                             let rel_x = (pos.x - rect.min.x).max(0.0);
                             let target_f = ((rel_x / frame_width).floor() as i32 + 1).clamp(1, self.total_frames);
-                            self.current_frame = target_f;
+                            if target_f != self.current_frame {
+                                self.current_frame = target_f;
+                                self.needs_composite = true;
+                            }
                         }
                     }
                 });
             });
 
-        // 4. Panel Izquierdo: Herramientas
+        // --- 4. Panel Izquierdo de Herramientas ---
         egui::SidePanel::left("tools_panel")
             .resizable(false)
-            .default_width(52.0)
+            .default_width(56.0)
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
-                    if ui.button("✏").on_hover_text("Pincel").clicked() {}
-                    if ui.button("🧼").on_hover_text("Borrador").clicked() {}
-                    if ui.button("🪣").on_hover_text("Relleno").clicked() {}
-                    if ui.button("🔍").on_hover_text("Cuentagotas").clicked() {}
+
+                    if ui.selectable_label(self.tool_mode == ToolMode::Brush, "✏")
+                        .on_hover_text("Pincel (B)")
+                        .clicked()
+                    {
+                        self.tool_mode = ToolMode::Brush;
+                    }
+
+                    if ui.selectable_label(self.tool_mode == ToolMode::Eraser, "🧼")
+                        .on_hover_text("Borrador (E)")
+                        .clicked()
+                    {
+                        self.tool_mode = ToolMode::Eraser;
+                    }
+
+                    if ui.selectable_label(self.tool_mode == ToolMode::Eyedropper, "🔍")
+                        .on_hover_text("Cuentagotas (I)")
+                        .clicked()
+                    {
+                        self.tool_mode = ToolMode::Eyedropper;
+                    }
+
+                    if ui.selectable_label(self.tool_mode == ToolMode::Pan, "✋")
+                        .on_hover_text("Mano / Paneo (H o Espacio)")
+                        .clicked()
+                    {
+                        self.tool_mode = ToolMode::Pan;
+                    }
+
                     ui.separator();
+                    ui.label("Color");
                     ui.color_edit_button_rgb(&mut self.brush_color);
+
                     ui.add_space(8.0);
-                    ui.add(egui::Slider::new(&mut self.brush_size, 0.5..=100.0).vertical().text("Ø"));
+                    ui.label("Grosor");
+                    ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0).vertical().text(""));
                 });
             });
 
-        // 5. Panel Derecho: Capas y Navegador
+        // --- 5. Panel Derecho de Capas e Información ---
         egui::SidePanel::right("layers_panel")
             .resizable(true)
-            .default_width(240.0)
+            .default_width(220.0)
             .show(ctx, |ui| {
                 ui.heading("Capas de Animación");
                 ui.separator();
-                ui.label("📁 Carpeta de Animación 1");
-                ui.indent("anim1", |ui| {
-                    ui.selectable_value(&mut self.current_frame, 1, "🖼 Cel 1");
+
+                ui.collapsing("🎬 Carpeta de Animación 1", |ui| {
+                    for f in 1..=self.total_frames {
+                        let is_active = f == self.current_frame;
+                        let text = format!("🖼 Cel {:02}", f);
+                        if ui.selectable_label(is_active, text).clicked() {
+                            self.current_frame = f;
+                            self.needs_composite = true;
+                        }
+                    }
                 });
+
+                ui.separator();
+                ui.heading("Atajos Rápidos");
+                ui.label("• B: Pincel");
+                ui.label("• E: Borrador");
+                ui.label("• I: Cuentagotas");
+                ui.label("• H / Espacio: Paneo");
+                ui.label("• O: Papel Cebolla");
+                ui.label("• Espacio: Reproducir");
+                ui.label("• Ctrl+Z: Deshacer");
+                ui.label("• Ctrl+Y: Rehacer");
+                ui.label("• Ctrl+0: Centrar Lienzo");
             });
 
-        // 6. Viewport Central (Lienzo)
+        // --- 6. Viewport Central (Lienzo Nativo) ---
         egui::CentralPanel::default().show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(
                 ui.available_size(),
@@ -232,42 +583,136 @@ impl eframe::App for OniriApp {
             );
 
             let rect = response.rect;
+            let center = rect.center();
+
+            // Auto-ajustar lienzo en el primer ciclo
+            if !self.viewport_initialized && rect.width() > 10.0 && rect.height() > 10.0 {
+                self.viewport.fit_to_rect(rect, self.doc_width as f32, self.doc_height as f32);
+                self.viewport_initialized = true;
+            }
+
+            // Gestionar navegación (paneo con rueda, clic central o espacio)
+            let is_space = ui.input(|i| i.key_down(egui::Key::Space));
+            let wants_pan = self.tool_mode == ToolMode::Pan || is_space;
+
+            self.viewport.handle_navigation(ui, &response, center);
+
             // Fondo oscuro de trabajo
             painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(18, 20, 24));
 
-            // Simulación del lienzo 16:9 centrado
-            let canvas_aspect = self.doc_width as f32 / self.doc_height as f32;
-            let pad = 24.0;
-            let avail_w = rect.width() - pad * 2.0;
-            let avail_h = rect.height() - pad * 2.0;
+            // Calcular rect del lienzo en coordenadas de pantalla
+            let doc_w = self.doc_width as f32;
+            let doc_h = self.doc_height as f32;
+            let screen_p0 = self.viewport.doc_to_screen(egui::pos2(0.0, 0.0), center, doc_w, doc_h);
+            let screen_p1 = self.viewport.doc_to_screen(egui::pos2(doc_w, doc_h), center, doc_w, doc_h);
+            let canvas_rect = egui::Rect::from_min_max(screen_p0, screen_p1);
 
-            let (canvas_w, canvas_h) = if avail_w / avail_h > canvas_aspect {
-                (avail_h * canvas_aspect, avail_h)
-            } else {
-                (avail_w, avail_w / canvas_aspect)
-            };
+            // Sombra y papel
+            let shadow_rect = canvas_rect.expand(6.0 * self.viewport.zoom.min(2.0));
+            painter.rect_filled(shadow_rect, 4.0, egui::Color32::from_black_alpha(100));
 
-            let canvas_center = rect.center();
-            let canvas_rect = egui::Rect::from_center_size(canvas_center, egui::vec2(canvas_w, canvas_h));
+            // Renderizar la textura de la composición
+            if self.needs_composite || self.canvas_texture.is_none() {
+                self.update_canvas_texture(ctx);
+            }
 
-            // Sombra y marco blanco del papel
-            let shadow_rect = canvas_rect.expand(4.0);
-            painter.rect_filled(shadow_rect, 4.0, egui::Color32::from_black_alpha(80));
-            painter.rect_filled(canvas_rect, 2.0, egui::Color32::WHITE);
+            if let Some(tex) = &self.canvas_texture {
+                painter.image(
+                    tex.id(),
+                    canvas_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
 
-            // Dibujo interactivo directo en pantalla
-            if response.dragged() || response.clicked() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    if canvas_rect.contains(pos) {
-                        // Coordenadas relativas al lienzo
-                        let norm_x = (pos.x - canvas_rect.min.x) / canvas_rect.width();
-                        let norm_y = (pos.y - canvas_rect.min.y) / canvas_rect.height();
-                        let doc_x = norm_x * self.doc_width as f32;
-                        let doc_y = norm_y * self.doc_height as f32;
+            // Borde sutil del lienzo
+            painter.rect_stroke(
+                canvas_rect,
+                0.0,
+                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(70, 75, 85)),
+                egui::StrokeKind::Outside,
+            );
 
-                        self.status_msg = format!("Trazo en doc: ({:.1}, {:.1}) px", doc_x, doc_y);
+            // Cursor circular dinámico de tamaño de pincel en el lienzo
+            if let Some(hover_pos) = response.hover_pos() {
+                if canvas_rect.contains(hover_pos) && (self.tool_mode == ToolMode::Brush || self.tool_mode == ToolMode::Eraser) {
+                    let radius_screen = (self.brush_size * 0.5) * self.viewport.zoom;
+                    let cursor_color = if self.tool_mode == ToolMode::Eraser {
+                        egui::Color32::from_rgb(244, 63, 94)
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 200)
+                    };
+                    painter.circle_stroke(hover_pos, radius_screen, egui::Stroke::new(1.2_f32, cursor_color));
+                }
+            }
+
+            // --- Interacción de Dibujo / Borrado / Cuentagotas ---
+            if wants_pan {
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    self.viewport.pan += response.drag_delta();
+                }
+            } else if response.drag_started_by(egui::PointerButton::Primary) {
+                if self.tool_mode == ToolMode::Brush || self.tool_mode == ToolMode::Eraser {
+                    self.push_undo_snapshot();
+                    self.last_stroke_pos = None;
+                }
+            }
+
+            if !wants_pan && (response.dragged_by(egui::PointerButton::Primary) || response.clicked_by(egui::PointerButton::Primary)) {
+                if let Some(screen_pos) = response.interact_pointer_pos() {
+                    if let Some(doc_pos) = self.viewport.screen_to_doc(screen_pos, center, doc_w, doc_h) {
+                        match self.tool_mode {
+                            ToolMode::Brush | ToolMode::Eraser => {
+                                let p0 = self.last_stroke_pos.unwrap_or(doc_pos);
+                                let p1 = doc_pos;
+                                let is_eraser = self.tool_mode == ToolMode::Eraser;
+                                let color = [
+                                    (self.brush_color[0] * 255.0) as u8,
+                                    (self.brush_color[1] * 255.0) as u8,
+                                    (self.brush_color[2] * 255.0) as u8,
+                                    255,
+                                ];
+                                let radius = self.brush_size * 0.5;
+                                let dw = self.doc_width;
+                                let dh = self.doc_height;
+
+                                let cur_buf = self.get_or_create_current_frame_mut();
+                                brush::stamp_stroke_segment(
+                                    cur_buf,
+                                    dw,
+                                    dh,
+                                    p0,
+                                    p1,
+                                    radius,
+                                    color,
+                                    is_eraser,
+                                );
+
+                                self.last_stroke_pos = Some(p1);
+                                self.needs_composite = true;
+                                self.status_msg = format!("Trazo en ({:.0}, {:.0}) px", p1.x, p1.y);
+                            }
+                            ToolMode::Eyedropper => {
+                                if let Some(rgb) = brush::sample_color_at(
+                                    &self.composite_buffer,
+                                    self.doc_width,
+                                    self.doc_height,
+                                    doc_pos.x,
+                                    doc_pos.y,
+                                ) {
+                                    self.brush_color = rgb;
+                                    self.tool_mode = ToolMode::Brush;
+                                    self.status_msg = format!("Color seleccionado: RGB({:.2}, {:.2}, {:.2})", rgb[0], rgb[1], rgb[2]);
+                                }
+                            }
+                            ToolMode::Pan => {}
+                        }
                     }
                 }
+            }
+
+            if response.drag_stopped() {
+                self.last_stroke_pos = None;
             }
         });
     }
@@ -276,7 +721,7 @@ impl eframe::App for OniriApp {
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Oniri Native Studio — Powered by egui & wgpu")
+            .with_title("Oniri Native Studio — egui + wgpu")
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([800.0, 600.0]),
         ..Default::default()
