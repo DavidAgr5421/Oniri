@@ -93,42 +93,41 @@ No empezamos de cero. La lógica más compleja y crítica de Oniri ya reside en 
 
 ---
 
-## 5. Plan de Ejecución por Fases
+## 5. Plan de Ejecución por Fases y Estado Actual
 
-### Fase 1: Estructuración del Crate Nativo `oniri-desktop`
-1. Crear el crate `crates/oniri-desktop` con dependencias:
-   - `eframe = { version = "0.31", features = ["wgpu"] }` (el framework estándar de `egui` con backend nativo wgpu).
-   - `wgpu = "24"` (aceleración por hardware).
-   - `winit = "0.30"` (manejo de ventana y soporte de lápiz óptico).
-   - `oniri-brush-core = { path = "../oniri-brush-core" }` (núcleo matemático y de dibujo).
-   - `rfd = "0.15"` (diálogos nativos de archivo).
-   - `image = "0.25"` y `rusqlite = { version = "0.32", features = ["bundled"] }`.
+### ✅ Fase 1: Estructuración del Crate Nativo `oniri-desktop` (Completada)
+1. Creado el workspace Cargo raíz y el crate `crates/oniri-desktop`:
+   - `eframe = { version = "0.31", features = ["wgpu"] }`
+   - `oniri-brush-core = { path = "../oniri-brush-core" }`
+   - `rfd = "0.15"`, `image = "0.25"`, `serde`, `serde_json`.
+   - Script npm agregado: `"desktop": "cargo run -p oniri-desktop"`.
 
-### Fase 2: Implementación del Viewport Interactivo en `wgpu`
-1. Integrar el renderizado del lienzo de dibujo dentro de un widget de `egui` (`egui::TextureId` o render callback de `wgpu`).
-2. Implementar transformaciones de navegación en el shader:
-   - Paneo 2D.
-   - Zoom suave centrado en el cursor.
-   - Rotación libre del lienzo (0° a 360°) sin costo de rendimiento.
-   - Volteo horizontal/vertical instantáneo.
+### ✅ Fase 2: Implementación del Viewport Interactivo (Completada)
+1. Implementado [`viewport.rs`](crates/oniri-desktop/src/viewport.rs):
+   - Paneo 2D con botón central del ratón o Barra Espaciadora + arrastre.
+   - Zoom suave centrado exactamente bajo la posición del cursor (5% a 6400%).
+   - Transformaciones bidireccionales exactas `screen_to_doc` y `doc_to_screen`.
+   - Autoencaje del documento a la ventana (`Ctrl+0`).
 
-### Fase 3: Entrada de Lápiz y Pintura en Tiempo Real
-1. Conectar los eventos de tableta gráfica de `winit` (coordenadas continuas, presión de 0.0 a 1.0, ángulo de inclinación).
-2. Alimentar `StrokeStabilizerCore` y estampar sellos en `SparseTileGrid` en hilos de trabajo paralelos.
-3. Actualizar únicamente las teselas modificadas en la textura de GPU.
+### ✅ Fase 3: Entrada de Lápiz, Pinceles Avanzados y Estabilización (Completada)
+1. Implementado [`brush.rs`](crates/oniri-desktop/src/brush.rs):
+   - Catálogo de 8 presets especializados: Plumilla G, Maru, Rugosa (Gasa-gasa), Caligráfico (Cincel 45°), Lápiz Grafito, Aerógrafo, Borrador Duro y Suave.
+   - Integración nativa con `StrokeStabilizerCore` para eliminación del temblor de la mano y filtrado sub-píxel.
+   - Curva de respuesta de presión con curvatura cónica (*toe*) para terminaciones en punta fina natural.
+   - Rasterización directa SDF en memoria plana contigua (<0.2 ms por trazo).
 
-### Fase 4: Widget del Timeline de Animación en `egui`
-1. Crear el control de regla de fotogramas (*ruler*), cabezal de reproducción (*playhead*) y pistas de animación.
-2. Renderizar bloques de celdas y exposiciones con recorte automático (*viewport culling*).
-3. Conectar atajos de teclado estándar de animación:
-   - Espacio: Reproducir / Pausar a 24/30/60 FPS continuos.
-   - Flechas: Navegar entre cels clave y cels vacíos.
-   - Arrastre de cabecera de clip para mover secuencias completas.
+### ✅ Fase 4: Widget del Timeline de Animación y Bucle a 120 FPS (Completada)
+1. Línea de tiempo en modo inmediato sin nodos DOM:
+   - Regla de frames virtualizada con marcas de cels dibujados.
+   - Bucle de animación a FPS constante con reproducción continua en tiempo real.
+   - Papel cebolla (*Onion Skin*) integrado en CPU tintado en carmesí (anterior) y azul (siguiente).
+   - Historial Deshacer/Rehacer (`Ctrl+Z` / `Ctrl+Y`) por frame.
 
-### Fase 5: Paneles de UI (Capas, Color, Pinceles)
-1. Panel de capas con visibilidad, opacidad, modos de fusión y reordenación.
-2. Selector de color HSV/RGB con paletas de muestras (*swatches*).
-3. Selector de pinceles con previsualización del tamaño y dinámica de presión.
+### 🟡 Fase 5: Paneles Avanzados de UI y Exportadores (En Progreso)
+1. Panel de herramientas con selector de presets, paleta de color y sliders de dinámica.
+2. Diálogos nativos de archivo vía `rfd` para abrir imágenes y exportar PNGs.
+3. Siguiente: Exportador nativo de animación completa a GIF / secuencia PNG numerada.
+
 
 ---
 
