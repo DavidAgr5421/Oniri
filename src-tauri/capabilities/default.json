@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions default for Oniri application",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "fs:default",
+    "dialog:default"
+  ]
+}
