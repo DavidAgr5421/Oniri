@@ -7,6 +7,7 @@ import { openNewProjectModal } from '../tools/newProjectModal';
 import { buildTopMenuCategories } from '../ui/defaultMenuConfig';
 import { TopMenuBar } from '../ui/topMenuBar';
 import { commandDispatcher } from '../ui/commandDispatcher';
+import { viewportNav } from '../canvas/viewportNavigation';
 
 export interface FileMenuOptions {
   engine: BrushEngine;
@@ -287,11 +288,13 @@ async function processIncomingFile(file: File, engine: BrushEngine, timeline: Ti
     if (ext === 'oniri' || (!ext && buffer[0] === 0x50 && buffer[1] === 0x4b)) {
       const res = await importOniriPackage(buffer, engine, timeline);
       setProjectTitle(file.name);
+      viewportNav.resetView();
       showNotification('Proyecto Oniri cargado', `Cargado "${res.title}" con ${res.layersCount} capas.`);
     } else if (isClip) {
       const { importClipProject } = await import('./clipImporter');
       const res = await importClipProject(buffer, engine, timeline, file.name);
       setActiveProjectName(file.name);
+      viewportNav.resetView();
       showNotification(
         'Archivo .clip importado',
         `Lienzo ${res.width}×${res.height} px, ${res.layersCount} capas, ${res.tracksCount} pistas de animación (${res.totalFrames} frames @ ${res.fps} fps).`

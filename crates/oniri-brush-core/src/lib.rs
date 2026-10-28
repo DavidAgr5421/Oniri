@@ -19,7 +19,7 @@ pub mod tile_canvas;
 pub mod timeline_core;
 pub use bone_ik::BoneIKCore;
 pub use bones::BoneSkinCore;
-pub use clip_tiles::{ClipTileCore, FastLayerCompositor, FrameCacheCore};
+pub use clip_tiles::{ClipTileCore, ClipTimelineParser, FastLayerCompositor, FrameCacheCore};
 pub use color_blend::ColorBlendCore;
 pub use color_sampler::ColorSamplerCore;
 pub use f_curve::wasm_solve_bezier_y;

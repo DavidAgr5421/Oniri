@@ -664,6 +664,62 @@ export class ClipTileCore {
 if (Symbol.dispose) ClipTileCore.prototype[Symbol.dispose] = ClipTileCore.prototype.free;
 
 /**
+ * Parser nativo de alto rendimiento para pistas de animación y curvas de exposición FCurve de Clip Studio Paint.
+ */
+export class ClipTimelineParser {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        ClipTimelineParserFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_cliptimelineparser_free(ptr, 0);
+    }
+    /**
+     * Normaliza un UUID eliminando guiones y convirtiéndolo a minúsculas
+     * @param {string} raw_uuid
+     * @returns {string}
+     */
+    static clean_uuid(raw_uuid) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(raw_uuid, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.cliptimelineparser_clean_uuid(ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Descomprime con miniz_oxide un chunk TrackActionMixer y parsea los keyframes de exposición.
+     * Devuelve un JSON string con { "cel_names": [...], "exposures": { "celName": frame } }
+     * @param {Uint8Array} chunk_bytes
+     * @returns {string}
+     */
+    static parse_track_exposures(chunk_bytes) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passArray8ToWasm0(chunk_bytes, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.cliptimelineparser_parse_track_exposures(ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+}
+if (Symbol.dispose) ClipTimelineParser.prototype[Symbol.dispose] = ClipTimelineParser.prototype.free;
+
+/**
  * Motor nativo de mezcla cromática, difuminado (smudge) y tintado de color
  */
 export class ColorBlendCore {
@@ -1944,6 +2000,19 @@ export class SparseTileGrid {
         wasm.sparsetilegrid_clear_tile(this.__wbg_ptr, col, row);
     }
     /**
+     * Obtiene el bounding box rectangular [min_x, min_y, max_x, max_y] que engloba todas las teselas activas
+     * @returns {Uint32Array | undefined}
+     */
+    get_content_bounds() {
+        const ret = wasm.sparsetilegrid_get_content_bounds(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        }
+        return v1;
+    }
+    /**
      * Copia una tesela individual a un buffer de destino
      * @param {number} col
      * @param {number} row
@@ -1997,6 +2066,19 @@ export class SparseTileGrid {
         var ptr0 = passArray8ToWasm0(dest_rgba, wasm.__wbindgen_malloc);
         var len0 = WASM_VECTOR_LEN;
         const ret = wasm.sparsetilegrid_render_to_full_buffer(this.__wbg_ptr, ptr0, len0, dest_rgba);
+        return ret !== 0;
+    }
+    /**
+     * Proyecta todas las teselas activas en un búfer RGBA con opción de omitir el borrado inicial
+     * (ideal cuando el llamador ya proporciona un ImageData recién creado, ahorrando copias de 12 MB)
+     * @param {Uint8Array} dest_rgba
+     * @param {boolean} clear_first
+     * @returns {boolean}
+     */
+    render_to_full_buffer_opt(dest_rgba, clear_first) {
+        var ptr0 = passArray8ToWasm0(dest_rgba, wasm.__wbindgen_malloc);
+        var len0 = WASM_VECTOR_LEN;
+        const ret = wasm.sparsetilegrid_render_to_full_buffer_opt(this.__wbg_ptr, ptr0, len0, dest_rgba, clear_first);
         return ret !== 0;
     }
     /**
@@ -2766,6 +2848,9 @@ const BrushDynamicsConfigFinalization = (typeof FinalizationRegistry === 'undefi
 const ClipTileCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_cliptilecore_free(ptr, 1));
+const ClipTimelineParserFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_cliptimelineparser_free(ptr, 1));
 const ColorBlendCoreFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_colorblendcore_free(ptr, 1));
@@ -2835,6 +2920,11 @@ function getArrayF32FromWasm0(ptr, len) {
 function getArrayI32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getInt32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
 function getArrayU8FromWasm0(ptr, len) {

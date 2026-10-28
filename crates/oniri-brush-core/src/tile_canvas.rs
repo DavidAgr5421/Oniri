@@ -109,13 +109,21 @@ impl SparseTileGrid {
 
     /// Proyecta todas las teselas activas directamente en un búfer RGBA del tamaño del documento
     pub fn render_to_full_buffer(&self, dest_rgba: &mut [u8]) -> bool {
+        self.render_to_full_buffer_opt(dest_rgba, true)
+    }
+
+    /// Proyecta todas las teselas activas en un búfer RGBA con opción de omitir el borrado inicial
+    /// (ideal cuando el llamador ya proporciona un ImageData recién creado, ahorrando copias de 12 MB)
+    pub fn render_to_full_buffer_opt(&self, dest_rgba: &mut [u8], clear_first: bool) -> bool {
         let expected_len = (self.doc_width as usize) * (self.doc_height as usize) * 4;
         if dest_rgba.len() < expected_len {
             return false;
         }
 
-        // Limpiar el buffer primero
-        dest_rgba[0..expected_len].fill(0);
+        // Limpiar el buffer si se solicita
+        if clear_first {
+            dest_rgba[0..expected_len].fill(0);
+        }
 
         let dw = self.doc_width as usize;
         let dh = self.doc_height as usize;
@@ -146,6 +154,39 @@ impl SparseTileGrid {
             }
         }
         true
+    }
+
+    /// Obtiene el bounding box rectangular [min_x, min_y, max_x, max_y] que engloba todas las teselas activas
+    pub fn get_content_bounds(&self) -> Option<Vec<u32>> {
+        let mut min_c = self.cols;
+        let mut max_c = 0;
+        let mut min_r = self.rows;
+        let mut max_r = 0;
+        let mut has_tiles = false;
+
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                let idx = (r * self.cols + c) as usize;
+                if self.tiles[idx].is_some() {
+                    has_tiles = true;
+                    if c < min_c { min_c = c; }
+                    if c > max_c { max_c = c; }
+                    if r < min_r { min_r = r; }
+                    if r > max_r { max_r = r; }
+                }
+            }
+        }
+
+        if !has_tiles {
+            return None;
+        }
+
+        let min_x = min_c * (TILE_SIZE as u32);
+        let min_y = min_r * (TILE_SIZE as u32);
+        let max_x = ((max_c + 1) * (TILE_SIZE as u32)).min(self.doc_width);
+        let max_y = ((max_r + 1) * (TILE_SIZE as u32)).min(self.doc_height);
+
+        Some(vec![min_x, min_y, max_x, max_y])
     }
 
     /// Importa un lienzo completo RGBA descomponiéndolo automáticamente en teselas esparsas.
@@ -340,5 +381,27 @@ mod tests {
         assert_eq!(grid.allocated_tile_count(), 1);
         assert!(grid.has_tile(0, 0));
         assert!(!grid.has_tile(1, 0));
+    }
+
+    #[test]
+    fn test_content_bounds_and_opt_render() {
+        let mut grid = SparseTileGrid::new(512, 512);
+        assert!(grid.get_content_bounds().is_none());
+
+        let mut tile_data = vec![0u8; TILE_BYTES];
+        tile_data[0] = 200;
+        tile_data[3] = 255;
+        // Tile at col 1, row 2 (x: 128..256, y: 256..384)
+        assert!(grid.set_tile_data(1, 2, &tile_data));
+
+        let bounds = grid.get_content_bounds().expect("Should have bounds");
+        assert_eq!(bounds, vec![128, 256, 256, 384]);
+
+        let mut buf = vec![0u8; 512 * 512 * 4];
+        // Render without clearing (since already zeroed)
+        assert!(grid.render_to_full_buffer_opt(&mut buf, false));
+        let offset = ((256 * 512 + 128) * 4) as usize;
+        assert_eq!(buf[offset], 200);
+        assert_eq!(buf[offset + 3], 255);
     }
 }

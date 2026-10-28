@@ -2,6 +2,7 @@ import initSqlJs, { type Database } from 'sql.js';
 import * as fflate from 'fflate';
 import type { BrushEngine } from '../brush/brushEngine';
 import type { TimelineManager } from '../animation/timelineManager';
+import type { AnimationTrack } from '../animation/timelineModel';
 import type { LayerNode } from '../brush/layers';
 import { DOC_H, DOC_W } from '../brush/docConstants';
 import { cameraFrameManager } from '../canvas/cameraFrameManager';
@@ -572,7 +573,7 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
         meta.startFrame = Math.max(1, Math.round(Number(sF) || 0) + 1);
         meta.endFrame = Math.round(Number(eF) || 24);
         meta.totalFrames = Math.max(meta.endFrame, meta.endFrame - meta.startFrame + 1);
-        meta.currentFrame = Math.max(1, Math.round(Number(curF) || 1));
+        meta.currentFrame = Math.max(1, Math.round(Number(curF) || 0) + 1);
       }
     } catch (e) {
       console.warn('Clip TimeLine query warning:', e);
@@ -601,13 +602,20 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
 
     // 5. Track Table & Cel Keyframe Exposures
     try {
-      const trackRes = db.exec('SELECT MainId, TrackActionMixer, TrackValueMap, LayerUuidWithTrack FROM Track');
+      const trackRes = db.exec('SELECT MainId, TrackActionMixer, TrackValueMap, LayerUuidWithTrack, TrackKind FROM Track');
       if (trackRes.length > 0) {
-        for (const [tId, mixer, _valMap, lUuid] of trackRes[0].values) {
+        for (const [tId, mixer, _valMap, lUuid, tKind] of trackRes[0].values) {
+          const kind = Number(tKind ?? 2000);
+          // Ignorar pistas que no sean de animación (ej. TrackKind 2003 = Cámara, 2002 = Audio)
+          if (kind !== 2000 && tKind !== null && tKind !== undefined) {
+            continue;
+          }
+
+          const cleanTrackUuid = rustStrokeEngine.cleanUuid(toHexUuid(lUuid));
           const trackInfo: ClipTrackInfo = {
             mainId: Number(tId),
             mixerId: toChunkKey(mixer),
-            layerUuid: toHexUuid(lUuid),
+            layerUuid: cleanTrackUuid,
             exposures: new Map(),
           };
 
@@ -633,6 +641,7 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
       if (layerRes.length > 0) {
         for (const row of layerRes[0].values) {
           const [mainId, name, lType, isFolder, vis, op, firstChild, nextIdx, animFolder, uuid, clip, lock] = row;
+          const cleanLayerUuid = rustStrokeEngine.cleanUuid(toHexUuid(uuid));
           meta.layers.push({
             mainId: Number(mainId),
             name: String(name || 'Capa'),
@@ -644,7 +653,7 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
             blendMode: 'source-over',
             firstChild: Number(firstChild || 0),
             nextIdx: Number(nextIdx || 0),
-            uuid: toHexUuid(uuid),
+            uuid: cleanLayerUuid,
             clipped: Boolean(clip),
             locked: Boolean(lock),
           });
@@ -712,6 +721,7 @@ export async function parseClipMetadata(clipBuffer: Uint8Array): Promise<ClipMet
 
 /**
  * Parses FCurve cel exposures from a TrackActionMixer external chunk.
+ * Uses high-speed native Rust miniz_oxide + BINC TLV deserializer.
  */
 function parseTrackMixerExposures(
   clipBuffer: Uint8Array,
@@ -726,6 +736,18 @@ function parseTrackMixerExposures(
 
     const chunkData = clipBuffer.subarray(chunkOffset + 16, chunkOffset + 16 + chunkLen);
 
+    // Vía nativa en Rust: descompresión zlib y deserialización de curvas FCurve en memoria C
+    const rustParsed = rustStrokeEngine.parseTrackMixerExposures(chunkData);
+    if (rustParsed && rustParsed.exposures) {
+      for (const [cel, frame] of Object.entries(rustParsed.exposures)) {
+        if (typeof frame === 'number' && Number.isFinite(frame)) {
+          outExposures.set(cel, frame);
+        }
+      }
+      return;
+    }
+
+    // Fallback secundario si WASM aún no estuviera inicializado
     let zstart = -1;
     for (let i = 0; i < Math.min(120, chunkData.length - 2); i++) {
       if (chunkData[i] === 0x78 && (chunkData[i + 1] === 0x01 || chunkData[i + 1] === 0x9c || chunkData[i + 1] === 0xda)) {
@@ -736,43 +758,27 @@ function parseTrackMixerExposures(
     if (zstart === -1) return;
 
     const decomp = fflate.unzlibSync(chunkData.subarray(zstart));
-
-    const fcurveIdx = findByteSequence(decomp, new TextEncoder().encode('FCurve'));
-    if (fcurveIdx === -1) return;
-
-    const constIdx = findByteSequence(decomp, new TextEncoder().encode('Constant'), fcurveIdx);
+    const constIdx = findByteSequence(decomp, new TextEncoder().encode('Constant'));
     if (constIdx === -1) return;
 
     let p = constIdx + 8;
     const celNames: string[] = [];
     while (p < decomp.length) {
       const slen = decomp[p];
-      if (slen === 0 || slen > 30) break;
+      if (slen === 0 || slen > 30 || p + 1 + slen > decomp.length) break;
       let isAscii = true;
       for (let j = 0; j < slen; j++) {
         const b = decomp[p + 1 + j];
-        if (b < 32 || b > 126) {
-          isAscii = false;
-          break;
-        }
+        if (b < 32 || b > 126) { isAscii = false; break; }
       }
       if (!isAscii) break;
-      const celName = new TextDecoder('latin1').decode(decomp.subarray(p + 1, p + 1 + slen));
-      celNames.push(celName);
+      celNames.push(new TextDecoder('latin1').decode(decomp.subarray(p + 1, p + 1 + slen)));
       p += 1 + slen;
     }
 
-    const f1Pattern = new Uint8Array([0x00, 0x00, 0x80, 0x3f]);
-    const f1Pos = findByteSequence(decomp, f1Pattern, p);
-    if (f1Pos !== -1) {
-      let celIdx = 0;
-      for (let fp = f1Pos; fp < f1Pos + celNames.length * 8 && fp + 4 <= decomp.length; fp += 4) {
-        const fView = new DataView(decomp.buffer, decomp.byteOffset + fp, 4);
-        const val = fView.getFloat32(0, true);
-        if (Number.isFinite(val) && val >= -1000 && val <= 5000 && celIdx < celNames.length) {
-          outExposures.set(celNames[celIdx], Math.round(val));
-          celIdx++;
-        }
+    if (celNames.length > 0) {
+      for (let i = 0; i < celNames.length; i++) {
+        outExposures.set(celNames[i], i + 1);
       }
     }
   } catch (e) {
@@ -1001,47 +1007,79 @@ export async function importClipProject(
     timeline.setFps(meta.fps || 24);
     timeline.setTotalFrames(meta.totalFrames || 24);
     timeline.setRange(sFrame, meta.endFrame || 24);
+    timeline.updateTimelineSettings({
+      sceneName: meta.timelineName || 'Escena 1',
+      fps: meta.fps || 24,
+      totalFrames: meta.totalFrames || 24,
+      startFrame: sFrame,
+      endFrame: meta.endFrame || 24,
+    });
+
+    // Limpiar pistas obsoletas o de plantilla antes de cargar las pistas reales del .clip
+    timeline.tracks.length = 0;
 
     for (const af of animFolders) {
       const childCels = layers.filter((l) => l.parentId === af.node.id);
-      let track = timeline.tracks.find((t) => t.folderId === af.node.id);
-      if (!track) {
-        track = timeline.createTrack(af.node.name);
-      }
 
+      // Emparejar exactamente por UUID normalizado en Rust
       const matchedTrack = meta.tracks.find(
-        (t) =>
-          t.layerUuid &&
-          af.info.uuid &&
-          (t.layerUuid === af.info.uuid ||
-            t.layerUuid.includes(af.info.uuid) ||
-            af.info.uuid.includes(t.layerUuid))
+        (t) => t.layerUuid && af.info.uuid && t.layerUuid === af.info.uuid
       );
+
+      // Crear pista vinculada directamente a la carpeta existente af.node.id (sin duplicar carpetas)
+      const defaultClip = {
+        id: `clip-${af.node.id}`,
+        name: af.node.name,
+        startFrame: sFrame,
+        endFrame: meta.endFrame || 24,
+        exposures: new Map<number, string>(),
+      };
+
+      const track: AnimationTrack = {
+        id: af.node.id,
+        folderId: af.node.id,
+        name: af.node.name,
+        visible: af.node.visible,
+        clips: [defaultClip],
+        exposures: new Map(),
+        keyframesEnabled: false,
+        keyframes: new Map(),
+      };
+      timeline.tracks.push(track);
 
       if (matchedTrack && matchedTrack.exposures.size > 0) {
         let minExpFrame = sFrame;
+        let maxExpFrame = meta.endFrame || 24;
         for (const f of matchedTrack.exposures.values()) {
           if (f < minExpFrame) minExpFrame = f;
+          if (f > maxExpFrame) maxExpFrame = f;
         }
-        if (track.clips.length > 0) {
-          track.clips[0].startFrame = minExpFrame;
-        }
+        track.clips[0].startFrame = minExpFrame;
+        track.clips[0].endFrame = maxExpFrame;
 
         for (const [celName, frame] of matchedTrack.exposures.entries()) {
           const celLayer = childCels.find((c) => c.name === celName);
           if (celLayer && track.clips.length > 0) {
             track.clips[0].exposures.set(frame, celLayer.id);
+            track.exposures.set(frame, celLayer.id);
           }
         }
       } else if (childCels.length > 0 && track.clips.length > 0) {
+        // Fallback: ordenar celdas de forma alfanumérica natural
+        const sortedCels = [...childCels].sort((a, b) => {
+          return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
         let frame = sFrame;
-        for (const cel of childCels) {
-          track.clips[0].exposures.set(frame++, cel.id);
+        for (const cel of sortedCels) {
+          track.clips[0].exposures.set(frame, cel.id);
+          track.exposures.set(frame, cel.id);
+          frame++;
         }
       }
     }
 
-    timeline.goToFrame(meta.currentFrame || 1);
+    timeline.goToFrame(meta.currentFrame || 1, true);
+    timeline.notify(true);
   } catch (tlErr) {
     console.warn('Error setting up timeline tracks from .clip file:', tlErr);
   }
@@ -1074,6 +1112,16 @@ export async function importClipProject(
   await Promise.all(initialDecodes);
   clipDiagnostics.recordInitialDecodeWall(performance.now() - tInitDecode0);
 
+  // Synchronize active layer in layerManager with the current frame's cel
+  const firstTrack = timeline.tracks[0];
+  if (firstTrack) {
+    const actCel = timeline.getActiveCelForFrame(firstTrack.id, initFrame);
+    if (actCel) {
+      engine.layerManager.setActiveLayer(actCel.id);
+    }
+  }
+  engine.layerManager.notify();
+
   // 6. Hook Timeline Scrubbing to On-Demand Decode Any Unrendered Cels (asíncrono)
   timeline.subscribe(() => {
     const curFrame = timeline.settings.currentFrame;
@@ -1101,6 +1149,15 @@ export async function importClipProject(
   engine.compositeDirty = true;
   engine.updateComposite();
   clipDiagnostics.recordFirstComposite(performance.now() - tComp0);
+
+  // Trigger full UI and Three.js viewport refresh
+  if (engine.onCompositeUpdated) {
+    engine.onCompositeUpdated();
+  }
+  if (engine.onDocumentResize) {
+    engine.onDocumentResize(meta.width, meta.height);
+  }
+  timeline.notify(true);
 
   clipDiagnostics.endImport();
 

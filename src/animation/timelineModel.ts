@@ -80,6 +80,7 @@ export interface CelExposure {
 
 export interface AnimationClip {
   id: string;
+  name?: string;
   startFrame: number; // 1-based inclusive
   endFrame: number; // 1-based inclusive
   // Frame number (within [startFrame, endFrame]) -> Cel Layer ID

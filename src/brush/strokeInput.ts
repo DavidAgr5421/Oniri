@@ -1431,6 +1431,13 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
       return;
     }
 
+    if (activeStroke === null && event.buttons === 0) {
+      const activeLayer = engine.layerManager.getActiveLayer();
+      if (activeLayer && activeLayer.tileGrid && !activeLayer.canvas) {
+        engine.layerManager.ensureLayerCanvas(activeLayer);
+      }
+    }
+
     // High-frequency samples (coalesced) are fed one by one so no input
     // resolution is lost between two pointermove events.
     const tMove0 = performance.now();
@@ -1832,6 +1839,8 @@ export function attachStrokeInput(options: StrokeInputOptions): StrokeInputHandl
   const onPointerEnter = (e: PointerEvent): void => {
     updateCursor();
     updateBrushCursor(e);
+    // Pre-materialize active layer canvas on stylus/mouse hover so first contact has 0 ms latency
+    engine.layerManager.getActiveDrawableLayer();
   };
 
   canvas.setAttribute('inputmode', 'none');

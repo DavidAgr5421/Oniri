@@ -406,6 +406,7 @@ export function createBrushEngine(): BrushEngine {
   let preStrokeSnapshot: ImageData | null = null;
   let preStrokeRect: Rect | null = null;
   let preStrokeLayerId = '';
+  let preStrokeDeferred = false;
   let strokePickedColor: [number, number, number, number] | null = null;
   let currentStrokeSpeed = 0;
   let strokeStampIndex = 0;
@@ -1099,6 +1100,7 @@ export function createBrushEngine(): BrushEngine {
     clearPredictedStroke();
     if (!mode) return;
     const active = layerManager.getActiveDrawableLayer();
+    let deferredUndoData: Uint8ClampedArray | null = null;
 
     if (mode === 'paint' || mode === 'shape') {
       if (active.context) {
@@ -1155,6 +1157,9 @@ export function createBrushEngine(): BrushEngine {
         if (bw > 0 && bh > 0 && rustStrokeEngine.available) {
           try {
             const dstImg = active.context.getImageData(bx, by, bw, bh);
+            if (preStrokeDeferred) {
+              deferredUndoData = new Uint8ClampedArray(dstImg.data);
+            }
             const srcImg = strokeContext.getImageData(bx, by, bw, bh);
 
             // SIMD matricial paper grain texture in Rust (direct in-place modulation)
@@ -1205,6 +1210,7 @@ export function createBrushEngine(): BrushEngine {
             );
             if (mergedFast) {
               active.context.putImageData(dstImg, bx, by);
+              active._canvasDirty = true;
               if (active.tileGrid) {
                 active.tileGrid.update_rect_from_buffer(
                   new Uint8Array(dstImg.data.buffer, dstImg.data.byteOffset, dstImg.data.byteLength),
@@ -1225,6 +1231,13 @@ export function createBrushEngine(): BrushEngine {
         }
 
         if (!mergedFast) {
+          if (preStrokeDeferred && hasBounds && bw > 0 && bh > 0) {
+            try {
+              deferredUndoData = new Uint8ClampedArray(active.context.getImageData(bx, by, bw, bh).data);
+            } catch {
+              deferredUndoData = null;
+            }
+          }
           active.context.save();
           if (active.lockAlpha) {
             active.context.globalCompositeOperation = 'source-atop';
@@ -1238,6 +1251,7 @@ export function createBrushEngine(): BrushEngine {
             active.context.drawImage(strokeCanvas, 0, 0);
           }
           active.context.restore();
+          active._canvasDirty = true;
         }
       }
       if (strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY) {
@@ -1269,7 +1283,27 @@ export function createBrushEngine(): BrushEngine {
       predictedContext.clearRect(0, 0, curDocW, curDocH);
     }
 
-    if (preStrokeSnapshot) {
+    if (preStrokeDeferred && deferredUndoData) {
+      const hasBounds = strokeBoundsMaxX > strokeBoundsMinX && strokeBoundsMaxY > strokeBoundsMinY;
+      const pad = 2;
+      const bx = hasBounds ? Math.max(0, strokeBoundsMinX - pad) : 0;
+      const by = hasBounds ? Math.max(0, strokeBoundsMinY - pad) : 0;
+      const bw = hasBounds ? Math.min(curDocW, strokeBoundsMaxX + pad) - bx : curDocW;
+      const bh = hasBounds ? Math.min(curDocH, strokeBoundsMaxY + pad) - by : curDocH;
+      if (bw > 0 && bh > 0) {
+        history.push(preStrokeLayerId, { x: bx, y: by, w: bw, h: bh }, deferredUndoData);
+      }
+      if (preStrokeLayerId) {
+        const activeLayer = layerManager.layers.find((l) => l.id === preStrokeLayerId);
+        if (activeLayer && (activeLayer.isVirtual || activeLayer.tileGrid) && activeLayer.canvas) {
+          layerManager.syncLayerToTileGrid(activeLayer);
+          layerManager.evictInactiveCelCanvases(2);
+        }
+      }
+      meshCache.delete(preStrokeLayerId);
+      preStrokeDeferred = false;
+      preStrokeLayerId = '';
+    } else if (preStrokeSnapshot) {
       if (
         strokeBoundsMaxX > strokeBoundsMinX &&
         strokeBoundsMaxY > strokeBoundsMinY
@@ -1316,13 +1350,14 @@ export function createBrushEngine(): BrushEngine {
         const activeLayer = layerManager.layers.find((l) => l.id === preStrokeLayerId);
         if (activeLayer && (activeLayer.isVirtual || activeLayer.tileGrid) && activeLayer.canvas) {
           layerManager.syncLayerToTileGrid(activeLayer);
-          layerManager.evictInactiveCelCanvases(4);
+          layerManager.evictInactiveCelCanvases(2);
         }
       }
       meshCache.delete(preStrokeLayerId);
       preStrokeSnapshot = null;
       preStrokeRawRgba = null;
       preStrokeRect = null;
+      preStrokeDeferred = false;
     }
     isLivePainting = false;
     useOverlayPlanes = false;
@@ -1584,7 +1619,23 @@ export function createBrushEngine(): BrushEngine {
           virtualCelImage.data.byteLength
         );
         layer.tileGrid.render_to_full_buffer(rawRgba);
-        virtualCelContext.putImageData(virtualCelImage, 0, 0);
+
+        // Accelerated bounded GPU texture upload via Rust content bounds
+        const bounds = typeof (layer.tileGrid as any).get_content_bounds === 'function'
+          ? (layer.tileGrid as any).get_content_bounds()
+          : null;
+        if (bounds && bounds.length === 4) {
+          const [bx, by, mx, my] = bounds;
+          const bw = mx - bx;
+          const bh = my - by;
+          if (bw > 0 && bh > 0) {
+            virtualCelContext.putImageData(virtualCelImage, 0, 0, bx, by, bw, bh);
+          } else {
+            virtualCelContext.putImageData(virtualCelImage, 0, 0);
+          }
+        } else {
+          virtualCelContext.putImageData(virtualCelImage, 0, 0);
+        }
         sourceCanvasToDraw = virtualCelCanvas;
       } else if (layer.canvas) {
         // Sparse Tile Grid projection on demand
@@ -1592,8 +1643,27 @@ export function createBrushEngine(): BrushEngine {
           const ctx = layer.context || layer.canvas.getContext('2d')!;
           const imgData = ctx.createImageData(curDocW, curDocH);
           const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
-          layer.tileGrid.render_to_full_buffer(rawRgba);
-          ctx.putImageData(imgData, 0, 0);
+          if (typeof (layer.tileGrid as any).render_to_full_buffer_opt === 'function') {
+            (layer.tileGrid as any).render_to_full_buffer_opt(rawRgba, false);
+          } else {
+            layer.tileGrid.render_to_full_buffer(rawRgba);
+          }
+
+          const bounds = typeof (layer.tileGrid as any).get_content_bounds === 'function'
+            ? (layer.tileGrid as any).get_content_bounds()
+            : null;
+          if (bounds && bounds.length === 4) {
+            const [bx, by, mx, my] = bounds;
+            const bw = mx - bx;
+            const bh = my - by;
+            if (bw > 0 && bh > 0) {
+              ctx.putImageData(imgData, 0, 0, bx, by, bw, bh);
+            } else {
+              ctx.putImageData(imgData, 0, 0);
+            }
+          } else {
+            ctx.putImageData(imgData, 0, 0);
+          }
           (layer as any)._tileGridNeedsProjection = false;
         }
         sourceCanvasToDraw = layer.canvas;
@@ -1931,7 +2001,7 @@ export function createBrushEngine(): BrushEngine {
       if (l.type === 'adjustment') {
         return !!l.adjustment && isEffectivelyVisible(l, layerMap);
       }
-      if (l.type !== 'raster' || !l.canvas || l.isPaper) return false;
+      if (l.type !== 'raster' || (!l.canvas && !l.tileGrid) || l.isPaper) return false;
       if (!isEffectivelyVisible(l, layerMap)) return false;
       if (timelineManager && l.parentId) {
         const parent = layerMap.get(l.parentId);
@@ -2088,16 +2158,31 @@ export function createBrushEngine(): BrushEngine {
     if (!active.context || active.locked || active.isPaper) return;
     if (erase && active.lockAlpha) return;
 
-    // Snapshot pre-stroke state for undo. To prevent gigabytes of RAM usage,
-    // we capture the full document if small, or start with full and crop to bounding box on finish.
-    preStrokeRect = { x: 0, y: 0, w: curDocW, h: curDocH };
-    preStrokeSnapshot = active.context.getImageData(0, 0, curDocW, curDocH);
-    preStrokeLayerId = active.id;
-
     isCurrentStrokeMouse = isMouse;
     strokeSettings = { ...getToolState().brush };
     currentColorHex = strokeSettings.color;
     mode = erase ? 'erase' : 'paint';
+
+    // Zero-lag stroke startup: Defer preStrokeSnapshot when possible to avoid blocking the main thread
+    // with 12+ MB getImageData and Rust snapshot upload on pointerdown.
+    const canDeferSnapshot =
+      !erase &&
+      !active.lockAlpha &&
+      !selectionModel.hasSelection() &&
+      (!strokeSettings.colorMix || strokeSettings.colorMix <= 0) &&
+      (!strokeSettings.smudge || strokeSettings.smudge <= 0);
+
+    if (canDeferSnapshot) {
+      preStrokeDeferred = true;
+      preStrokeSnapshot = null;
+      preStrokeRect = null;
+      preStrokeLayerId = active.id;
+    } else {
+      preStrokeDeferred = false;
+      preStrokeRect = { x: 0, y: 0, w: curDocW, h: curDocH };
+      preStrokeSnapshot = active.context.getImageData(0, 0, curDocW, curDocH);
+      preStrokeLayerId = active.id;
+    }
     const activeSub = getActiveSubTool();
     brushDiagnostics.startStroke(activeSub?.name || (erase ? 'Borrador' : 'Pincel'), getToolState().activeSubToolId);
     lastX = x;

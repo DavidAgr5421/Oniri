@@ -1378,6 +1378,14 @@ export function mountTimelineView(
         clipBar.style.left = `${frameToX(clipStart)}px`;
         clipBar.style.width = `${(clipEnd - clipStart + 1) * cellWidth}px`;
 
+        // Top grab bar: drag entire animation folder and its frames left or right
+        const clipHeader = document.createElement('div');
+        clipHeader.className = 'timeline-clip-header';
+        clipHeader.title = 'Arrastrar para mover toda la carpeta de animación con sus celdas';
+        clipHeader.innerHTML = `<span class="clip-header-title">${clip.name || track.name}</span>`;
+        attachClipMoveDrag(clipHeader, clipBar, track.id, clip.id);
+        clipBar.appendChild(clipHeader);
+
         // Clip top grab bar & left/right clip handles
         const clipLeftGrip = document.createElement('div');
         clipLeftGrip.className = 'timeline-clip-grip left';
@@ -1778,6 +1786,44 @@ export function mountTimelineView(
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
+      };
+
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // --- Helper: Drag Entire Animation Clip / Folder With All Frames ---
+  function attachClipMoveDrag(
+    headerEl: HTMLElement,
+    clipContainer: HTMLElement,
+    trackId: string,
+    clipId: string
+  ): void {
+    headerEl.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0 || (e.target as HTMLElement).classList.contains('timeline-clip-grip')) return;
+      e.stopPropagation();
+      e.preventDefault();
+
+      headerEl.classList.add('dragging');
+      const startMouseX = e.clientX;
+
+      const onMove = (moveEv: MouseEvent) => {
+        const deltaPx = moveEv.clientX - startMouseX;
+        const deltaFrames = Math.round(deltaPx / cellWidth);
+        clipContainer.style.transform = `translateX(${deltaFrames * cellWidth}px)`;
+      };
+
+      const onUp = (upEv: MouseEvent) => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        headerEl.classList.remove('dragging');
+        clipContainer.style.transform = '';
+        const deltaPx = upEv.clientX - startMouseX;
+        const deltaFrames = Math.round(deltaPx / cellWidth);
+        if (deltaFrames !== 0) {
+          timeline.moveClip(trackId, clipId, deltaFrames);
+        }
       };
 
       window.addEventListener('mousemove', onMove);

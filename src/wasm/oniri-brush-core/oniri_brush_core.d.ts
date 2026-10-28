@@ -124,6 +124,24 @@ export class ClipTileCore {
 }
 
 /**
+ * Parser nativo de alto rendimiento para pistas de animación y curvas de exposición FCurve de Clip Studio Paint.
+ */
+export class ClipTimelineParser {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Normaliza un UUID eliminando guiones y convirtiéndolo a minúsculas
+     */
+    static clean_uuid(raw_uuid: string): string;
+    /**
+     * Descomprime con miniz_oxide un chunk TrackActionMixer y parsea los keyframes de exposición.
+     * Devuelve un JSON string con { "cel_names": [...], "exposures": { "celName": frame } }
+     */
+    static parse_track_exposures(chunk_bytes: Uint8Array): string;
+}
+
+/**
  * Motor nativo de mezcla cromática, difuminado (smudge) y tintado de color
  */
 export class ColorBlendCore {
@@ -526,6 +544,10 @@ export class SparseTileGrid {
      */
     clear_tile(col: number, row: number): void;
     /**
+     * Obtiene el bounding box rectangular [min_x, min_y, max_x, max_y] que engloba todas las teselas activas
+     */
+    get_content_bounds(): Uint32Array | undefined;
+    /**
      * Copia una tesela individual a un buffer de destino
      */
     get_tile_data(col: number, row: number, out_buf: Uint8Array): boolean;
@@ -543,6 +565,11 @@ export class SparseTileGrid {
      * Proyecta todas las teselas activas directamente en un búfer RGBA del tamaño del documento
      */
     render_to_full_buffer(dest_rgba: Uint8Array): boolean;
+    /**
+     * Proyecta todas las teselas activas en un búfer RGBA con opción de omitir el borrado inicial
+     * (ideal cuando el llamador ya proporciona un ImageData recién creado, ahorrando copias de 12 MB)
+     */
+    render_to_full_buffer_opt(dest_rgba: Uint8Array, clear_first: boolean): boolean;
     /**
      * Asigna o actualiza una tesela con datos RGBA (128x128 = 65536 bytes)
      */
@@ -786,6 +813,7 @@ export interface InitOutput {
     readonly __wbg_boneskincore_free: (a: number, b: number) => void;
     readonly __wbg_brushdynamicsconfig_free: (a: number, b: number) => void;
     readonly __wbg_cliptilecore_free: (a: number, b: number) => void;
+    readonly __wbg_cliptimelineparser_free: (a: number, b: number) => void;
     readonly __wbg_colorblendcore_free: (a: number, b: number) => void;
     readonly __wbg_colorsamplercore_free: (a: number, b: number) => void;
     readonly __wbg_fastlayercompositor_free: (a: number, b: number) => void;
@@ -887,6 +915,8 @@ export interface InitOutput {
     readonly brushdynamicsconfig_new: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number) => number;
     readonly cliptilecore_blit_planar_tile: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly cliptilecore_decompress_and_blit_tile: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
+    readonly cliptimelineparser_clean_uuid: (a: number, b: number) => [number, number];
+    readonly cliptimelineparser_parse_track_exposures: (a: number, b: number) => [number, number];
     readonly colorblendcore_apply_paper_grain_rect: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number) => number;
     readonly colorblendcore_apply_tint_in_place: (a: number, b: number, c: any, d: number, e: number, f: number) => void;
     readonly colorblendcore_blend_color_mix: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number];
@@ -963,11 +993,13 @@ export interface InitOutput {
     readonly sparsetilegrid_allocated_tile_count: (a: number) => number;
     readonly sparsetilegrid_clear_all: (a: number) => void;
     readonly sparsetilegrid_clear_tile: (a: number, b: number, c: number) => void;
+    readonly sparsetilegrid_get_content_bounds: (a: number) => [number, number];
     readonly sparsetilegrid_get_tile_data: (a: number, b: number, c: number, d: number, e: number, f: any) => number;
     readonly sparsetilegrid_has_tile: (a: number, b: number, c: number) => number;
     readonly sparsetilegrid_import_from_full_buffer: (a: number, b: number, c: number) => number;
     readonly sparsetilegrid_new: (a: number, b: number) => number;
     readonly sparsetilegrid_render_to_full_buffer: (a: number, b: number, c: number, d: any) => number;
+    readonly sparsetilegrid_render_to_full_buffer_opt: (a: number, b: number, c: number, d: any, e: number) => number;
     readonly sparsetilegrid_set_tile_data: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly sparsetilegrid_update_rect_from_buffer: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => number;
     readonly strokeenginecore_add_point: (a: number, b: number, c: number, d: number) => number;

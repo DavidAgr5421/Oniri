@@ -100,7 +100,7 @@ export interface TimelineManager {
   updateTimelineSettings(patch: Partial<TimelineSettings> & { sceneName?: string }): void;
 
   // Frame Navigation
-  goToFrame(frame: number): void;
+  goToFrame(frame: number, force?: boolean): void;
   nextFrame(): void;
   prevFrame(): void;
   firstFrame(): void;
@@ -123,6 +123,7 @@ export interface TimelineManager {
     mode?: 'ripple' | 'overwrite'
   ): boolean;
   resizeClip(trackId: string, clipId: string, newStart: number, newEnd: number): boolean;
+  moveClip(trackId: string, clipId: string, deltaFrames: number): boolean;
   splitClip(trackId: string, frame: number): boolean;
   removeExposure(trackId: string, frame: number): void;
   deleteCelLayer(trackId: string, celId: string): boolean;
@@ -238,7 +239,8 @@ export interface TimelineManager {
     onionSkin?: Partial<OnionSkinSettings>;
   }): void;
 
-  // Subscriptions
+  // Subscriptions & Notifications
+  notify(isStructural?: boolean): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -452,8 +454,18 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     }
     if (targetTrack) {
       const activeCel = manager.getActiveCelForFrame(targetTrack.id, settings.currentFrame);
-      if (activeCel && activeCel.id !== activeLayer.id) {
-        layerManager.setActiveLayer(activeCel.id);
+      if (activeCel) {
+        if (activeCel.id !== activeLayer.id) {
+          layerManager.setActiveLayer(activeCel.id);
+        }
+        // Microtask pre-materialization when paused: ensures 0 ms stylus contact delay
+        if (!settings.isPlaying && activeCel.tileGrid && !activeCel.canvas) {
+          queueMicrotask(() => {
+            if (!settings.isPlaying && !activeCel.canvas) {
+              layerManager.ensureLayerCanvas(activeCel);
+            }
+          });
+        }
       }
     }
 
@@ -1040,14 +1052,14 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
     },
 
     // --- Frame Navigation ---
-    goToFrame(frame: number) {
+    goToFrame(frame: number, force = false) {
       if (transformManager.isTransforming()) {
         transformManager.commitTransform();
       }
       const settings = getActiveScene().settings;
       const minF = settings.minFrame ?? 0;
       const clamped = Math.max(minF, Math.min(settings.totalFrames, Math.round(frame)));
-      if (settings.currentFrame === clamped) return;
+      if (!force && settings.currentFrame === clamped) return;
       settings.currentFrame = clamped;
       const sc = getActiveScene();
       if (sc.audioTracks && sc.audioTracks.length > 0) {
@@ -1401,6 +1413,39 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       syncTrackFlatExposures(track);
       syncActiveCelWithFrame();
       notify();
+      return true;
+    },
+
+    moveClip(trackId: string, clipId: string, deltaFrames: number): boolean {
+      if (deltaFrames === 0) return true;
+      const { tracks, settings } = getActiveScene();
+      const track = tracks.find((t) => t.id === trackId || t.folderId === trackId);
+      if (!track) return false;
+      const clip = track.clips.find((c) => c.id === clipId);
+      if (!clip) return false;
+
+      const minF = settings.minFrame ?? 0;
+      // Evitar que el clip se mueva antes del fotograma mínimo
+      const clampedDelta = Math.max(minF - clip.startFrame, deltaFrames);
+      if (clampedDelta === 0) return true;
+
+      clip.startFrame += clampedDelta;
+      clip.endFrame += clampedDelta;
+
+      // Desplazar todas las exposiciones de celdas en bloque
+      const shiftedExposures = new Map<number, string>();
+      for (const [f, celId] of clip.exposures.entries()) {
+        shiftedExposures.set(f + clampedDelta, celId);
+      }
+      clip.exposures = shiftedExposures;
+
+      if (clip.endFrame > settings.totalFrames) {
+        manager.setTotalFrames(clip.endFrame, true);
+      }
+
+      syncTrackFlatExposures(track);
+      syncActiveCelWithFrame();
+      notify(true);
       return true;
     },
 
@@ -2556,7 +2601,11 @@ export function createTimelineManager(layerManager: LayerManager): TimelineManag
       if (state.onionSkin) {
         Object.assign(onionSkin, state.onionSkin);
       }
-      notify();
+      notify(true);
+    },
+
+    notify(isStructural: boolean = false): void {
+      notify(isStructural);
     },
 
     subscribe(listener: () => void): () => void {

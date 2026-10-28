@@ -332,6 +332,151 @@ impl FastLayerCompositor {
     }
 }
 
+/// Parser nativo de alto rendimiento para pistas de animación y curvas de exposición FCurve de Clip Studio Paint.
+#[wasm_bindgen]
+pub struct ClipTimelineParser;
+
+#[wasm_bindgen]
+impl ClipTimelineParser {
+    /// Normaliza un UUID eliminando guiones y convirtiéndolo a minúsculas
+    pub fn clean_uuid(raw_uuid: &str) -> String {
+        raw_uuid
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .collect::<String>()
+            .to_lowercase()
+    }
+
+    /// Descomprime con miniz_oxide un chunk TrackActionMixer y parsea los keyframes de exposición.
+    /// Devuelve un JSON string con { "cel_names": [...], "exposures": { "celName": frame } }
+    pub fn parse_track_exposures(chunk_bytes: &[u8]) -> String {
+        if chunk_bytes.len() < 16 {
+            return "{}".to_string();
+        }
+
+        // 1. Localizar inicio del stream zlib (0x78)
+        let mut zstart = None;
+        for i in 0..chunk_bytes.len().min(128).saturating_sub(1) {
+            if chunk_bytes[i] == 0x78
+                && (chunk_bytes[i + 1] == 0x01
+                    || chunk_bytes[i + 1] == 0x9c
+                    || chunk_bytes[i + 1] == 0xda)
+            {
+                zstart = Some(i);
+                break;
+            }
+        }
+
+        let zstart = match zstart {
+            Some(idx) => idx,
+            None => return "{}".to_string(),
+        };
+
+        // 2. Descomprimir zlib a velocidad nativa con miniz_oxide
+        let decomp = match miniz_oxide::inflate::decompress_to_vec_zlib(&chunk_bytes[zstart..]) {
+            Ok(d) => d,
+            Err(_) => return "{}".to_string(),
+        };
+
+        // 3. Localizar bloque Constant y extraer nombres de celdas
+        const CONSTANT_SIG: &[u8] = b"Constant";
+        let const_idx = match decomp.windows(CONSTANT_SIG.len()).position(|w| w == CONSTANT_SIG) {
+            Some(pos) => pos,
+            None => return "{}".to_string(),
+        };
+
+        let mut p = const_idx + CONSTANT_SIG.len();
+        let mut cel_names: Vec<String> = Vec::new();
+        while p < decomp.len() {
+            let slen = decomp[p] as usize;
+            if slen == 0 || slen > 30 || p + 1 + slen > decomp.len() {
+                break;
+            }
+            let slice = &decomp[p + 1..p + 1 + slen];
+            if slice.iter().all(|&b| b >= 32 && b <= 126) {
+                if let Ok(name) = std::str::from_utf8(slice) {
+                    cel_names.push(name.to_string());
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+            p += 1 + slen;
+        }
+
+        if cel_names.is_empty() {
+            return "{}".to_string();
+        }
+
+        // 4. Buscar pares de propiedades BINC: Propiedad 36 (Frame) y Propiedad 37 (Value)
+        // Ambos de tipo 8 (Double/Float64 little endian)
+        let mut exposures: Vec<(String, i32)> = Vec::new();
+
+        if decomp.len() >= 32 {
+            let limit = decomp.len() - 24;
+            let mut i = p;
+            while i < limit {
+                let prop_id = i32::from_le_bytes([decomp[i], decomp[i + 1], decomp[i + 2], decomp[i + 3]]);
+                let type_id = i32::from_le_bytes([decomp[i + 4], decomp[i + 5], decomp[i + 6], decomp[i + 7]]);
+
+                if prop_id == 36 && type_id == 8 && i + 16 <= decomp.len() {
+                    let frame_val = f64::from_le_bytes([
+                        decomp[i + 8], decomp[i + 9], decomp[i + 10], decomp[i + 11],
+                        decomp[i + 12], decomp[i + 13], decomp[i + 14], decomp[i + 15],
+                    ]);
+
+                    // Buscar propiedad 37 en los siguientes offsets cercanos
+                    let search_end = (i + 80).min(decomp.len() - 16);
+                    let mut j = i + 16;
+                    while j < search_end {
+                        let p2 = i32::from_le_bytes([decomp[j], decomp[j + 1], decomp[j + 2], decomp[j + 3]]);
+                        let t2 = i32::from_le_bytes([decomp[j + 4], decomp[j + 5], decomp[j + 6], decomp[j + 7]]);
+                        if p2 == 37 && t2 == 8 && j + 16 <= decomp.len() {
+                            let cel_val = f64::from_le_bytes([
+                                decomp[j + 8], decomp[j + 9], decomp[j + 10], decomp[j + 11],
+                                decomp[j + 12], decomp[j + 13], decomp[j + 14], decomp[j + 15],
+                            ]);
+                            let cel_idx = cel_val.round() as usize;
+                            let frame_num = (frame_val.round() as i32) + 1;
+                            if cel_idx < cel_names.len() && frame_num >= 1 {
+                                exposures.push((cel_names[cel_idx].clone(), frame_num));
+                            }
+                            break;
+                        }
+                        j += 4;
+                    }
+                }
+                i += 4;
+            }
+        }
+
+        // 5. Construir JSON de salida de forma directa y ultrarrápida
+        let mut json = String::with_capacity(1024);
+        json.push_str("{\"cel_names\":[");
+        for (i, name) in cel_names.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push('"');
+            json.push_str(name);
+            json.push('"');
+        }
+        json.push_str("],\"exposures\":{");
+        for (i, (cel, frame)) in exposures.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            json.push('"');
+            json.push_str(cel);
+            json.push_str("\":");
+            json.push_str(&frame.to_string());
+        }
+        json.push_str("}}");
+        json
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +506,12 @@ mod tests {
         let src = vec![255, 0, 0, 255]; // Red
         FastLayerCompositor::blend_source_over(&mut dest, &src, 1.0);
         assert_eq!(dest, vec![255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_clip_timeline_clean_uuid() {
+        let raw = "e652c4a58d-1e46-2bad-a453-f4e0647b36";
+        let cleaned = ClipTimelineParser::clean_uuid(raw);
+        assert_eq!(cleaned, "e652c4a58d1e462bada453f4e0647b36");
     }
 }

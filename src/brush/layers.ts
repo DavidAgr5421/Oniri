@@ -36,6 +36,7 @@ export interface LayerNode {
   adjustment?: AdjustmentParams; // Non-destructive adjustment (only when type === 'adjustment')
   offsetX?: number; // Layer position offset X relative to canvas (allows moving & unclipped pixels)
   offsetY?: number; // Layer position offset Y relative to canvas (allows moving & unclipped pixels)
+  _canvasDirty?: boolean; // Whether the materialized canvas has been modified since tileGrid sync
 }
 
 export interface LayerManager {
@@ -74,6 +75,7 @@ export interface LayerManager {
   moveLayerBranch(layerId: string, direction: 'up' | 'down'): boolean;
   loadLayers(newLayers: LayerNode[], newActiveId?: string): void;
   resize(w: number, h: number): void;
+  notify(): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -558,22 +560,44 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
       if (layer.tileGrid) {
         const imgData = context.createImageData(currentDocW, currentDocH);
         const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
-        layer.tileGrid.render_to_full_buffer(rawRgba);
-        context.putImageData(imgData, 0, 0);
+        if (typeof (layer.tileGrid as any).render_to_full_buffer_opt === 'function') {
+          (layer.tileGrid as any).render_to_full_buffer_opt(rawRgba, false);
+        } else {
+          layer.tileGrid.render_to_full_buffer(rawRgba);
+        }
+        const bounds = typeof (layer.tileGrid as any).get_content_bounds === 'function'
+          ? (layer.tileGrid as any).get_content_bounds()
+          : null;
+        if (bounds && bounds.length === 4) {
+          const [bx, by, mx, my] = bounds;
+          const bw = mx - bx;
+          const bh = my - by;
+          if (bw > 0 && bh > 0) {
+            context.putImageData(imgData, 0, 0, bx, by, bw, bh);
+          } else {
+            context.putImageData(imgData, 0, 0);
+          }
+        } else {
+          context.putImageData(imgData, 0, 0);
+        }
       }
       layer.canvas = canvas;
       layer.context = context;
+      layer._canvasDirty = false;
       return canvas;
     },
     syncLayerToTileGrid(layer: LayerNode): void {
       if (!layer.canvas || !layer.tileGrid) return;
+      // Skip expensive full-canvas getImageData and tileGrid import if canvas was not modified
+      if (!layer._canvasDirty) return;
       const ctx = layer.context || layer.canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
       const imgData = ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height);
       const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
       layer.tileGrid.import_from_full_buffer(rawRgba);
+      layer._canvasDirty = false;
     },
-    evictInactiveCelCanvases(keepCount: number = 4): void {
+    evictInactiveCelCanvases(keepCount: number = 2): void {
       const virtualWithCanvases = layers.filter(
         (l) => l.isVirtual && l.canvas && l.tileGrid && l.id !== activeId
       );
@@ -587,6 +611,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
         }
         layer.canvas = undefined;
         layer.context = undefined;
+        layer._canvasDirty = false;
       }
     },
     getActiveLayer(): LayerNode {
@@ -617,6 +642,7 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     setActiveLayer(id: string) {
       if (activeId === id) return;
       activeId = id;
+      manager.evictInactiveCelCanvases(2);
       notify();
     },
     setLayerVisibility(id: string, visible: boolean) {
@@ -734,6 +760,9 @@ export function createLayerManager(docW: number, docH: number): LayerManager {
     resize(w: number, h: number): void {
       currentDocW = w;
       currentDocH = h;
+    },
+    notify(): void {
+      notify();
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);

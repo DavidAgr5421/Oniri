@@ -3,6 +3,7 @@ import initWasm, {
   BoneSkinCore,
   BrushDynamicsConfig,
   ClipTileCore,
+  ClipTimelineParser,
   ColorBlendCore,
   ColorSamplerCore,
   FastLayerCompositor,
@@ -859,6 +860,29 @@ class RustStrokeEngineWrapper {
     } catch (e) {
       console.warn('WASM ClipTileCore.decompress_and_blit_tile fallback:', e);
       return false;
+    }
+  }
+
+  // --- Native Clip Studio Paint Timeline & Track Parser in Rust ---
+  cleanUuid(rawUuid: string): string {
+    if (!rawUuid) return '';
+    if (this.available) {
+      try {
+        return ClipTimelineParser.clean_uuid(rawUuid);
+      } catch {}
+    }
+    return rawUuid.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  }
+
+  parseTrackMixerExposures(chunkBytes: Uint8Array): { cel_names: string[]; exposures: Record<string, number> } | null {
+    if (!this.available) return null;
+    try {
+      const jsonStr = ClipTimelineParser.parse_track_exposures(chunkBytes);
+      if (!jsonStr || jsonStr === '{}') return null;
+      return JSON.parse(jsonStr);
+    } catch (e) {
+      console.warn('WASM ClipTimelineParser.parse_track_exposures fallback:', e);
+      return null;
     }
   }
 
