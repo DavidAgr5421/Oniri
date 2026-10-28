@@ -1,121 +1,138 @@
-# Diagnóstico de Rendimiento y Plan Maestro de Optimización Nativa (Tauri v2 + Rust)
+# Hoja de Ruta Arquitectónica: Migración a Rust Nativo Puro con `egui` + `wgpu`
 
-> **Documento de Contexto y Hoja de Ruta Técnica**  
+> **Documento Estratégico y Plan Maestro de Reingeniería**  
+> *Inspirado en la arquitectura de alto rendimiento de VectorCraft y el ecosistema ArtCraft.*  
 > *Fecha: 28 de Octubre de 2026*  
-> *Objetivo: Eliminar el 100% del lag residual en proyectos de animación pesados (150–350+ cels) y consolidar la migración a Tauri v2 y Rust nativo.*
+> *Meta: Reemplazar el frontend web/DOM por una interfaz nativa inmediata con `egui` y renderizado directo en GPU con `wgpu`, logrando 120 FPS sostenidos y 0 ms de latencia.*
 
 ---
 
-## 1. Estado Actual de la Arquitectura
+## 1. Motivación y Decisión de Diseño
 
-### Lo que ya se ha implementado con éxito:
-1. **Entorno Nativo Tauri v2**:
-   - Integración nativa de `crates/oniri-brush-core` como biblioteca `rlib` en `src-tauri`.
-   - Compilación nativa para Windows (`animacion-app.exe`) con plugins de sistema de archivos (`tauri-plugin-fs`) y diálogos nativos (`tauri-plugin-dialog`).
-   - SQLite nativo en Rust con `rusqlite` para inspección instantánea de proyectos `.clip` en disco sin saturar la memoria WebAssembly.
-2. **Capa Dual Multiplataforma (`PlatformAdapter`)**:
-   - Detección automática de entorno (`window.__TAURI_INTERNALS__`).
-   - Diálogos nativos de abrir/guardar para `.oniri`, `.clip` y PNG con fallback transparente en navegadores Web.
-3. **Tope Estricto de VRAM (Desalojo de Cels)**:
-   - Capped a 2 lienzos activos en GPU (reducción de VRAM de 2.0 GB a 24 MB).
-   - Almacenamiento de cels inactivos en RAM mediante `SparseTileGrid` en Rust.
-4. **Entrada de Lápiz de Alta Frecuencia**:
-   - Conexión de `pointerrawupdate` en `strokeInput.ts` para desacoplar el muestreo del lápiz óptico del refresco de pantalla.
+Tras analizar el funcionamiento interno de **VectorCraft** (renderizado SIMD multihilo, 20,000 figuras en 27 ms, interfaz a 120 FPS sin pausas de GC ni DOM), se concluye que **el cuello de botella fundamental de Oniri no es el motor de trazo en Rust (`oniri-brush-core`), sino la capa intermedia de navegador (Chromium / WebView2, DOM de HTML5 y Canvas2D/Three.js)**.
+
+### ¿Por qué `egui` + `wgpu` es superior a WebView2 / HTML / Three.js?
+
+| Dimensión | Arquitectura Anterior (Tauri + WebView2 + HTML) | Nueva Arquitectura Nativa (`egui` + `wgpu`) |
+|---|---|---|
+| **Motor de UI** | DOM de HTML/CSS (pesado, reflows con cientos de cels) | **Modo Inmediato (`egui`)**: 0 nodos DOM, renderizado en 1 ms en GPU |
+| **Pipeline de Lienzo** | Canvas2D Skia ➔ IPC Bridge ➔ Three.js `texImage2D` | **Directo a GPU con `wgpu`** (DirectX 12 / Vulkan / Metal) |
+| **Consumo de Memoria** | ~350 MB a 2 GB (Chromium Process + V8 Heap) | **~35 MB a 80 MB** (memoria contigua y predecible) |
+| **Pausas de GC** | Frecuentes pausas de V8 (micro-stuttering al dibujar) | **0 pausas de recolección de basura** (propiedad de memoria en Rust) |
+| **Muestreo de Lápiz** | Limitado al despachador de eventos web | **Eventos de tableta nativos (`winit`)** a 240+ Hz con presión y tilt |
+| **Tamaño del Binario** | ~180-240 MB con WebView2 | **~15-25 MB** ejecutable autónomo sin dependencias externas |
+| **Soporte Web** | WebAssembly + TS manual | **`eframe` Web**: compila a WebAssembly / WebGPU con el mismo código |
 
 ---
 
-## 2. Diagnóstico Exhaustivo: ¿Por qué persiste el lag?
-
-Aunque el consumo de memoria VRAM se redujo drásticamente (un 98.8%), el usuario aún percibe latencia y tirones de framerate al dibujar o navegar entre cels. Tras analizar el flujo de datos completo, se han identificado **4 cuellos de botella críticos** que aún no han sido atacados:
+## 2. Diagrama de la Nueva Arquitectura
 
 ```mermaid
 flowchart TD
-    subgraph B1["Cuello de Botella 1: Three.js Full-Canvas Upload"]
-        A1["Pincelada cambia 32×32 px"] --> B1_1["engine.updateComposite()"]
-        B1_1 --> B1_2["canvasTexture.needsUpdate = true"]
-        B1_2 --> B1_3["texImage2D() sube 2304×1296 RGBA entero = 12 MB al bus PCIe"]
-        B1_3 --> B1_4["A 60 FPS = 720 MB/s de saturación de bus GPU"]
+    subgraph Input["Entrada de Hardware (240+ Hz)"]
+        Pen["Lápiz Óptico / Wacom / Surface (Presión + Inclinación)"] --> WINIT["winit Window & Event Loop"]
     end
 
-    subgraph B2["Cuello de Botella 2: Triple Copia en Canvas2D"]
-        C1["Dab Engine"] --> C2["Offscreen Cel Canvas (Skia IPC)"]
-        C2 --> C3["Composite Canvas (drawImage loop)"]
-        C3 --> C4["WebGL Texture Upload"]
+    subgraph Core["Núcleo Nativo Oniri (Rust)"]
+        WINIT --> STAB["StrokeStabilizerCore (Bézier + Kalmán)"]
+        STAB --> DABS["Dab Engine & ColorBlendCore (SIMD)"]
+        DABS --> TILES["SparseTileGrid (Teselas 256×256 en RAM)"]
+        TILES --> COMP["FastLayerCompositor (Multihilo con rayon)"]
     end
 
-    subgraph B3["Cuello de Botella 3: DOM Reflow en Timeline"]
-        D1["333 cels en escena"] --> D2["333 nodos HTML .timeline-cel-block"]
-        D2 --> D3["Scrubbing o Drag altera estilos de cientos de nodos"]
-        D3 --> D4["Reflow masivo en el hilo principal de V8 (15–30 ms por frame)"]
+    subgraph Graphics["Renderizado Acelerado por Hardware"]
+        COMP --> WGPU_TEX["Texturas de Capa en wgpu"]
+        WGPU_TEX --> SHADERS["Shaders de Lienzo (Zoom, Rotación, Simetría)"]
+        SHADERS --> SWAP["DirectX 12 / Vulkan SwapChain"]
+    end
+
+    subgraph UI["Interfaz de Modo Inmediato"]
+        WINIT --> EGUI["egui UI Loop (120 FPS)"]
+        EGUI --> TIMELINE["Timeline Widget Nativo (Virtualización Total)"]
+        EGUI --> PANELS["Herramientas, Capas, Ruedas de Color (craft-ui Docking)"]
+        TIMELINE --> SWAP
+        PANELS --> SWAP
     end
 ```
 
-### Detalle de los 4 Cuellos de Botella:
+---
 
-1. **Saturación del Bus GPU por Subidas de Pantalla Completa (`texImage2D`)**:
-   - Cada vez que se da un trazo o se cambia de frame, Three.js ejecuta `texImage2D(..., engine.compositeCanvas)`.
-   - Esto transfiere **12 MB completos** desde la RAM de la CPU a la VRAM de la GPU por cada actualización, sin importar si la pincelada solo afectó un círculo de 20 píxeles.
-2. **Sincronización Bloqueante en Canvas2D (Skia IPC Locks)**:
-   - Dentro del WebView de Chromium/WebView2, el contexto `2D` de HTML5 delega sus operaciones a Skia a través de un canal IPC interno entre el proceso de Renderizado y el proceso de GPU.
-   - Llamar a `getImageData()` y `putImageData()` fuerza un lock síncrono que detiene el bucle de ejecución hasta que la GPU responde.
-3. **Falta de Virtualización en el DOM del Timeline**:
-   - Cuando un proyecto tiene 200–350 cels, el Timeline crea cientos de elementos DOM (`div.timeline-cel-block`, etiquetas, bordes, manipuladores).
-   - Aunque muchos están fuera de la pantalla visible, el motor de layout de Chromium recalcula sus posiciones relativas ante cualquier evento de arrastre o cambio de frame.
-4. **Re-composición Innecesaria de Capas Estáticas**:
-   - Al reproducir o cambiar de cel dentro de una carpeta de animación, las capas de fondo, bocetos o lineart estáticos que no cambiaron son re-dibujadas una y otra vez en el bucle de composición 2D.
+## 3. Inventario de lo que ya tenemos en Rust (Reutilización del 80%)
+
+No empezamos de cero. La lógica más compleja y crítica de Oniri ya reside en [`crates/oniri-brush-core`](file:///d:/Oniri/crates/oniri-brush-core) y funcionará de manera nativa e instantánea con `egui`:
+
+1. **`SparseTileGrid`**: Almacenamiento eficiente de teselas (256×256) en RAM con cálculo de cajas delimitadoras (*content bounds*).
+2. **`TimelineCore`**: Modelo de pistas, fotogramas clave, cels y exposiciones de animación.
+3. **`FastLayerCompositor`**: Modos de fusión (*blend modes*) optimizados y mezcla de capas en CPU.
+4. **`StrokeStabilizerCore`**: Estabilización de trazo, ventana deslizante y splines cúbicos.
+5. **`ColorBlendCore` y `ColorSamplerCore`**: Mezcla de pigmentos y muestreo de color.
+6. **`SmartFillCore` y `FloodFillCore`**: Relleno inteligente y cerrado de huecos.
+7. **`BoneIKCore` y `BoneSkinCore`**: Deformación por huesos e IK de dos articulaciones.
+8. **`HistoryCompressorCore`**: Compresión de historial de deshacer mediante formato QOI.
+9. **`ClipTileCore`**: Decodificación de mosaicos y compatibilidad con Clip Studio Paint.
 
 ---
 
-## 3. Métodos y Técnicas de Alto Rendimiento a Implementar
+## 4. Componentes a Reemplazar
 
-Basado en la arquitectura de **Clip Studio Paint**, **Krita** y **Blender Grease Pencil**, estas son las técnicas pendientes que eliminarán el lag restante:
+### 1. El Viewport (Lienzo de Dibujo)
+* **Antes**: Three.js con `CanvasTexture` y `OrthographicCamera`, forzando subidas de 12 MB por frame.
+* **Ahora**: Textura dinámica en `wgpu` renderizada mediante un shader de fragmentos. Las pinceladas actualizan exclusivamente las regiones sucias de las teselas (`wgpu::Queue::write_texture`), permitiendo dibujo sin latencia.
 
-### Técnica 1: Sub-Texture Uploads con `texSubImage2D` (Dirty Rectangles)
-- **Concepto**: En lugar de transferir todo el lienzo de 2304×1296 (12 MB), calcular la caja delimitadora (*bounding box*) del trazo activo (ej. 64×64 px = 16 KB).
-- **Impacto**: Reduce el ancho de banda transferido a la GPU en un **99.8%**, permitiendo trazos fluidos a 120–240 FPS sin caídas de frames.
-- **Implementación**:
-  - Usar `renderer.copyTextureToTexture` o `gl.texSubImage2D` directamente en la textura de Three.js para actualizar exclusivamente los píxeles modificados.
+### 2. El Timeline de Animación
+* **Antes**: Cientos de nodos HTML (`div.timeline-cel-block`) que causaban reflows masivos en Chromium durante el scrubbing o reproducción.
+* **Ahora**: Un widget nativo de `egui` (`egui::Widget`). En modo inmediato, solo se dibujan los fotogramas y cels actualmente visibles en el área de recorte del panel (`clip_rect`). El arrastre en bloque de carpetas de animación es instantáneo (cero reflows).
 
-### Técnica 2: Virtualización del Timeline (Windowing Deslizante)
-- **Concepto**: No instanciar 300 elementos HTML. Mantener únicamente los fotogramas visibles en el ancho actual de la pantalla (ej. fotogramas del 1 al 40).
-- **Impacto**: Elimina por completo los tirones de 15–30 ms durante el scrubbing de animación y el arrastre de carpetas de animación (`moveClip`).
+### 3. Paletas de Herramientas, Capas y Propiedades
+* **Antes**: Estructuras DOM con eventos de ratón sintéticos y CSS personalizado.
+* **Ahora**: Paneles estándar de `egui` con soporte de pestañas desacoplables (*docking*) estilo `craft-ui` / `egui_dock`.
 
-### Técnica 3: Composición de Capas Acelerada en Rust con Multihilo (`rayon`)
-- **Concepto**: Delegar la mezcla de capas (`blend_layer`, `blend_source_over`) al motor de Rust multihilo utilizando instrucciones vectoriales SIMD (AVX2 / SSE4.1) y `rayon`.
-- **Impacto**: Mezcla capas a velocidades de gigabytes por segundo, sin pausas de Garbage Collection de JavaScript.
-
-### Técnica 4: Cacheo de Fotogramas en Segundo Plano (`FrameCacheCore`)
-- **Concepto**: Mientras el usuario dibuja o navega, un hilo en segundo plano de Rust pre-renderiza y comprime en formato QOI los fotogramas adyacentes (+1, +2, -1).
-- **Impacto**: La reproducción de la animación se ejecuta a 60 FPS sostenidos directamente desde el buffer de texturas, sin recomputar capas.
-
-### Técnica 5: Renderizado Nativo de Pinceladas con Shaders WebGL / FBO
-- **Concepto**: Reemplazar los stamps de Canvas2D por un pipeline de shaders donde los dabs de pincel se dibujan como quads texturizados directamente sobre un Framebuffer Object (FBO) en la GPU.
-- **Impacto**: Latencia de dibujo de 0 ms y eliminación total del intermediario Skia Canvas2D.
+### 4. Gestor de Archivos y Proyectos
+* **Antes**: Invocaciones complejas entre IPC web y `rusqlite`.
+* **Ahora**: Streaming nativo y directo en disco usando hilos de Rust y `rfd` para cuadros de diálogo del sistema operativo.
 
 ---
 
-## 4. Plan de Acción por Fases
+## 5. Plan de Ejecución por Fases
 
-### Fase A: Optimizaciones Inmediatas de Pintura y Viewport (Próximo Turno)
-1. Implementar actualización parcial de textura (`texSubImage2D`) en `brushEngine.ts` y Three.js usando el `dirtyRect` calculado por `rustStrokeEngine`.
-2. Omitir la recomposición de capas estáticas cuando solo cambia el cel activo.
+### Fase 1: Estructuración del Crate Nativo `oniri-desktop`
+1. Crear el crate `crates/oniri-desktop` con dependencias:
+   - `eframe = { version = "0.31", features = ["wgpu"] }` (el framework estándar de `egui` con backend nativo wgpu).
+   - `wgpu = "24"` (aceleración por hardware).
+   - `winit = "0.30"` (manejo de ventana y soporte de lápiz óptico).
+   - `oniri-brush-core = { path = "../oniri-brush-core" }` (núcleo matemático y de dibujo).
+   - `rfd = "0.15"` (diálogos nativos de archivo).
+   - `image = "0.25"` y `rusqlite = { version = "0.32", features = ["bundled"] }`.
 
-### Fase B: Virtualización del Timeline
-1. Aplicar ventana deslizante (*virtual scrolling*) en `timelineView.ts` para que solo se rendericen los cels dentro del rango de visión horizontal del usuario.
-2. Mantener la manipulación de arrastre (`moveClip`) como una transformación CSS pura en GPU (`transform: translate3d`) sin alterar el DOM hasta el evento `pointerup`.
+### Fase 2: Implementación del Viewport Interactivo en `wgpu`
+1. Integrar el renderizado del lienzo de dibujo dentro de un widget de `egui` (`egui::TextureId` o render callback de `wgpu`).
+2. Implementar transformaciones de navegación en el shader:
+   - Paneo 2D.
+   - Zoom suave centrado en el cursor.
+   - Rotación libre del lienzo (0° a 360°) sin costo de rendimiento.
+   - Volteo horizontal/vertical instantáneo.
 
-### Fase C: Integración Profunda de Streaming Nativo en Tauri
-1. Conectar la descompresión paralela de teselas en Rust con `rayon` y volcado directo a memoria.
-2. Evitar conversiones intermedias a Base64 o clonaciones de memoria entre Rust y el frontend mediante Tauri ArrayBuffer IPC (zero-copy).
+### Fase 3: Entrada de Lápiz y Pintura en Tiempo Real
+1. Conectar los eventos de tableta gráfica de `winit` (coordenadas continuas, presión de 0.0 a 1.0, ángulo de inclinación).
+2. Alimentar `StrokeStabilizerCore` y estampar sellos en `SparseTileGrid` en hilos de trabajo paralelos.
+3. Actualizar únicamente las teselas modificadas en la textura de GPU.
+
+### Fase 4: Widget del Timeline de Animación en `egui`
+1. Crear el control de regla de fotogramas (*ruler*), cabezal de reproducción (*playhead*) y pistas de animación.
+2. Renderizar bloques de celdas y exposiciones con recorte automático (*viewport culling*).
+3. Conectar atajos de teclado estándar de animación:
+   - Espacio: Reproducir / Pausar a 24/30/60 FPS continuos.
+   - Flechas: Navegar entre cels clave y cels vacíos.
+   - Arrastre de cabecera de clip para mover secuencias completas.
+
+### Fase 5: Paneles de UI (Capas, Color, Pinceles)
+1. Panel de capas con visibilidad, opacidad, modos de fusión y reordenación.
+2. Selector de color HSV/RGB con paletas de muestras (*swatches*).
+3. Selector de pinceles con previsualización del tamaño y dinámica de presión.
 
 ---
 
-## 5. Resumen de Archivos Clave para las Próximas Tareas
-
-| Archivo | Propósito / Modificación Requerida |
-|---|---|
-| [`src/main.ts`](file:///d:/Oniri/src/main.ts) | Soporte para `texSubImage2D` en `canvasTexture` y enlace directo con WebGL |
-| [`src/brush/brushEngine.ts`](file:///d:/Oniri/src/brush/brushEngine.ts) | Emisión de cajas delimitadoras `dirtyRect` para subidas parciales |
-| [`src/animation/timelineView.ts`](file:///d:/Oniri/src/animation/timelineView.ts) | Virtualización de cels visibles en el DOM |
-| [`crates/oniri-brush-core/src/clip_tiles.rs`](file:///d:/Oniri/crates/oniri-brush-core/src/clip_tiles.rs) | Mezcla SIMD y pre-cacheo multihilo de fotogramas |
-| [`src-tauri/src/clip_native.rs`](file:///d:/Oniri/src-tauri/src/clip_native.rs) | Streaming directo de teselas desde SQLite en disco |
+## 6. Compatibilidad Dual y Salida Web
+Al igual que VectorCraft cuenta con `vectorcraft-web`, Oniri mantendrá su capacidad de ejecutarse en navegadores web:
+- `eframe` soporta compilación hacia WebAssembly con WebGL2/WebGPU de forma automática.
+- Una sola base de código en Rust servirá para el binario nativo de escritorio (Windows, macOS, Linux) y la aplicación en navegador.
