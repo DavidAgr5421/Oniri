@@ -119,6 +119,15 @@ impl FrameCacheCore {
         }
     }
 
+    /// Ajusta la capacidad máxima de fotogramas (p. ej. según un presupuesto de memoria),
+    /// descartando los más antiguos si el nuevo límite es menor al contenido actual.
+    pub fn set_max_frames(&mut self, max_frames: usize) {
+        self.max_frames = max_frames.clamp(2, 128);
+        while self.frames.len() > self.max_frames {
+            self.frames.remove(0);
+        }
+    }
+
     /// Almacena un fotograma renderizado en la caché
     pub fn store_frame(&mut self, frame: i32, width: u32, height: u32, rgba: &[u8]) {
         let expected_len = (width as usize) * (height as usize) * 4;

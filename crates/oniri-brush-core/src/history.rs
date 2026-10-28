@@ -264,4 +264,29 @@ mod tests {
         assert_eq!(out[2], 0);
         assert_eq!(out[3], 255);
     }
+
+    #[test]
+    fn test_qoi_roundtrip() {
+        let (w, h) = (37u32, 23u32);
+        let mut src = vec![0u8; (w * h * 4) as usize];
+        let mut seed: u32 = 12345;
+        for (i, px) in src.chunks_exact_mut(4).enumerate() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            // Mezcla de zonas planas, degradados y ruido con alfa variable
+            match i % 5 {
+                0 => px.copy_from_slice(&[0, 0, 0, 0]),
+                1 => px.copy_from_slice(&[200, 100, 50, 255]),
+                2 => px.copy_from_slice(&[(i % 256) as u8, (i % 200) as u8, (i % 100) as u8, 255]),
+                3 => px.copy_from_slice(&[(seed >> 24) as u8, (seed >> 16) as u8, (seed >> 8) as u8, (seed & 0xff) as u8]),
+                _ => px.copy_from_slice(&[10, 20, 30, 128]),
+            }
+        }
+        let mut codec = HistoryCompressorCore::new();
+        let enc_len = codec.compress_rgba(&src, w, h);
+        assert!(enc_len > 0);
+        let encoded = codec.buffer.clone();
+        let dec_len = codec.decompress_qoi(&encoded, w, h);
+        assert_eq!(dec_len, src.len());
+        assert_eq!(codec.buffer, src);
+    }
 }

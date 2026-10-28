@@ -1277,6 +1277,14 @@ export class FrameCacheCore {
         return this;
     }
     /**
+     * Ajusta la capacidad máxima de fotogramas (p. ej. según un presupuesto de memoria),
+     * descartando los más antiguos si el nuevo límite es menor al contenido actual.
+     * @param {number} max_frames
+     */
+    set_max_frames(max_frames) {
+        wasm.framecachecore_set_max_frames(this.__wbg_ptr, max_frames);
+    }
+    /**
      * Almacena un fotograma renderizado en la caché
      * @param {number} frame
      * @param {number} width

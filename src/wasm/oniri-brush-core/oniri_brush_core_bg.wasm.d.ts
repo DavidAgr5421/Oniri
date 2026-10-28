@@ -134,6 +134,7 @@ export const framecachecore_has_frame: (a: number, b: number) => number;
 export const framecachecore_invalidate_all: (a: number) => void;
 export const framecachecore_invalidate_frame: (a: number, b: number) => void;
 export const framecachecore_new: (a: number) => number;
+export const framecachecore_set_max_frames: (a: number, b: number) => void;
 export const framecachecore_store_frame: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
 export const gifencodercore_encode_lzw_frame: (a: number, b: number, c: number, d: number) => number;
 export const gifencodercore_get_indexed_len: (a: number) => number;

@@ -311,6 +311,11 @@ export class FrameCacheCore {
     invalidate_frame(frame: number): void;
     constructor(max_frames: number);
     /**
+     * Ajusta la capacidad máxima de fotogramas (p. ej. según un presupuesto de memoria),
+     * descartando los más antiguos si el nuevo límite es menor al contenido actual.
+     */
+    set_max_frames(max_frames: number): void;
+    /**
      * Almacena un fotograma renderizado en la caché
      */
     store_frame(frame: number, width: number, height: number, rgba: Uint8Array): void;
@@ -910,6 +915,7 @@ export interface InitOutput {
     readonly framecachecore_invalidate_all: (a: number) => void;
     readonly framecachecore_invalidate_frame: (a: number, b: number) => void;
     readonly framecachecore_new: (a: number) => number;
+    readonly framecachecore_set_max_frames: (a: number, b: number) => void;
     readonly framecachecore_store_frame: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly gifencodercore_encode_lzw_frame: (a: number, b: number, c: number, d: number) => number;
     readonly gifencodercore_get_indexed_len: (a: number) => number;

@@ -37,6 +37,7 @@ export interface ClipImportProfileStats {
   emptyTilesSkipped: number;
   rustDecompressHits: number;
   jsFallbackHits: number;
+  workerDecodeTimeMs: number;
 }
 
 class ClipDiagnosticsManager {
@@ -80,6 +81,7 @@ class ClipDiagnosticsManager {
       emptyTilesSkipped: 0,
       rustDecompressHits: 0,
       jsFallbackHits: 0,
+      workerDecodeTimeMs: 0,
     };
   }
 
@@ -136,6 +138,14 @@ class ClipDiagnosticsManager {
     } else {
       this.current.jsFallbackHits++;
     }
+  }
+
+  public recordInitialDecodeWall(durationMs: number): void {
+    if (this.current) this.current.initialCelsDecodeTimeMs = durationMs;
+  }
+
+  public recordWorkerDecode(durationMs: number): void {
+    if (this.current) this.current.workerDecodeTimeMs += durationMs;
   }
 
   public recordDomMount(durationMs: number): void {
@@ -199,7 +209,7 @@ class ClipDiagnosticsManager {
     );
 
     console.log(
-      `%c⚡ Decodificador de Teselas (Rust miniz_oxide vs JS):%c\n • Cels procesados en Rust: ${p.rustDecompressHits} (${p.jsFallbackHits > 0 ? `Fallback JS: ${p.jsFallbackHits}` : '100% Rust Nativo'})\n • Teselas activas decodificadas: ${p.tilesDecoded}\n • Teselas vacías/transparentes descartadas: ${p.emptyTilesSkipped}`,
+      `%c⚡ Decodificador de Teselas (Rust miniz_oxide vs JS):%c\n • Cels procesados en Rust: ${p.rustDecompressHits} (${p.jsFallbackHits > 0 ? `Fallback JS: ${p.jsFallbackHits}` : '100% Rust Nativo'})\n • Teselas activas decodificadas: ${p.tilesDecoded}\n • Tiempo en Web Worker (fuera del hilo principal): ${p.workerDecodeTimeMs.toFixed(1)} ms\n • Teselas vacías/transparentes descartadas: ${p.emptyTilesSkipped}`,
       'font-weight: bold; color: #34d399;',
       'color: inherit;'
     );

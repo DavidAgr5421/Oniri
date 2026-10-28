@@ -1,3 +1,5 @@
+import { rustStrokeEngine } from './rustStrokeEngine';
+
 export interface Rect {
   x: number;
   y: number;
@@ -228,6 +230,14 @@ export function decodeQOI(bytes: Uint8Array, width: number, height: number): Uin
   return out;
 }
 
+function compressPatch(data: Uint8Array | Uint8ClampedArray, w: number, h: number): Uint8Array {
+  return rustStrokeEngine.qoiEncode(data, w, h) ?? encodeQOI(data, w, h);
+}
+
+function decompressPatch(bytes: Uint8Array, w: number, h: number): Uint8ClampedArray {
+  return rustStrokeEngine.qoiDecode(bytes, w, h) ?? decodeQOI(bytes, w, h);
+}
+
 export function createHistoryManager(maxSteps = 30): HistoryManager {
   const undoStack: CompressedHistoryEntry[] = [];
   const redoStack: CompressedHistoryEntry[] = [];
@@ -238,7 +248,7 @@ export function createHistoryManager(maxSteps = 30): HistoryManager {
       const buffer = rawData instanceof Uint8ClampedArray ? rawData : rawData.data;
       const rawSize = buffer.byteLength;
 
-      const compressed = encodeQOI(buffer, rect.w, rect.h);
+      const compressed = compressPatch(buffer, rect.w, rect.h);
       undoStack.push({
         layerId,
         rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
@@ -262,11 +272,11 @@ export function createHistoryManager(maxSteps = 30): HistoryManager {
         layerId: currentLayerId,
         rect: { ...target.rect },
         rawSize,
-        compressed: encodeQOI(currentSnap.data, target.rect.w, target.rect.h),
+        compressed: compressPatch(currentSnap.data, target.rect.w, target.rect.h),
       });
 
       // Descomprimir el paso restaurado
-      const decompressed = decodeQOI(target.compressed, target.rect.w, target.rect.h);
+      const decompressed = decompressPatch(target.compressed, target.rect.w, target.rect.h);
       return {
         layerId: target.layerId,
         rect: target.rect,
@@ -284,11 +294,11 @@ export function createHistoryManager(maxSteps = 30): HistoryManager {
         layerId: currentLayerId,
         rect: { ...target.rect },
         rawSize,
-        compressed: encodeQOI(currentSnap.data, target.rect.w, target.rect.h),
+        compressed: compressPatch(currentSnap.data, target.rect.w, target.rect.h),
       });
 
       // Descomprimir el paso aplicado
-      const decompressed = decodeQOI(target.compressed, target.rect.w, target.rect.h);
+      const decompressed = decompressPatch(target.compressed, target.rect.w, target.rect.h);
       return {
         layerId: target.layerId,
         rect: target.rect,

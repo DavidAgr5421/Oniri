@@ -370,6 +370,11 @@ export function createBrushEngine(): BrushEngine {
   let useOverlayPlanes = false;
   let liveStrokeDirty = false;
   let hasTopLayers = false;
+  let prefetchingFrame = false;
+  let prefetchHandle: number | undefined;
+  let frameCacheBudgetApplied = false;
+  let virtualCelImage: ImageData | null = null;
+  let frameCacheMax = rustStrokeEngine.configureFrameCacheBudget(curDocW, curDocH);
   let topLayersDirty = false;
   let liveStrokeOpacity = 1.0;
   let liveStrokeBounds: { x: number; y: number; w: number; h: number } | null = null;
@@ -384,7 +389,7 @@ export function createBrushEngine(): BrushEngine {
   let predBoundsMaxX = 0;
   let predBoundsMaxY = 0;
 
-  const history: HistoryManager = createHistoryManager(30);
+  const history: HistoryManager = createHistoryManager(100);
 
   let timelineManager: TimelineManager | null = null;
 
@@ -1432,6 +1437,67 @@ export function createBrushEngine(): BrushEngine {
     ctx.restore();
   }
 
+  /**
+   * Precarga en segundo plano (idle) los siguientes fotogramas en el caché de Rust,
+   * renderizando uno por ciclo ocioso para no competir con el trazo ni la UI.
+   */
+  function schedulePrefetch(): void {
+    if (prefetchingFrame || prefetchHandle !== undefined) return;
+    if (!frameCacheBudgetApplied && rustStrokeEngine.available) {
+      frameCacheMax = rustStrokeEngine.configureFrameCacheBudget(curDocW, curDocH);
+      frameCacheBudgetApplied = true;
+    }
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number })
+      .requestIdleCallback;
+    if (typeof ric === 'function') {
+      prefetchHandle = ric(prefetchStep, { timeout: 500 });
+    } else {
+      prefetchHandle = window.setTimeout(prefetchStep, 60);
+    }
+  }
+
+  function areFrameCelsReady(tm: TimelineManager, frame: number): boolean {
+    for (const track of tm.tracks) {
+      const cel = tm.getActiveCelForFrame(track.id, frame);
+      if (cel && cel.isVirtual && !(cel as { _hasDecodedPixels?: boolean })._hasDecodedPixels) return false;
+    }
+    return true;
+  }
+
+  function prefetchStep(): void {
+    prefetchHandle = undefined;
+    const tm = timelineManager;
+    if (!tm || prefetchingFrame || mode !== null) return;
+    if (tm.onionSkin.enabled || tm.bones.length > 0 || !rustStrokeEngine.available) return;
+
+    const { startFrame, endFrame, loop } = tm.settings;
+    const span = Math.max(1, endFrame - startFrame + 1);
+    const ahead = Math.min(span - 1, 24, Math.max(1, Math.floor(frameCacheMax / 2)));
+    const savedFrame = tm.settings.currentFrame;
+
+    for (let i = 1; i <= ahead; i++) {
+      let f = savedFrame + i;
+      if (f > endFrame) {
+        if (!loop) break;
+        f = startFrame + ((f - startFrame) % span);
+      }
+      if (rustStrokeEngine.hasCachedFrame(f) || !areFrameCelsReady(tm, f)) continue;
+
+      prefetchingFrame = true;
+      try {
+        tm.settings.currentFrame = f;
+        updateComposite();
+      } finally {
+        tm.settings.currentFrame = savedFrame;
+        prefetchingFrame = false;
+      }
+      // Restaurar el fotograma visible (acierto de caché, coste mínimo) y encadenar el siguiente
+      engine.compositeDirty = true;
+      updateComposite();
+      return;
+    }
+  }
+
   function updateComposite(planesOnly = false): void {
     const t0 = performance.now();
 
@@ -1471,8 +1537,9 @@ export function createBrushEngine(): BrushEngine {
       if (rustStrokeEngine.getCachedFrame(curFrame, imgData.data)) {
         compositeContext.putImageData(imgData, 0, 0);
         engine.compositeDirty = false;
-        if (engine.onCompositeUpdated) engine.onCompositeUpdated();
+        if (engine.onCompositeUpdated && !prefetchingFrame) engine.onCompositeUpdated();
         brushDiagnostics.recordComposite(performance.now() - t0);
+        schedulePrefetch();
         return;
       }
     }
@@ -1508,10 +1575,16 @@ export function createBrushEngine(): BrushEngine {
 
       if (!layer.canvas && layer.tileGrid) {
         // Virtual cel projection onto shared reusable scratch canvas (zero VRAM overhead)
-        const imgData = virtualCelContext.createImageData(curDocW, curDocH);
-        const rawRgba = new Uint8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
+        if (!virtualCelImage || virtualCelImage.width !== curDocW || virtualCelImage.height !== curDocH) {
+          virtualCelImage = virtualCelContext.createImageData(curDocW, curDocH);
+        }
+        const rawRgba = new Uint8Array(
+          virtualCelImage.data.buffer,
+          virtualCelImage.data.byteOffset,
+          virtualCelImage.data.byteLength
+        );
         layer.tileGrid.render_to_full_buffer(rawRgba);
-        virtualCelContext.putImageData(imgData, 0, 0);
+        virtualCelContext.putImageData(virtualCelImage, 0, 0);
         sourceCanvasToDraw = virtualCelCanvas;
       } else if (layer.canvas) {
         // Sparse Tile Grid projection on demand
@@ -1995,7 +2068,7 @@ export function createBrushEngine(): BrushEngine {
     }
 
     engine.compositeDirty = false;
-    if (engine.onCompositeUpdated) {
+    if (engine.onCompositeUpdated && !prefetchingFrame) {
       engine.onCompositeUpdated();
     }
     if (canUseFrameCache) {
@@ -2005,6 +2078,7 @@ export function createBrushEngine(): BrushEngine {
       } catch {
         // ignore
       }
+      if (!prefetchingFrame) schedulePrefetch();
     }
     brushDiagnostics.recordComposite(performance.now() - t0);
   }
@@ -2161,6 +2235,7 @@ export function createBrushEngine(): BrushEngine {
   function setDocumentSize(w: number, h: number): void {
     curDocW = w;
     curDocH = h;
+    frameCacheMax = rustStrokeEngine.configureFrameCacheBudget(w, h);
     engine.docW = w;
     engine.docH = h;
     layerManager.resize(w, h);

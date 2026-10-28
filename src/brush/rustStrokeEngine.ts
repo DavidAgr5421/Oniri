@@ -892,6 +892,39 @@ class RustStrokeEngineWrapper {
     }
   }
 
+  private historyCodec: HistoryCompressorCore | null = null;
+
+  /** Comprime RGBA a QOI en Rust (copia propia, segura tras crecer la memoria WASM). Retorna null si no disponible. */
+  qoiEncode(rgba: Uint8Array | Uint8ClampedArray, width: number, height: number): Uint8Array | null {
+    if (!this.available || !this.wasmMemory) return null;
+    try {
+      if (!this.historyCodec) this.historyCodec = new HistoryCompressorCore();
+      const src = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      const len = this.historyCodec.compress_rgba(src, width, height);
+      if (len === 0) return null;
+      const ptr = this.historyCodec.get_buffer_ptr();
+      return new Uint8Array(new Uint8Array(this.wasmMemory.buffer, ptr, len));
+    } catch (e) {
+      console.warn('WASM QOI encode fallback:', e);
+      return null;
+    }
+  }
+
+  /** Descomprime QOI a RGBA en Rust. Retorna null si no disponible o inválido. */
+  qoiDecode(bytes: Uint8Array, width: number, height: number): Uint8ClampedArray | null {
+    if (!this.available || !this.wasmMemory) return null;
+    try {
+      if (!this.historyCodec) this.historyCodec = new HistoryCompressorCore();
+      const len = this.historyCodec.decompress_qoi(bytes, width, height);
+      if (len === 0) return null;
+      const ptr = this.historyCodec.get_buffer_ptr();
+      return new Uint8ClampedArray(new Uint8ClampedArray(this.wasmMemory.buffer, ptr, len));
+    } catch (e) {
+      console.warn('WASM QOI decode fallback:', e);
+      return null;
+    }
+  }
+
   sampleRgba(
     buffer: Uint8Array,
     width: number,
@@ -1565,6 +1598,19 @@ class RustStrokeEngineWrapper {
   }
 
   // --- High Performance Frame Cache in Rust ---
+  /**
+   * Ajusta la capacidad del caché de fotogramas a un presupuesto de memoria.
+   * Retorna el número máximo de fotogramas que caben en el presupuesto.
+   */
+  configureFrameCacheBudget(width: number, height: number, budgetMB = 256): number {
+    const frameBytes = Math.max(1, width * height * 4);
+    const maxFrames = Math.max(2, Math.min(128, Math.floor((budgetMB * 1024 * 1024) / frameBytes)));
+    if (this.available && this.frameCache) {
+      this.frameCache.set_max_frames(maxFrames);
+    }
+    return maxFrames;
+  }
+
   hasCachedFrame(frame: number): boolean {
     if (!this.available || !this.frameCache) return false;
     return this.frameCache.has_frame(frame);

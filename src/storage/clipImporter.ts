@@ -8,6 +8,7 @@ import { cameraFrameManager } from '../canvas/cameraFrameManager';
 import { rustStrokeEngine } from '../brush/rustStrokeEngine';
 import type { SparseTileGrid } from '../wasm/oniri-brush-core/oniri_brush_core';
 import { clipDiagnostics } from './clipDiagnostics';
+import { clipDecodeClient } from './clipDecodeClient';
 
 export interface CelDescriptor {
   mainId: number;
@@ -376,6 +377,39 @@ export function decodeCelToCanvas(
   (layer as any)._hasDecodedPixels = true;
   clipDiagnostics.recordCelDecode(rustHits >= jsHits, tilesDrawn, emptyTiles, performance.now() - tDecode0);
   return true;
+}
+
+/**
+ * Decodifica un cel preferentemente en el Web Worker (0% de bloqueo del hilo principal),
+ * con fallback automático a la ruta síncrona si el worker no está disponible o falla.
+ * Deduplica decodificaciones simultáneas del mismo cel.
+ */
+export function decodeCelAuto(
+  layer: LayerNode,
+  desc: CelDescriptor,
+  clipBuffer: Uint8Array
+): Promise<boolean> {
+  const l = layer as LayerNode & { _hasDecodedPixels?: boolean; _decodePromise?: Promise<boolean> };
+  if (l._hasDecodedPixels) return Promise.resolve(true);
+  if (l._decodePromise) return l._decodePromise;
+
+  const run = async (): Promise<boolean> => {
+    if (clipDecodeClient.available) {
+      try {
+        if (await clipDecodeClient.decodeCel(layer, desc, clipBuffer)) return true;
+      } catch {
+        // continuar con la ruta síncrona
+      }
+    }
+    if (l._hasDecodedPixels) return true;
+    return decodeCelToCanvas(layer, desc, clipBuffer);
+  };
+
+  const p = run().finally(() => {
+    l._decodePromise = undefined;
+  });
+  l._decodePromise = p;
+  return p;
 }
 
 /**
@@ -1018,59 +1052,49 @@ export async function importClipProject(
     meta.fps || 24
   );
 
-  // 5. Decode Initial Frame Cels Immediately for High Fidelity Display
+  // 5. Decode Initial Frame Cels (Web Worker: no bloquea el hilo principal; fallback síncrono automático)
   const initFrame = meta.currentFrame || 1;
+  const initialDecodes: Promise<boolean>[] = [];
+  const queueInitialDecode = (cel: LayerNode | null | undefined): void => {
+    if (!cel) return;
+    const matchId = Number(cel.id.replace('layer-clip-', ''));
+    const desc = meta.celDescriptors.get(matchId);
+    if (desc) initialDecodes.push(decodeCelAuto(cel, desc, clipBuffer));
+  };
   for (const track of timeline.tracks) {
-    const activeCel = timeline.getActiveCelForFrame(track.id, initFrame);
-    if (activeCel) {
-      engine.layerManager.ensureLayerCanvas(activeCel);
-      const matchId = Number(activeCel.id.replace('layer-clip-', ''));
-      const desc = meta.celDescriptors.get(matchId);
-      if (desc) {
-        decodeCelToCanvas(activeCel, desc, clipBuffer);
-      }
-    }
+    queueInitialDecode(timeline.getActiveCelForFrame(track.id, initFrame));
   }
-
   // Also decode frame 1 cels if currentFrame was different
   if (initFrame !== 1) {
     for (const track of timeline.tracks) {
-      const cel1 = timeline.getActiveCelForFrame(track.id, 1);
-      if (cel1) {
-        engine.layerManager.ensureLayerCanvas(cel1);
-        const matchId = Number(cel1.id.replace('layer-clip-', ''));
-        const desc = meta.celDescriptors.get(matchId);
-        if (desc) {
-          decodeCelToCanvas(cel1, desc, clipBuffer);
-        }
-      }
+      queueInitialDecode(timeline.getActiveCelForFrame(track.id, 1));
     }
   }
+  const tInitDecode0 = performance.now();
+  await Promise.all(initialDecodes);
+  clipDiagnostics.recordInitialDecodeWall(performance.now() - tInitDecode0);
 
-  // 6. Hook Timeline Scrubbing to On-Demand Decode Any Unrendered Cels
+  // 6. Hook Timeline Scrubbing to On-Demand Decode Any Unrendered Cels (asíncrono)
   timeline.subscribe(() => {
     const curFrame = timeline.settings.currentFrame;
-    let needsUpdate = false;
+    const pendingDecodes: Promise<boolean>[] = [];
     for (const track of timeline.tracks) {
       const activeCel = timeline.getActiveCelForFrame(track.id, curFrame);
-      if (activeCel) {
-        if (!(activeCel as any)._hasDecodedPixels) {
-          const matchId = Number(activeCel.id.replace('layer-clip-', ''));
-          const desc = meta.celDescriptors.get(matchId);
-          if (desc) {
-            decodeCelToCanvas(activeCel, desc, clipBuffer);
-            needsUpdate = true;
-          }
-        }
+      if (activeCel && !(activeCel as any)._hasDecodedPixels) {
+        const matchId = Number(activeCel.id.replace('layer-clip-', ''));
+        const desc = meta.celDescriptors.get(matchId);
+        if (desc) pendingDecodes.push(decodeCelAuto(activeCel, desc, clipBuffer));
       }
     }
-    if (needsUpdate) {
-      engine.compositeDirty = true;
-      engine.updateComposite();
+    if (pendingDecodes.length > 0) {
+      void Promise.all(pendingDecodes).then(() => {
+        engine.compositeDirty = true;
+        engine.updateComposite();
+      });
     }
   });
 
-  // 7. Background Progressive Decoder for remaining cels (non-blocking idle queue)
+  // 7. Background Progressive Decoder for remaining cels (cola secuencial en el worker)
   startProgressiveCelDecoder(engine, timeline, clipBuffer, meta.celDescriptors, layers);
 
   const tComp0 = performance.now();
@@ -1093,7 +1117,8 @@ export async function importClipProject(
 }
 
 /**
- * Non-blocking idle queue that decodes remaining animation cels in the background.
+ * Cola secuencial en segundo plano: decodifica en el Web Worker los cels restantes,
+ * priorizando los más cercanos al cabezal de la línea de tiempo.
  */
 function startProgressiveCelDecoder(
   engine: BrushEngine,
@@ -1102,38 +1127,46 @@ function startProgressiveCelDecoder(
   celDescMap: Map<number, CelDescriptor>,
   layers: LayerNode[]
 ): void {
-  const rasterCels = layers.filter((l) => l.type === 'raster' && !l.isPaper && !(l as any)._hasDecodedPixels);
-  let idx = 0;
+  const queue = layers.filter((l) => l.type === 'raster' && !l.isPaper && !(l as any)._hasDecodedPixels);
 
-  function decodeStep() {
-    if (idx >= rasterCels.length) return;
-    const cel = rasterCels[idx++];
-    if (!(cel as any)._hasDecodedPixels) {
+  const pickNext = (): LayerNode | undefined => {
+    if (queue.length === 0) return undefined;
+    // Prioridad: cels visibles en el fotograma actual; si no hay, el siguiente en orden de capas
+    const cur = timeline.settings.currentFrame;
+    let idx = queue.findIndex((c) => timeline.isLayerVisibleAtFrame(c, cur));
+    if (idx < 0) idx = 0;
+    const [cel] = queue.splice(idx, 1);
+    return cel;
+  };
+
+  const yieldToIdle = (): Promise<void> =>
+    new Promise((resolve) => {
+      if (typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(() => resolve(), { timeout: 200 });
+      } else {
+        setTimeout(resolve, 16);
+      }
+    });
+
+  async function run(): Promise<void> {
+    await yieldToIdle();
+    let cel: LayerNode | undefined;
+    while ((cel = pickNext())) {
+      if ((cel as any)._hasDecodedPixels) continue;
       const matchId = Number(cel.id.replace('layer-clip-', ''));
       const desc = celDescMap.get(matchId);
-      if (desc) {
-        decodeCelToCanvas(cel, desc, clipBuffer);
-        if (timeline.isLayerVisibleAtFrame(cel, timeline.settings.currentFrame)) {
-          engine.compositeDirty = true;
-          engine.updateComposite();
-        }
+      if (!desc) continue;
+      await decodeCelAuto(cel, desc, clipBuffer);
+      if (timeline.isLayerVisibleAtFrame(cel, timeline.settings.currentFrame)) {
+        engine.compositeDirty = true;
+        engine.updateComposite();
       }
-    }
-    // Relaxed background interval (100ms) with requestIdleCallback so CPU remains buttery smooth
-    if (typeof (window as any).requestIdleCallback === 'function') {
-      (window as any).requestIdleCallback(() => decodeStep(), { timeout: 1000 });
-    } else {
-      setTimeout(decodeStep, 100);
+      await yieldToIdle();
     }
   }
 
-  if (typeof (window as any).requestIdleCallback === 'function') {
-    (window as any).requestIdleCallback(() => decodeStep(), { timeout: 1000 });
-  } else {
-    setTimeout(decodeStep, 200);
-  }
+  void run();
 }
-
 /**
  * Packs a SQLite database buffer into a CSFCHUNK container.
  */

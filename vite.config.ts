@@ -4,6 +4,10 @@ import wasm from 'vite-plugin-wasm';
 export default defineConfig({
   root: '.',
   plugins: [wasm()],
+  worker: {
+    format: 'es',
+    plugins: () => [wasm()],
+  },
   build: {
     target: 'esnext',
     outDir: 'dist',
